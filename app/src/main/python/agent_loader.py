@@ -16,7 +16,7 @@ import importlib
 import importlib.util
 
 # Load order matters: leaves first, orchestrator last.
-_MODULES = ["llm", "agent_tools", "agentloop", "git_ops", "localrun", "orchestrator"]
+_MODULES = ["llm", "agent_tools", "agentloop", "git_ops", "localrun", "templates", "orchestrator"]
 
 _loaded_mtimes = {}
 
@@ -59,7 +59,13 @@ def _load_orchestrator():
             # Bundled version, reloaded so it links against override deps.
             if changed:
                 sys.modules.pop(name, None)
-            importlib.import_module(name)
+            try:
+                importlib.import_module(name)
+            except Exception:
+                # Optional module not present in this build (e.g. a newer
+                # agent_loader listing a module an older APK doesn't bundle).
+                # Skip it rather than break the whole agent.
+                pass
     _loaded_mtimes.clear()
     _loaded_mtimes.update(mtimes)
     return sys.modules["orchestrator"]

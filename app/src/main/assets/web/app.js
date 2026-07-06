@@ -755,6 +755,28 @@ const actions = {
       el.onclick = () => { closeSheet("#modal"); confirmClone(el.dataset.repo); };
     });
   },
+  async newProject() {
+    let tpls = [];
+    try { tpls = JSON.parse((await call("orch", { fn: "list_templates" })).text); } catch (e) {}
+    const opts = [{ id: "", name: "Empty project", description: "Blank workspace" }].concat(tpls);
+    const rows = opts.map((t, i) =>
+      `<label class="list-item" style="align-items:flex-start">
+         <input type="radio" name="tpl" value="${escapeHtml(t.id)}" ${i === 1 ? "checked" : ""} style="margin-top:4px"/>
+         <span>${escapeHtml(t.name)}<div class="sub">${escapeHtml(t.description || "")}</div></span>
+       </label>`).join("");
+    modal("New project",
+      `<label>Name</label><input id="pname" type="text" placeholder="my-game" />
+       <div class="hint" style="margin-top:10px">Start from a template</div>${rows}`,
+      async () => {
+        const name = $("#pname").value.trim();
+        const sel = $("#modalBody").querySelector('input[name="tpl"]:checked');
+        const tpl = sel ? sel.value : "";
+        await call("session.create", { name });
+        if (tpl) bubble((await call("orch", { fn: "apply_template", arg: tpl })).text, "sys");
+        await refreshHeader(); await loadHistory(); refreshStats();
+        bubble("New project ready. Describe what to build, or press Run to preview.", "sys");
+      });
+  },
   async sessions() {
     const r = await call("session.list");
     const items = (r.sessions || []).map((s) => {

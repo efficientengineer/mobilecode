@@ -847,6 +847,18 @@ def get_todos(_=None) -> str:
     return fp.read_text(encoding="utf-8") if fp.exists() else "[]"
 
 
+# --- project templates (delegated to templates.py, OTA-updatable) -----------
+
+def list_templates(_=None) -> str:
+    import templates
+    return templates.list_templates()
+
+
+def apply_template(template_id="") -> str:
+    import templates
+    return templates.apply_template(template_id)
+
+
 def _runs_dir() -> Path:
     d = _agent_dir() / "runs"
     d.mkdir(parents=True, exist_ok=True)

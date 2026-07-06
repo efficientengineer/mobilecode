@@ -484,7 +484,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateAgent(): String = try {
         val dir = File(filesDir, "py_override").apply { mkdirs() }
         val files = listOf("llm.py", "agent_tools.py", "agentloop.py",
-            "git_ops.py", "localrun.py", "orchestrator.py")
+            "git_ops.py", "localrun.py", "templates.py", "orchestrator.py")
         val fetched = files.map { it to fetchRaw("app/src/main/python/$it") }
         fetched.forEach { (name, body) -> File(dir, name).writeText(body) }
         "Agent updated (${files.size} modules) — next task uses the new code"
