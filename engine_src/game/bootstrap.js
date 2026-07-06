@@ -11,6 +11,7 @@ import { cameras } from '../engine/render/cameras.js';
 import { movements } from '../engine/control/movements.js';
 import { weapons } from '../engine/control/weapons.js';
 import { aim } from '../engine/control/aim.js';
+import { behaviors } from '../engine/control/behaviors.js';
 
 import { initInput } from '../engine/systems/input.js';
 import { initMovement } from '../engine/systems/movement.js';
@@ -41,6 +42,10 @@ export function start(canvas) {
   ctx.movement = movements.twinStick({ speed: config.playerSpeed });
   ctx.weapon = weapons.single({ cooldown: config.fireCooldown });
   ctx.aim = aim.stick();
+  // Enemy/NPC brain. Swap for behaviors.orbit()/zigzag()/charger() for tougher
+  // foes, or behaviors.byKind({...}) to mix types (an enemy can also carry its
+  // own e.behavior). Defaults to a straight chase.
+  ctx.behavior = behaviors.chase();
 
   // The systems that make up this game. Add or remove a line to change it;
   // events keep them decoupled, so order only matters within the same phase.

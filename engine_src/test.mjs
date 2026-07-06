@@ -19,6 +19,7 @@ import { cameras, topDown, sideScroller, flat2D, thirdPerson } from './engine/re
 import { movements, twinStick, platformer, autoRun } from './engine/control/movements.js';
 import { weapons, single, shotgun, burst, radial } from './engine/control/weapons.js';
 import { aim } from './engine/control/aim.js';
+import { behaviors, chase, flee, orbit, keepDistance, patrol, follow, guard } from './engine/control/behaviors.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -89,6 +90,39 @@ const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); pro
   check('aim.autoAim locks the nearest enemy', d[0] === 1 && d[1] === 0); }
 { check('aim library exposes the variants', ['stick', 'facing', 'manual', 'autoAim'].every(k => typeof aim[k] === 'function')); }
 
+// ---- behavior controllers (enemy/NPC brains) ----
+const mkE = (x, z, extra = {}) => ({ kind: 'enemy', pos: [x, 0, z], vel: [0, 0, 0], rot: 0, speed: 3, ...extra });
+const player = { pos: [0, 0, 0] };
+{ const e = mkE(5, 0); chase()(e, player, 1 / 60);
+  check('chase drives toward the target', e.vel[0] < 0 && Math.abs(e.vel[2]) < 1e-9); }
+{ const e = mkE(5, 0); flee()(e, player, 1 / 60);
+  check('flee drives away from the target', e.vel[0] > 0); }
+{ const e = mkE(5, 0); chase()(e, null, 1 / 60);
+  check('no target → idle', e.vel[0] === 0 && e.vel[2] === 0); }
+{ const e = mkE(10, 0); keepDistance({ min: 5, max: 9 })(e, player, 1 / 60);
+  check('keepDistance approaches when too far', e.vel[0] < 0);
+  const near = mkE(3, 0); keepDistance({ min: 5, max: 9 })(near, player, 1 / 60);
+  check('keepDistance backs off when too close', near.vel[0] > 0);
+  const ok = mkE(7, 0); keepDistance({ min: 5, max: 9 })(ok, player, 1 / 60);
+  check('keepDistance holds in the band', ok.vel[0] === 0 && ok.vel[2] === 0); }
+{ const e = mkE(6, 0); const spd0 = 3; orbit({ radius: 6, dir: 1 })(e, player, 1 / 60);
+  check('orbit moves mostly tangentially at radius', Math.abs(e.vel[0]) < 0.5 && Math.abs(e.vel[2]) > 2); }
+{ const e = mkE(0, 0); patrol({ points: [[0, 5], [0, -5]] })(e, null, 1 / 60);
+  check('patrol heads to the first waypoint', e.vel[2] > 0); }
+{ const e = mkE(2, 0); follow({ distance: 3 })(e, player, 1 / 60);
+  check('follow holds inside its distance', e.vel[0] === 0 && e.vel[2] === 0);
+  const far = mkE(6, 0); follow({ distance: 3 })(far, player, 1 / 60);
+  check('follow closes when beyond its distance', far.vel[0] < 0); }
+{ const e = mkE(1, 0); const g = guard({ radius: 6 }); g(e, player, 1 / 60);
+  check('guard chases an intruder in range', e.vel[0] < 0);
+  const home = mkE(0, 0); const g2 = guard({ radius: 3 }); g2(home, null, 1 / 60);   // sets home
+  home.pos[0] = 4; g2(home, null, 1 / 60);
+  check('guard returns home when alone', home.vel[0] < 0); }
+{ const disp = behaviors.byKind({ enemy: flee(), default: chase() });
+  const e = mkE(5, 0); disp(e, player, 1 / 60);
+  check('byKind dispatches on entity kind', e.vel[0] > 0); }
+{ check('behavior library exposes the variants', ['chase', 'flee', 'orbit', 'keepDistance', 'zigzag', 'charger', 'wander', 'patrol', 'follow', 'guard', 'byKind'].every(k => typeof behaviors[k] === 'function')); }
+
 // ---- gameplay sim ----
 const ENT = { player: { mesh: 'cylinder', color: [0, 0, 1], scale: 1, radius: 0.6 },
   enemy: { mesh: 'sphere', color: [1, 0, 0], scale: 1, radius: 0.6, hp: 1, speed: 3 },
@@ -118,6 +152,12 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   const e = spawnInto(ctx.registries.enemies, 'enemy', { at: [10, 0, 0], radius: 0.6, hp: 99, speed: 3 });
   ctx.registries.enemies.flush(); const x0 = e.pos[0]; loop.step(1 / 60); loop.step(1 / 60);
   check('enemy advances toward player', e.pos[0] < x0); }
+
+{ clearEvents(); resetWorld(); const ctx = makeCtx(); ctx.behavior = flee(); const loop = sim(ctx);
+  ctx.signals.player.set(spawn('player', { at: [0, 0, 0], radius: 0.6 }));
+  const e = spawnInto(ctx.registries.enemies, 'enemy', { at: [3, 0, 0], radius: 0.6, hp: 99, speed: 3 });
+  ctx.registries.enemies.flush(); const x0 = e.pos[0]; loop.step(1 / 60); loop.step(1 / 60);
+  check('behavior component: flee retreats from the player', e.pos[0] > x0); }
 
 { clearEvents(); resetWorld(); const ctx = makeCtx(); const loop = sim(ctx);
   ctx.signals.player.set(spawn('player', { at: [-5, 0, 0], radius: 0.6 }));

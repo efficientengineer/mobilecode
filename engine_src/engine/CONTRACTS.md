@@ -29,7 +29,7 @@ Continuous state → **signals** (input sticks). Discrete happenings → **event
 Raised by systems: `game-started` · `game-over` · `player-fired` · `enemy-hit {enemy,bullet}` · `enemy-died {enemy}` · `player-hit {enemy}` · `player-damaged {hp}` · `player-died` · `wave-started {n}` · `wave-cleared {n}`.
 
 ## Systems (engine/systems/*, each imports only core)
-`input` (touch→sticks) · `movement` (input+velocity→position) · `ai` (enemies chase player) · `fire` (spawn bullets) · `spawn` (wave director) · `collision` (overlap→events) · `health` (hits→damage/death) · `score` · `cleanup` (life/bounds despawn) · `gamestate` (lifecycle+pause) · `hud` (DOM overlay) · `audio` (WebAudio SFX) · `render` (WebGL follow-cam).
+`input` (touch→sticks) · `movement` (input+velocity→position) · `ai` (runs each enemy/NPC's behavior) · `fire` (spawn bullets) · `spawn` (wave director) · `collision` (overlap→events) · `health` (hits→damage/death) · `score` · `cleanup` (life/bounds despawn) · `gamestate` (lifecycle+pause) · `hud` (DOM overlay) · `audio` (WebAudio SFX) · `render` (WebGL follow-cam).
 
 ## Cameras (reusable component — engine/render/cameras.js)
 Set `ctx.camera` in bootstrap to pick a view; all are swappable without touching game logic:
@@ -44,10 +44,13 @@ Set `ctx.weapon` in bootstrap to pick the gun (rhythm + pattern): `weapons.singl
 ## Aim (reusable component — engine/control/aim.js)
 Set `ctx.aim` in bootstrap to pick how shots are pointed: `aim.stick()` (twin-stick, default) · `aim.facing()` (shoot where you move — one-stick/auto-fire) · `aim.manual()` (sticky: flick to set, holds after release) · `aim.autoAim({range})` (lock the nearest enemy — mobile aim assist). Each is `resolve(player, raw, ctx) → [x,z]` (a unit direction). The fire system asks the aimer each shot.
 
+## Behaviors (reusable component — engine/control/behaviors.js)
+The brain for each enemy/NPC (in the `enemies` registry). Set a game-wide default `ctx.behavior`, or give one entity its own `e.behavior`, or mix types with `behaviors.byKind({kind: ..., default: ...})`. Enemy: `chase()` (default) · `flee()` · `orbit({radius,dir})` (circle-strafe) · `keepDistance({min,max})` (ranged) · `zigzag({amp,freq})` (weaves) · `charger({range,windup,dashSpeed})` (telegraph→dash). NPC: `wander({area})` (roam near spawn) · `patrol({points})` (waypoint route) · `follow({distance})` (companion) · `guard({radius})` (hold home, chase intruders). Each is `step(entity, target, dt, ctx)` and sets velocity + facing; per-entity state lives on `e._ai`, so one instance drives a whole registry. `target` is the player, or null when it's gone (NPC behaviors keep going; chasers idle).
+
 ## Building a game from a description (the app's core job)
 The app's purpose is making games. Given a description, DON'T write an engine — pick components and glue:
 1. **View + movement** from the description: top-down shooter → `cameras.topDown` + `movements.twinStick`; platformer → `cameras.sideScroller` + `movements.platformer`; runner → `cameras.sideScroller` + `movements.autoRun`; true 2D → `cameras.flat2D`.
-2. **Systems** in `game/bootstrap.js`: keep the ones the game needs (movement, ai, collision, health, score, hud, audio, render, gamestate are almost always in; add `fire`/`spawn` for shooters, drop them for a pure platformer). For a shooter also pick `ctx.weapon` (single/rapid/shotgun/burst/radial) and `ctx.aim` (stick/facing/manual/autoAim) — e.g. a one-thumb mobile shooter is `aim.autoAim` + `weapons.rapid`.
+2. **Systems** in `game/bootstrap.js`: keep the ones the game needs (movement, ai, collision, health, score, hud, audio, render, gamestate are almost always in; add `fire`/`spawn` for shooters, drop them for a pure platformer). For a shooter also pick `ctx.weapon` (single/rapid/shotgun/burst/radial) and `ctx.aim` (stick/facing/manual/autoAim) — e.g. a one-thumb mobile shooter is `aim.autoAim` + `weapons.rapid`. Pick enemy/NPC brains with `ctx.behavior` (chase/orbit/zigzag/charger for foes; wander/patrol/follow/guard for NPCs), or `behaviors.byKind({...})` to mix.
 3. **Entities** (`game/entities.js`): mesh (box/sphere/cylinder/plane), color, size, stats — pure data. **Config** (`game/config.js`): the numbers.
 4. **Signals/registries** (`game/contracts.js`): add any the game needs.
 5. Ask the user AT MOST 1–2 questions only for genuinely ambiguous core choices (e.g. "waves or endless? health or one-hit?"). Otherwise pick sensible defaults and build.

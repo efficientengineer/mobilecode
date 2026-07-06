@@ -1,19 +1,20 @@
 // engine/systems/ai.js
-// Enemy brains. Each frame every enemy steers toward the player and faces it.
-// It reads the player from the shared signal — it never imports the player
-// system — and only sets velocity; movement.js does the actual moving.
+// Enemy/NPC brains. Each frame every entity in the enemies registry runs its
+// BEHAVIOR (a swappable component, see control/behaviors.js) to set its velocity;
+// movement.js does the actual moving. Priority: the entity's own e.behavior, else
+// the game-wide ctx.behavior, else plain chase. Behaviors read the player from
+// the shared signal (never imported) — pass null when the player is gone so NPC
+// behaviors (patrol/wander) keep going while chasers idle.
 import { on } from '../core/events.js';
+import { chase } from '../control/behaviors.js';
 
 export function initAI(ctx) {
-  on('update', () => {
+  const brain = ctx.behavior || chase();
+  on('update', (dt) => {
     const p = ctx.signals.player.get();
-    if (!p || p.dead) return;
+    const target = (p && !p.dead) ? p : null;
     ctx.registries.enemies.each((e) => {
-      const dx = p.pos[0] - e.pos[0], dz = p.pos[2] - e.pos[2];
-      const l = Math.hypot(dx, dz) || 1;
-      e.vel[0] = dx / l * e.speed;
-      e.vel[2] = dz / l * e.speed;
-      e.rot = Math.atan2(dx, dz);
+      (e.behavior || brain)(e, target, dt, ctx);
     });
   });
 }
