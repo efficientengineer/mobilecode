@@ -41,7 +41,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/lead_model_label"
+            android:text="@string/orchestrator_model_label"
             android:paddingTop="16dp"
             android:paddingBottom="4dp" />
 
@@ -57,7 +57,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/worker_model_label"
+            android:text="@string/implementer_model_label"
             android:paddingTop="16dp"
             android:paddingBottom="4dp" />
 

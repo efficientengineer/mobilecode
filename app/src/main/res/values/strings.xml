@@ -16,4 +16,13 @@
     <string name="agent_branch_label">Agent branch</string>
     <string name="agent_branch_default">claude/apk-build-setup-iezz5e</string>
     <string name="update_agent">Update agent code</string>
+    <string name="orchestrator_model_label">Orchestrator model (planner)</string>
+    <string name="implementer_model_label">Implementer model (editor — leave blank for single agent)</string>
+    <string name="menu_files">Files</string>
+    <string name="menu_commit">Commit</string>
+    <string name="menu_push">Push</string>
+    <string name="menu_pull">Pull</string>
+    <string name="menu_new_repo">New repo…</string>
+    <string name="menu_switch_repo">Switch repo…</string>
+    <string name="menu_sessions">Sessions…</string>
 </resources>

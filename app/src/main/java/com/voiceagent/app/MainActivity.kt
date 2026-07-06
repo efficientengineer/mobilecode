@@ -1,13 +1,15 @@
 package com.voiceagent.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import android.content.Intent
-import android.speech.RecognitionListener
 import android.speech.tts.TextToSpeech
+import android.view.Menu
+import android.view.MenuItem
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.EditText
@@ -22,6 +24,7 @@ import com.voiceagent.app.databinding.ActivityMainBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -31,6 +34,7 @@ import java.util.Locale
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
+    private lateinit var sessions: SessionManager
     private var speech: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
     private val transcript = StringBuilder()
@@ -46,21 +50,19 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        setSupportActionBar(binding.toolbar)
 
-        // 1. Start the embedded Python runtime (Chaquopy).
+        sessions = SessionManager(this)
+
         if (!Python.isStarted()) {
             Python.start(AndroidPlatform(this))
         }
         prepareWorkspaceEnv()
 
-        // 2. Text-to-speech for hands-free responses.
         tts = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.getDefault()
-            }
+            if (status == TextToSpeech.SUCCESS) tts?.language = Locale.getDefault()
         }
 
-        // 3. Ask for mic permission up front.
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
@@ -68,46 +70,62 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.micButton.setOnClickListener { startListening() }
-        binding.settingsButton.setOnClickListener { showKeyDialog() }
 
         appendLine("Ready. Tap the mic and speak a coding task.")
+        refreshSessionBar()
         maybePromptForKeys()
     }
 
-    /**
-     * Point the Python side at a writable repo dir inside app storage.
-     * (CWD is read-only on Android — this is mandatory.)
-     */
-    private fun prepareWorkspaceEnv() {
-        val ws = File(filesDir, "workspace").apply { mkdirs() }
-        val py = Python.getInstance()
-        val os = py.getModule("os")
-        os.get("environ")?.callAttr("__setitem__", "AGENT_WORKSPACE", ws.absolutePath)
-        os.get("environ")?.callAttr("__setitem__", "HOME", filesDir.absolutePath)
-        // Inject user-provided API keys (stored in SharedPreferences).
-        val prefs = getSharedPreferences("keys", MODE_PRIVATE)
-        prefs.getString("ANTHROPIC_API_KEY", null)?.let {
-            os.get("environ")?.callAttr("__setitem__", "ANTHROPIC_API_KEY", it)
-        }
-        prefs.getString("DEEPSEEK_API_KEY", null)?.let {
-            os.get("environ")?.callAttr("__setitem__", "DEEPSEEK_API_KEY", it)
-        }
-        // Model overrides. Fall back to the defaults so the Python side always
-        // has an explicit, valid model string to route with.
-        val lead = prefs.getString("LEAD_MODEL", null)?.takeIf { it.isNotBlank() }
-            ?: getString(R.string.lead_model_default)
-        val worker = prefs.getString("WORKER_MODEL", null)?.takeIf { it.isNotBlank() }
-            ?: getString(R.string.worker_model_default)
-        os.get("environ")?.callAttr("__setitem__", "LEAD_MODEL", lead)
-        os.get("environ")?.callAttr("__setitem__", "WORKER_MODEL", worker)
-        // Where an over-the-air agent update is stored; agent_loader.py runs
-        // this file instead of the bundled orchestrator when present.
-        os.get("environ")?.callAttr("__setitem__", "AGENT_OVERRIDE", overrideFile().absolutePath)
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.menu_main, menu)
+        return true
     }
 
-    /** Location of the hot-updatable orchestrator.py in private storage. */
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        when (item.itemId) {
+            R.id.action_files -> startActivity(Intent(this, FilesActivity::class.java))
+            R.id.action_commit -> runOrchestrator("commit_now")
+            R.id.action_push -> runGit("Push") { it.callAttr("push").toString() }
+            R.id.action_pull -> runGit("Pull") { it.callAttr("pull").toString() }
+            R.id.action_new_repo -> newRepoDialog()
+            R.id.action_switch_repo -> switchRepoDialog()
+            R.id.action_sessions -> sessionsDialog()
+            R.id.action_settings -> showKeyDialog()
+            else -> return super.onOptionsItemSelected(item)
+        }
+        return true
+    }
+
+    // --- Environment ------------------------------------------------------
+
+    private fun prepareWorkspaceEnv() {
+        val ws = sessions.activeDir()
+        val py = Python.getInstance()
+        val os = py.getModule("os")
+        fun set(k: String, v: String) = os.get("environ")?.callAttr("__setitem__", k, v)
+        set("AGENT_WORKSPACE", ws.absolutePath)
+        set("HOME", filesDir.absolutePath)
+        set("AGENT_OVERRIDE", overrideFile().absolutePath)
+
+        val prefs = getSharedPreferences("keys", MODE_PRIVATE)
+        prefs.getString("ANTHROPIC_API_KEY", null)?.let { set("ANTHROPIC_API_KEY", it) }
+        prefs.getString("DEEPSEEK_API_KEY", null)?.let { set("DEEPSEEK_API_KEY", it) }
+        prefs.getString("GITHUB_TOKEN", null)?.let { set("GITHUB_TOKEN", it) }
+        val lead = prefs.getString("LEAD_MODEL", null)?.takeIf { it.isNotBlank() }
+            ?: getString(R.string.lead_model_default)
+        set("LEAD_MODEL", lead)
+        // Implementer may be blank → single-agent mode; pass it through as-is.
+        set("WORKER_MODEL", prefs.getString("WORKER_MODEL", "").orEmpty())
+    }
+
     private fun overrideFile(): File =
         File(File(filesDir, "py_override").apply { mkdirs() }, "orchestrator.py")
+
+    private fun refreshSessionBar() {
+        val m = sessions.readMeta(sessions.activeId())
+        val repo = if (m.activeRepo.isBlank()) "no repo" else m.activeRepo
+        binding.sessionText.text = "Session: ${m.name}  •  $repo"
+    }
 
     // --- Voice input ------------------------------------------------------
 
@@ -155,11 +173,16 @@ class MainActivity : AppCompatActivity() {
         speech?.startListening(intent)
     }
 
-    // --- Agent call (off the main thread) --------------------------------
+    // --- Agent call -------------------------------------------------------
 
     private fun runAgent(task: String) {
         binding.micButton.isEnabled = false
         binding.statusText.text = getString(R.string.thinking)
+        val id = sessions.activeId()
+        sessions.appendTurn(id, "user", task)
+        // Feed recent transcript to the planner via env (read in orchestrator).
+        val os = Python.getInstance().getModule("os")
+        os.get("environ")?.callAttr("__setitem__", "AGENT_CONTEXT", sessions.recentContext(id))
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
                 try {
@@ -171,11 +194,155 @@ class MainActivity : AppCompatActivity() {
                     "Error: ${e.message}"
                 }
             }
+            sessions.appendTurn(id, "agent", result)
             appendLine("Agent: $result")
             speak(result.lineSequence().firstOrNull() ?: "Done")
             binding.micButton.isEnabled = true
             binding.statusText.text = getString(R.string.ready)
         }
+    }
+
+    /** Call a no-arg function on the bundled orchestrator (e.g. commit_now). */
+    private fun runOrchestrator(fn: String) {
+        binding.statusText.text = getString(R.string.thinking)
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    Python.getInstance().getModule("orchestrator").callAttr(fn).toString()
+                } catch (e: Throwable) {
+                    "Error: ${e.message}"
+                }
+            }
+            appendLine(result)
+            binding.statusText.text = getString(R.string.ready)
+        }
+    }
+
+    /** Run a git_ops action off the main thread and report the result. */
+    private fun runGit(label: String, block: (com.chaquo.python.PyObject) -> String) {
+        appendLine("$label…")
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    block(Python.getInstance().getModule("git_ops"))
+                } catch (e: Throwable) {
+                    "$label failed: ${e.message}"
+                }
+            }
+            appendLine(result)
+            Toast.makeText(this@MainActivity, result.lineSequence().first(), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // --- Repos ------------------------------------------------------------
+
+    private fun newRepoDialog() {
+        val input = EditText(this).apply { hint = "repo-name" }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("New GitHub repo")
+            .setView(input)
+            .setPositiveButton("Create") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isBlank()) return@setPositiveButton
+                runGit("Create repo") { g ->
+                    val r = g.callAttr("create_repo", name, true).toString()
+                    if (r.startsWith("Created ")) {
+                        val full = r.removePrefix("Created ").trim()
+                        sessions.setActiveRepo(sessions.activeId(), full)
+                        runOnUiThread { refreshSessionBar() }
+                    }
+                    r
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun switchRepoDialog() {
+        appendLine("Loading repos…")
+        lifecycleScope.launch {
+            val names = withContext(Dispatchers.IO) {
+                try {
+                    val json = Python.getInstance().getModule("git_ops")
+                        .callAttr("list_repos").toString()
+                    val arr = JSONArray(json)
+                    (0 until arr.length()).map { arr.getString(it) }
+                } catch (e: Throwable) {
+                    emptyList()
+                }
+            }
+            if (names.isEmpty()) {
+                appendLine("No repos found (check your GitHub token).")
+                return@launch
+            }
+            androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle("Switch repo")
+                .setItems(names.toTypedArray()) { _, which ->
+                    confirmCloneDialog(names[which])
+                }
+                .show()
+        }
+    }
+
+    private fun confirmCloneDialog(full: String) {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(full)
+            .setMessage("Clone this repo into the current session? This replaces the session's local files.")
+            .setPositiveButton("Clone") { _, _ ->
+                runGit("Clone") { g ->
+                    val r = g.callAttr("clone_repo", full).toString()
+                    sessions.setActiveRepo(sessions.activeId(), full)
+                    runOnUiThread { refreshSessionBar() }
+                    r
+                }
+            }
+            .setNeutralButton("Just point at it") { _, _ ->
+                runGit("Set repo") { g ->
+                    val r = g.callAttr("set_active_repo", full).toString()
+                    sessions.setActiveRepo(sessions.activeId(), full)
+                    runOnUiThread { refreshSessionBar() }
+                    r
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // --- Sessions ---------------------------------------------------------
+
+    private fun sessionsDialog() {
+        val all = sessions.list()
+        val labels = all.map {
+            (if (it.id == sessions.activeId()) "● " else "○ ") +
+                it.name + (if (it.activeRepo.isNotBlank()) "  (${it.activeRepo})" else "")
+        }.toTypedArray()
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Sessions")
+            .setItems(labels) { _, which ->
+                sessions.setActive(all[which].id)
+                prepareWorkspaceEnv()
+                refreshSessionBar()
+                appendLine("Switched to session: ${all[which].name}")
+            }
+            .setNeutralButton("New session") { _, _ -> newSessionDialog() }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun newSessionDialog() {
+        val input = EditText(this).apply { hint = "session name" }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("New session")
+            .setView(input)
+            .setPositiveButton("Create") { _, _ ->
+                val id = sessions.create(input.text.toString().trim())
+                sessions.setActive(id)
+                prepareWorkspaceEnv()
+                refreshSessionBar()
+                appendLine("Created session.")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     // --- Output helpers ---------------------------------------------------
@@ -192,13 +359,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- API key entry ----------------------------------------------------
+    // --- Settings ---------------------------------------------------------
 
     private fun maybePromptForKeys() {
         val prefs = getSharedPreferences("keys", MODE_PRIVATE)
         if (prefs.getString("ANTHROPIC_API_KEY", null).isNullOrBlank() ||
             prefs.getString("DEEPSEEK_API_KEY", null).isNullOrBlank()) {
-            appendLine("Tap the gear icon to add your Anthropic and DeepSeek API keys.")
+            appendLine("Tap the menu → Settings to add your API keys.")
         }
     }
 
@@ -218,17 +385,13 @@ class MainActivity : AppCompatActivity() {
             prefs.getString("LEAD_MODEL", "")?.takeIf { it.isNotBlank() }
                 ?: getString(R.string.lead_model_default)
         )
-        workerField.setText(
-            prefs.getString("WORKER_MODEL", "")?.takeIf { it.isNotBlank() }
-                ?: getString(R.string.worker_model_default)
-        )
+        workerField.setText(prefs.getString("WORKER_MODEL", ""))
         tokenField.setText(prefs.getString("GITHUB_TOKEN", ""))
         branchField.setText(
             prefs.getString("AGENT_BRANCH", "")?.takeIf { it.isNotBlank() }
                 ?: getString(R.string.agent_branch_default)
         )
 
-        // Persist all fields to SharedPreferences (shared by Save and Update).
         fun persist() {
             prefs.edit()
                 .putString("ANTHROPIC_API_KEY", anthropicField.text.toString().trim())
@@ -241,22 +404,14 @@ class MainActivity : AppCompatActivity() {
             prepareWorkspaceEnv()
         }
 
-        // Tapping the field pops the suggestion list (dropdown behaviour) once
-        // it has been populated; until then it's just an editable text box.
         leadField.setOnClickListener { leadField.showDropDown() }
         workerField.setOnClickListener { workerField.showDropDown() }
-
-        // Populate the dropdowns from each provider using the saved keys.
-        // Falls back silently to plain text entry when a key is missing, the
-        // device is offline, or the request fails.
-        populateModels(
-            leadField,
-            prefs.getString("ANTHROPIC_API_KEY", "").orEmpty()
-        ) { key -> fetchAnthropicModels(key) }
-        populateModels(
-            workerField,
-            prefs.getString("DEEPSEEK_API_KEY", "").orEmpty()
-        ) { key -> fetchDeepseekModels(key) }
+        populateModels(leadField, prefs.getString("ANTHROPIC_API_KEY", "").orEmpty()) {
+            fetchAnthropicModels(it)
+        }
+        populateModels(workerField, prefs.getString("DEEPSEEK_API_KEY", "").orEmpty()) {
+            fetchDeepseekModels(it)
+        }
 
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("Settings")
@@ -266,7 +421,6 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show()
             }
             .setNeutralButton(getString(R.string.update_agent)) { _, _ ->
-                // Save first so the fetch uses the current token/branch.
                 persist()
                 updateAgentCode(
                     tokenField.text.toString().trim(),
@@ -278,12 +432,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /**
-     * Download the latest orchestrator.py from the repo into the override slot,
-     * so the agent brain updates over the air with no reinstall. The next task
-     * runs the new file. Uses the GitHub contents API (works for private repos
-     * with a token that has read access to repo contents).
-     */
     private fun updateAgentCode(token: String, branch: String) {
         if (token.isBlank()) {
             Toast.makeText(this, "Add a GitHub token first", Toast.LENGTH_LONG).show()
@@ -323,7 +471,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Fetch a provider's model list off the main thread and fill the dropdown. */
     private fun populateModels(
         field: AutoCompleteTextView,
         key: String,
@@ -350,7 +497,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Anthropic Models API → ids prefixed with "anthropic/" for the router. */
     private fun fetchAnthropicModels(key: String): List<String> {
         val conn = (URL("https://api.anthropic.com/v1/models?limit=100").openConnection()
                 as HttpURLConnection).apply {
@@ -363,7 +509,6 @@ class MainActivity : AppCompatActivity() {
         return conn.use { readModelIds(it, "anthropic/") }
     }
 
-    /** DeepSeek Models API (OpenAI-compatible) → ids prefixed with "deepseek/". */
     private fun fetchDeepseekModels(key: String): List<String> {
         val conn = (URL("https://api.deepseek.com/v1/models").openConnection()
                 as HttpURLConnection).apply {
@@ -375,7 +520,6 @@ class MainActivity : AppCompatActivity() {
         return conn.use { readModelIds(it, "deepseek/") }
     }
 
-    /** Parse a `{ "data": [ { "id": ... } ] }` body into prefixed model ids. */
     private fun readModelIds(conn: HttpURLConnection, prefix: String): List<String> {
         if (conn.responseCode != 200) return emptyList()
         val body = conn.inputStream.bufferedReader().use { it.readText() }

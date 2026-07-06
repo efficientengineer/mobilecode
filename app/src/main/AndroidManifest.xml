@@ -26,6 +26,10 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".FilesActivity"
+            android:exported="false" />
+
         <service
             android:name=".AgentService"
             android:exported="false"

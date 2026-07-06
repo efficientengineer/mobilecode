@@ -172,7 +172,10 @@ def _plan_with_lead(task: str, root: Path) -> dict:
         "\"instruction\": str}]}. Each edit describes one file to create or "
         "modify and precise instructions for the editor."
     )
+    context = os.environ.get("AGENT_CONTEXT", "").strip()
+    context_block = f"RECENT CONVERSATION:\n{context}\n\n" if context else ""
     user = (
+        context_block +
         f"TASK:\n{task}\n\n"
         f"EXISTING FILES ({len(file_list)}):\n" + "\n".join(file_list)
     )
@@ -287,6 +290,39 @@ def run_task(task: str) -> str:
 
     except Exception:
         return "Error during task:\n" + traceback.format_exc()
+
+
+def commit_now() -> str:
+    """Stage and commit the current workspace with an auto-written message.
+
+    Triggered by the Commit button — independent of a task run.
+    """
+    try:
+        root = _workspace()
+        if not (root / ".git").exists():
+            porcelain.init(str(root))
+        # Detect changed paths so we can (a) skip empty commits and (b) feed
+        # the message generator.
+        try:
+            status = porcelain.status(str(root))
+            changed = list(status.untracked)
+            for kind in ("add", "delete", "modify"):
+                changed += [
+                    p.decode() if isinstance(p, bytes) else p
+                    for p in status.staged.get(kind, [])
+                ]
+            changed += [
+                p.decode() if isinstance(p, bytes) else p for p in status.unstaged
+            ]
+        except Exception:
+            changed = []
+        if not changed:
+            return "Nothing to commit."
+        message = _commit_message(f"Update {len(changed)} file(s)", changed)
+        commit_id = _commit(root, message)[:8]
+        return f"Committed {commit_id}: {message}"
+    except Exception:
+        return "Commit failed:\n" + traceback.format_exc()
 
 
 # --- Local test harness (does NOT run on device) -------------------------
