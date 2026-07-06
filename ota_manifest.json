@@ -1,0 +1,16 @@
+{
+  "python": [
+    "llm.py",
+    "agent_tools.py",
+    "agentloop.py",
+    "git_ops.py",
+    "localrun.py",
+    "templates.py",
+    "orchestrator.py"
+  ],
+  "web": [
+    "index.html",
+    "style.css",
+    "app.js"
+  ]
+}

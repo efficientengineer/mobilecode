@@ -54,10 +54,22 @@ window.nativeEvent = (type, payload) => {
     _dictating = false;
     const b = $("#micBtn"); if (b) b.textContent = "Speak";
     setStatus("");
+  } else if (type === "shared-text") {
+    receiveShared(payload);
   } else if (type === "status") {
     setStatus(payload);
   }
 };
+
+// Text/URL shared into the app from another app — drop it into the composer.
+function receiveShared(txt) {
+  if (!txt) return;
+  const box = $("#input");
+  box.value = (box.value ? box.value + "\n" : "") + txt;
+  box.dispatchEvent(new Event("input"));
+  box.focus();
+  setStatus("Shared text added — edit and Send");
+}
 
 let currentMode = "auto";
 
@@ -978,12 +990,15 @@ const actions = {
        <label>Default implementer model (blank = single agent)</label><input id="wm" type="text" value="${s.workerModel||""}" />
        <label>Fallback model (used if the primary provider fails)</label><input id="fm" type="text" list="ml" value="${s.fallbackModel||""}" placeholder="e.g. deepseek/deepseek-chat" />
        <datalist id="ml"></datalist>
+       <label>Voice: silence before it stops (ms)</label><input id="ssm" type="text" inputmode="numeric" value="${s.speechSilenceMs||"7000"}" />
+       <label class="checkrow"><input id="scont" type="checkbox" ${s.speechContinuous!=="0"?"checked":""} /> Voice: keep listening through pauses</label>
        <label>Agent branch (for OTA updates)</label><input id="br" type="text" value="${s.branch||""}" />`,
       async () => {
         await call("settings.save", {
           anthropicKey: $("#ak").value.trim(), deepseekKey: $("#dk").value.trim(),
           githubToken: $("#gt").value.trim(), leadModel: $("#lm").value.trim(),
           workerModel: $("#wm").value.trim(), fallbackModel: $("#fm").value.trim(),
+          speechSilenceMs: $("#ssm").value.trim(), speechContinuous: $("#scont").checked,
           branch: $("#br").value.trim(),
         });
         refreshHeader();
@@ -1186,6 +1201,8 @@ document.querySelectorAll(".mode").forEach((b) => {
   // If a run outlived the previous UI (backgrounded, rotated on an old build,
   // OTA reload), pick its progress back up instead of looking dead.
   try { if ((await call("run.active")).active) reattachLive(); } catch (e) {}
+  // Text/URL shared into the app before the UI was ready.
+  try { const sh = await call("shared.consume"); if (sh && sh.text) receiveShared(sh.text); } catch (e) {}
   try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
   try { updateThinkingLabel((await call("orch", { fn: "get_thinking" })).text.trim() === "1"); } catch (e) {}
   try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}

@@ -213,3 +213,7 @@ pre.filebody.diff { font-size: 12px; }
 /* Usage / cache chip */
 .usagechip { font-variant-numeric: tabular-nums; }
 .usagechip.hidden { display: none; }
+
+/* Settings checkbox row */
+.checkrow { display: flex; align-items: center; gap: 8px; }
+.checkrow input { width: auto; }

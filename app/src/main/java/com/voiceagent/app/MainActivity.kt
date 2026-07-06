@@ -16,7 +16,10 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.net.Uri
 import android.webkit.JavascriptInterface
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.result.contract.ActivityResultContracts
@@ -61,6 +64,18 @@ class MainActivity : AppCompatActivity() {
     private val notifyPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    // File chooser plumbing so the web layer's <input type=file> works.
+    private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private val fileChooserLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+            fileChooserCallback?.onReceiveValue(uris)
+            fileChooserCallback = null
+        }
+
+    // Text/URL shared into the app before the web UI was ready to receive it.
+    private var pendingShared: String? = null
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,9 +102,41 @@ class MainActivity : AppCompatActivity() {
         web.settings.domStorageEnabled = true
         web.settings.allowFileAccess = true
         web.webViewClient = WebViewClient()
+        web.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                webView: WebView?, callback: ValueCallback<Array<Uri>>?,
+                params: WebChromeClient.FileChooserParams?
+            ): Boolean {
+                val intent = params?.createIntent() ?: return false
+                fileChooserCallback?.onReceiveValue(null)
+                fileChooserCallback = callback
+                return try {
+                    fileChooserLauncher.launch(intent); true
+                } catch (e: Throwable) {
+                    fileChooserCallback = null; false
+                }
+            }
+        }
         web.addJavascriptInterface(Bridge(), "Native")
         setContentView(web)
         loadUi()
+
+        // Text/URL shared into the app (from another app's Share sheet).
+        pendingShared = extractShared(intent)
+    }
+
+    private fun extractShared(intent: Intent?): String? {
+        if (intent == null || intent.action != Intent.ACTION_SEND) return null
+        if (intent.type != "text/plain") return null
+        return intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.ifBlank { null }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val t = extractShared(intent) ?: return
+        // Web is live now — deliver straight to the composer.
+        event("shared-text", t)
     }
 
     private var isForeground = true
@@ -306,11 +353,18 @@ class MainActivity : AppCompatActivity() {
             if (fn == "fix_build") withAgentService(body) else body()
         }
         "py.call" -> withContext(Dispatchers.IO) {
-            // Generic escape hatch: call a bundled Python function from the web
-            // layer so future features can ship OTA without a bridge change.
+            // Generic escape hatch. Routed through agent_loader.call_any so the
+            // OTA-OVERRIDE copy of the target module is used, not the stale
+            // bundled one — otherwise an OTA update wouldn't take effect here.
             val a = arg.optJSONArray("args")
             val args: Array<Any?> = if (a == null) arrayOf() else Array(a.length()) { a.get(it) }
-            text(py(arg.getString("module")).callAttr(arg.getString("fn"), *args).toString())
+            text(py("agent_loader").callAttr(
+                "call_any", arg.getString("module"), arg.getString("fn"), *args).toString())
+        }
+        "shared.consume" -> {
+            val t = pendingShared ?: ""
+            pendingShared = null
+            JSONObject().put("text", t)
         }
         "agent.commit" -> withContext(Dispatchers.IO) { text(py("orchestrator").callAttr("commit_now").toString()) }
         "git.push" -> withContext(Dispatchers.IO) { text(py("git_ops").callAttr("push").toString()) }
@@ -357,6 +411,8 @@ class MainActivity : AppCompatActivity() {
                 .put("workerModel", p.getString("WORKER_MODEL", "")?.ifBlank { getString(R.string.worker_model_default) })
                 .put("fallbackModel", p.getString("AGENT_FALLBACK_MODEL", ""))
                 .put("branch", p.getString("AGENT_BRANCH", "")?.ifBlank { getString(R.string.agent_branch_default) })
+                .put("speechSilenceMs", p.getString("SPEECH_SILENCE_MS", "")?.ifBlank { SPEECH_SILENCE_MS.toString() })
+                .put("speechContinuous", p.getString("SPEECH_CONTINUOUS", "1"))
         }
         "settings.save" -> {
             getSharedPreferences("keys", MODE_PRIVATE).edit()
@@ -367,6 +423,8 @@ class MainActivity : AppCompatActivity() {
                 .putString("WORKER_MODEL", arg.optString("workerModel"))
                 .putString("AGENT_FALLBACK_MODEL", arg.optString("fallbackModel"))
                 .putString("AGENT_BRANCH", arg.optString("branch"))
+                .putString("SPEECH_SILENCE_MS", arg.optString("speechSilenceMs"))
+                .putString("SPEECH_CONTINUOUS", if (arg.optBoolean("speechContinuous", true)) "1" else "0")
                 .apply()
             prepareEnv()
             JSONObject().put("ok", true)
@@ -485,10 +543,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // The OTA file list is fetched from ota_manifest.json in the repo, so adding
+    // a NEW module or web file later needs only a manifest edit — never a new
+    // APK. Falls back to the built-in lists if the manifest can't be read.
+    private fun manifestList(key: String, fallback: List<String>): List<String> =
+        try {
+            val arr = JSONObject(fetchRaw("ota_manifest.json")).optJSONArray(key) ?: return fallback
+            (0 until arr.length()).map { arr.getString(it) }.ifEmpty { fallback }
+        } catch (e: Throwable) { fallback }
+
     private fun updateAgent(): String = try {
         val dir = File(filesDir, "py_override").apply { mkdirs() }
-        val files = listOf("llm.py", "agent_tools.py", "agentloop.py",
-            "git_ops.py", "localrun.py", "templates.py", "orchestrator.py")
+        val files = manifestList("python", listOf("llm.py", "agent_tools.py",
+            "agentloop.py", "git_ops.py", "localrun.py", "templates.py", "orchestrator.py"))
         val fetched = files.map { it to fetchRaw("app/src/main/python/$it") }
         fetched.forEach { (name, body) -> File(dir, name).writeText(body) }
         "Agent updated (${files.size} modules) — next task uses the new code"
@@ -498,7 +565,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateUI(): String = try {
         val dir = File(filesDir, "web").apply { mkdirs() }
-        for (f in listOf("index.html", "style.css", "app.js")) {
+        val files = manifestList("web", listOf("index.html", "style.css", "app.js"))
+        for (f in files) {
             File(dir, f).writeText(fetchRaw("app/src/main/assets/web/$f"))
         }
         runOnUiThread { loadUi() }
@@ -549,15 +617,23 @@ class MainActivity : AppCompatActivity() {
     private var speechIntent: Intent? = null
     private val speechHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
+    private fun silenceMs(): Int =
+        getSharedPreferences("keys", MODE_PRIVATE)
+            .getString("SPEECH_SILENCE_MS", "")?.toIntOrNull()?.coerceIn(500, 60000) ?: SPEECH_SILENCE_MS
+
+    private fun continuousDictation(): Boolean =
+        getSharedPreferences("keys", MODE_PRIVATE).getString("SPEECH_CONTINUOUS", "1") != "0"
+
     private fun buildSpeechIntent(): Intent =
         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            // Ask for ~7s of trailing silence before ending (honored on some
-            // devices; auto-restart covers the rest).
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, SPEECH_SILENCE_MS)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, SPEECH_SILENCE_MS)
+            // Trailing silence before ending (honored on some devices; auto-
+            // restart covers the rest). Tunable in Settings, no APK needed.
+            val ms = silenceMs()
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, ms)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, ms)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500)
         }
 
@@ -612,6 +688,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun restartListening() {
         if (!dictating) return
+        if (!continuousDictation()) {
+            // Single-shot mode: end after this segment.
+            dictating = false
+            event("dictation", "off")
+            return
+        }
         speechHandler.postDelayed({
             if (dictating) try { speech?.startListening(speechIntent ?: buildSpeechIntent()) } catch (_: Throwable) {}
         }, 250)

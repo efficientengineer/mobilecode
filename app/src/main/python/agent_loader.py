@@ -86,3 +86,20 @@ def op(name: str, arg: str = "") -> str:
     if fn is None:
         return f"no such op: {name}"
     return fn(arg) if arg != "" else fn()
+
+
+def call_any(module: str, fn: str, *args):
+    """Call <module>.<fn>(*args) through the OTA loader so the OVERRIDE copy of
+    the module is used, not the stale bundled one. Used by the web `py.call`
+    bridge so an OTA update to any module actually takes effect."""
+    _load_orchestrator()  # ensures overrides are registered in sys.modules
+    mod = sys.modules.get(module)
+    if mod is None:
+        try:
+            mod = importlib.import_module(module)
+        except Exception:
+            return f"no such module: {module}"
+    f = getattr(mod, fn, None)
+    if f is None:
+        return f"no such fn: {module}.{fn}"
+    return f(*args)
