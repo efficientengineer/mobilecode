@@ -246,9 +246,11 @@ async function runTask(task, mode) {
   if (mode === "plan") {
     addApprove();
     notifyUser("Plan ready — approve to build", firstLine(reply));
+    speakReply(reply);
   } else {
     if (poller.pendingCommit()) addCommitReview();
     notifyUser("Agent replied", firstLine(reply));
+    speakReply(reply);
   }
   running = false;
   $("#runbar").classList.add("hidden");
@@ -304,7 +306,8 @@ function fmtEvent(e) {
     case "tool_done":
       return "   ✓ " + (e.result || e.name);
     case "reason": return "💭 " + (e.text || "").slice(0, 160);
-    case "verify_failed": return "🧪 verification FAILED — repairing:\n" + (e.detail || "");
+    case "fallback": return "🔀 " + (e.frm || "primary") + " failed → falling back to " + (e.to || "fallback");
+    case "verify_failed": return "🧪 verification FAILED (" + (e.which || "check") + ") — repairing:\n" + (e.detail || "");
     case "verify_ok": return "🧪 verification passed";
     case "usage": return "∑ " + (e.input || 0) + " in / " + (e.output || 0) + " out tokens, " + (e.calls || 0) + " calls" +
       (e.cache ? " · " + e.cache + " cached" : "");
@@ -411,6 +414,21 @@ async function openRun(runId) {
 function updateAutocommitLabel(on) {
   const b = document.querySelector('[data-act="autocommit"]');
   if (b) b.textContent = "Autocommit: " + (on ? "on" : "off");
+}
+
+function updateSpeakLabel(on) {
+  const b = document.querySelector('[data-act="speak"]');
+  if (b) b.textContent = "Speak replies: " + (on ? "on" : "off");
+}
+function autoSpeakOn() {
+  try { return localStorage.getItem("autoSpeak") === "1"; } catch (e) { return false; }
+}
+// Read an agent reply aloud when auto-speak is on. Strips code blocks so long
+// diffs aren't dictated, and caps length.
+function speakReply(text) {
+  if (!autoSpeakOn() || !text) return;
+  const clean = String(text).replace(/```[\s\S]*?```/g, " (code) ").replace(/\s+/g, " ").trim().slice(0, 500);
+  if (clean) { try { call("speak", { text: clean }); } catch (e) {} }
 }
 
 function updateCavemanLabel(on) {
@@ -521,6 +539,13 @@ const actions = {
     const next = cur === "1" ? "0" : "1";
     bubble((await call("orch", { fn: "set_autocommit", arg: next })).text, "sys");
     updateAutocommitLabel(next === "1");
+  },
+  speak() {
+    const next = autoSpeakOn() ? "0" : "1";
+    try { localStorage.setItem("autoSpeak", next); } catch (e) {}
+    updateSpeakLabel(next === "1");
+    bubble("Speak replies " + (next === "1" ? "on" : "off"), "sys");
+    if (next === "1") { try { call("speak", { text: "Voice replies on." }); } catch (e) {} }
   },
   async updateApp() {
     bubble("Updating agent + UI…", "sys");
@@ -665,15 +690,46 @@ const actions = {
     const r = await call("session.list");
     const items = (r.sessions || []).map((s) => {
       const dot = s.id === r.activeId ? "● " : "○ ";
-      const repo = s.activeRepo ? " ("+s.activeRepo+")" : "";
-      return `<div class="list-item" data-sid="${s.id}"><span>${dot}${s.name}${repo}</span></div>`;
+      const repo = s.activeRepo ? " (" + s.activeRepo + ")" : "";
+      const nm = escapeHtml(s.name);
+      return `<div class="list-item sess-row">
+        <span class="sess-pick" data-sid="${s.id}">${dot}${nm}${escapeHtml(repo)}</span>
+        <span class="sess-actions">
+          <b class="sess-btn" data-rename="${s.id}" data-name="${nm}" title="Rename">✎</b>
+          <b class="sess-btn" data-del="${s.id}" data-name="${nm}" title="Delete">🗑</b>
+        </span></div>`;
     }).join("");
     modal("Sessions", items +
       `<button class="pill ghost" id="newSess" style="margin-top:10px">New session</button>`);
+    const reopen = async () => { await refreshHeader(); await loadHistory(); actions.sessions(); };
     $("#modalBody").querySelectorAll("[data-sid]").forEach((el) => {
       el.onclick = async () => {
         await call("session.setActive", { id: el.dataset.sid });
         closeSheet("#modal"); await refreshHeader(); await loadHistory();
+      };
+    });
+    $("#modalBody").querySelectorAll("[data-rename]").forEach((el) => {
+      el.onclick = (ev) => {
+        ev.stopPropagation();
+        modal("Rename session",
+          `<label>Name</label><input id="rn2" type="text" value="${el.dataset.name}" />`,
+          async () => {
+            const name = $("#rn2").value.trim(); if (!name) return;
+            await call("session.rename", { id: el.dataset.rename, name });
+            reopen();
+          });
+      };
+    });
+    $("#modalBody").querySelectorAll("[data-del]").forEach((el) => {
+      el.onclick = (ev) => {
+        ev.stopPropagation();
+        modal("Delete session",
+          `<div class="hint">Permanently delete "<b>${el.dataset.name}</b>" — its repo workspace,
+           history, and settings? This cannot be undone.</div>`,
+          async () => {
+            await call("session.delete", { id: el.dataset.del });
+            reopen();
+          });
       };
     });
     $("#newSess").onclick = () => {
@@ -746,15 +802,23 @@ const actions = {
        <label>GitHub token (push / create / build)</label><input id="gt" type="password" value="${s.githubToken||""}" />
        <label>Default orchestrator model</label><input id="lm" type="text" value="${s.leadModel||""}" />
        <label>Default implementer model (blank = single agent)</label><input id="wm" type="text" value="${s.workerModel||""}" />
+       <label>Fallback model (used if the primary provider fails)</label><input id="fm" type="text" list="ml" value="${s.fallbackModel||""}" placeholder="e.g. deepseek/deepseek-chat" />
+       <datalist id="ml"></datalist>
        <label>Agent branch (for OTA updates)</label><input id="br" type="text" value="${s.branch||""}" />`,
       async () => {
         await call("settings.save", {
           anthropicKey: $("#ak").value.trim(), deepseekKey: $("#dk").value.trim(),
           githubToken: $("#gt").value.trim(), leadModel: $("#lm").value.trim(),
-          workerModel: $("#wm").value.trim(), branch: $("#br").value.trim(),
+          workerModel: $("#wm").value.trim(), fallbackModel: $("#fm").value.trim(),
+          branch: $("#br").value.trim(),
         });
         refreshHeader();
       });
+    try {
+      const agg = await call("models.aggregate");
+      const dl = $("#ml");
+      if (dl) dl.innerHTML = (agg.models || []).map((m) => `<option value="${m}">`).join("");
+    } catch (e) {}
   },
 };
 
@@ -852,6 +916,7 @@ async function askEphemeral(q) {
     const r = await call("orch", { fn: "ask", arg: q });
     const a = bubble(r.text || "(no answer)", "agent", null, false); a.classList.add("eph");
     notifyUser("Answer ready", firstLine(r.text || ""));
+    speakReply(r.text || "");
   } catch (e) {
     bubble("Ask failed: " + e.message, "sys");
   }
@@ -899,5 +964,6 @@ document.querySelectorAll(".mode").forEach((b) => {
   try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
   try { updateThinkingLabel((await call("orch", { fn: "get_thinking" })).text.trim() === "1"); } catch (e) {}
   try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
+  updateSpeakLabel(autoSpeakOn());
   bubble("Ready. Type or tap 🎤 to dictate a task.", "sys");
 })();

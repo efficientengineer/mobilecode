@@ -192,6 +192,7 @@ class MainActivity : AppCompatActivity() {
         val (lead, worker) = effectiveModels()
         set("LEAD_MODEL", lead)
         set("WORKER_MODEL", worker)
+        set("AGENT_FALLBACK_MODEL", prefs.getString("AGENT_FALLBACK_MODEL", "").orEmpty())
     }
 
     // --- Bridge -----------------------------------------------------------
@@ -240,13 +241,6 @@ class MainActivity : AppCompatActivity() {
             JSONObject().put("name", m.name).put("activeRepo", m.activeRepo)
                 .put("orchestrator", lead).put("implementer", worker)
         }
-        "session.turns" -> withContext(Dispatchers.IO) {
-            val arr = JSONArray()
-            sessions.turns(sessions.activeId()).forEach {
-                arr.put(JSONObject().put("role", it.first).put("text", it.second))
-            }
-            JSONObject().put("turns", arr)
-        }
         "session.list" -> {
             val arr = JSONArray()
             sessions.list().forEach {
@@ -262,6 +256,18 @@ class MainActivity : AppCompatActivity() {
         "session.setActive" -> {
             sessions.setActive(arg.getString("id")); prepareEnv()
             JSONObject().put("ok", true)
+        }
+        "session.rename" -> {
+            sessions.rename(arg.getString("id"), arg.optString("name"))
+            JSONObject().put("ok", true)
+        }
+        "session.delete" -> {
+            val id = arg.getString("id")
+            sessions.delete(id)
+            // Rebind to whatever session is now active (activeId() creates a
+            // fresh default if we just deleted the last/active one).
+            sessions.activeId(); prepareEnv()
+            JSONObject().put("ok", true).put("activeId", sessions.activeId())
         }
         "session.setModels" -> {
             sessions.setModels(sessions.activeId(),
@@ -291,22 +297,6 @@ class MainActivity : AppCompatActivity() {
                 text(py("agent_loader").callAttr("op", fn, arg.optString("arg", "")).toString())
             }
             if (fn == "fix_build") withAgentService(body) else body()
-        }
-        "context.get", "session.turns2" -> withContext(Dispatchers.IO) {
-            val arr = JSONArray()
-            sessions.turns(sessions.activeId()).forEach {
-                arr.put(JSONObject().put("role", it.first).put("text", it.second))
-            }
-            JSONObject().put("turns", arr)
-        }
-        "context.clear" -> {
-            sessions.clearTranscript(sessions.activeId())
-            text("Context cleared")
-        }
-        "context.trim" -> {
-            val keep = arg.optInt("keep", 10)
-            sessions.trimTranscript(sessions.activeId(), keep)
-            text("Trimmed to last $keep turns")
         }
         "py.call" -> withContext(Dispatchers.IO) {
             // Generic escape hatch: call a bundled Python function from the web
@@ -358,6 +348,7 @@ class MainActivity : AppCompatActivity() {
                 .put("githubToken", p.getString("GITHUB_TOKEN", ""))
                 .put("leadModel", p.getString("LEAD_MODEL", "")?.ifBlank { getString(R.string.lead_model_default) })
                 .put("workerModel", p.getString("WORKER_MODEL", ""))
+                .put("fallbackModel", p.getString("AGENT_FALLBACK_MODEL", ""))
                 .put("branch", p.getString("AGENT_BRANCH", "")?.ifBlank { getString(R.string.agent_branch_default) })
         }
         "settings.save" -> {
@@ -367,6 +358,7 @@ class MainActivity : AppCompatActivity() {
                 .putString("GITHUB_TOKEN", arg.optString("githubToken"))
                 .putString("LEAD_MODEL", arg.optString("leadModel"))
                 .putString("WORKER_MODEL", arg.optString("workerModel"))
+                .putString("AGENT_FALLBACK_MODEL", arg.optString("fallbackModel"))
                 .putString("AGENT_BRANCH", arg.optString("branch"))
                 .apply()
             prepareEnv()

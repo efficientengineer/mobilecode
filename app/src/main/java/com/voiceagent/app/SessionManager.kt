@@ -7,8 +7,9 @@ import java.io.File
 /**
  * Sessions are self-contained folders under filesDir/sessions/<id>/:
  *   - the folder itself is the git workspace (the repo lives here)
- *   - meta.json holds { name, activeRepo }
- *   - transcript.jsonl holds one JSON object per turn
+ *   - meta.json holds { name, activeRepo, models }
+ *   - the conversation lives in .agent/discussion.jsonl, owned by the Python
+ *     orchestrator (see orchestrator._append_discussion) — NOT here.
  *
  * The active session id is stored in SharedPreferences; the active session's
  * folder is what gets passed to Python as AGENT_WORKSPACE.
@@ -60,6 +61,11 @@ class SessionManager(private val ctx: Context) {
         if (prefs.getString("active", null) == id) prefs.edit().remove("active").apply()
     }
 
+    fun rename(id: String, name: String) {
+        if (name.isBlank()) return
+        write(readMeta(id).copy(name = name.trim()))
+    }
+
     fun readMeta(id: String): Session {
         val dir = File(root, id)
         val f = File(dir, "meta.json")
@@ -101,55 +107,5 @@ class SessionManager(private val ctx: Context) {
                 .put("modelsConfigured", s.modelsConfigured)
                 .toString()
         )
-    }
-
-    /** Append one turn to the session transcript. */
-    fun appendTurn(id: String, role: String, text: String) {
-        val f = File(File(root, id), "transcript.jsonl")
-        val line = JSONObject().put("role", role).put("text", text).toString()
-        f.appendText(line + "\n")
-    }
-
-    /** Delete the whole transcript for a session. */
-    fun clearTranscript(id: String) {
-        File(File(root, id), "transcript.jsonl").delete()
-    }
-
-    /** Keep only the last [keepLast] turns of the transcript. */
-    fun trimTranscript(id: String, keepLast: Int) {
-        val f = File(File(root, id), "transcript.jsonl")
-        if (!f.exists()) return
-        val lines = f.readLines()
-        if (lines.size <= keepLast) return
-        f.writeText(lines.takeLast(keepLast).joinToString("\n") + "\n")
-    }
-
-    /** All turns for a session, oldest first, as (role, text) pairs. */
-    fun turns(id: String): List<Pair<String, String>> {
-        val f = File(File(root, id), "transcript.jsonl")
-        if (!f.exists()) return emptyList()
-        return f.readLines().mapNotNull {
-            try {
-                val o = JSONObject(it)
-                o.optString("role") to o.optString("text")
-            } catch (e: Throwable) {
-                null
-            }
-        }
-    }
-
-    /** The last [n] turns, oldest first, as "role: text" lines for context. */
-    fun recentContext(id: String, n: Int = 6): String {
-        val f = File(File(root, id), "transcript.jsonl")
-        if (!f.exists()) return ""
-        val lines = f.readLines().takeLast(n)
-        return lines.joinToString("\n") {
-            try {
-                val o = JSONObject(it)
-                "${o.optString("role")}: ${o.optString("text")}"
-            } catch (e: Throwable) {
-                ""
-            }
-        }
     }
 }

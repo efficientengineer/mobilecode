@@ -206,6 +206,8 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
              "steps": int, "usage": {...}, "interrupted": bool}
     """
     model = os.environ.get("LEAD_MODEL", "anthropic/claude-opus-4-8")
+    fallback = (os.environ.get("AGENT_FALLBACK_MODEL") or "").strip()
+    active = model  # sticky: once we fail over, stay on the fallback
     agent_tools.reset_touched()
 
     if plan:
@@ -238,13 +240,29 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             _emit("pruned", chars=saved)
         buf = _DeltaBuffer()
         try:
-            r = llm.chat(model, system, messages, tools=tools,
+            r = llm.chat(active, system, messages, tools=tools,
                          max_tokens=8000, cached_context=context, on_delta=buf)
         except Exception as e:
-            buf.flush()
-            _emit("error", detail=str(e)[:400])
-            final_text = f"Model call failed after retries: {e}"
-            break
+            # Fail over to the configured fallback provider (e.g. Claude→DeepSeek)
+            # and stay on it for the rest of the run. One overloaded provider
+            # should not kill a run when another is keyed and ready.
+            if fallback and active != fallback and not _interrupted():
+                _emit("fallback", frm=active, to=fallback, detail=str(e)[:200])
+                active = fallback
+                buf = _DeltaBuffer()
+                try:
+                    r = llm.chat(active, system, messages, tools=tools,
+                                 max_tokens=8000, cached_context=context, on_delta=buf)
+                except Exception as e2:
+                    buf.flush()
+                    _emit("error", detail=str(e2)[:400])
+                    final_text = f"Model call failed (both providers): {e2}"
+                    break
+            else:
+                buf.flush()
+                _emit("error", detail=str(e)[:400])
+                final_text = f"Model call failed after retries: {e}"
+                break
         buf.flush()
         if r.get("reasoning"):
             reasoning_last = r["reasoning"]
@@ -253,26 +271,40 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
         calls = r.get("tool_calls") or []
         if not calls:
             final_text = r.get("text", "")
-            # Post-run verification: syntax-check touched Python before
-            # accepting "done"; feed failures back as repair rounds.
+            # Post-run verification: (1) syntax-check touched Python, then
+            # (2) run the project's tests. Either failure is fed back as a
+            # repair round so "done" means "parses AND passes", not just parses.
             if write and not plan and repair_left > 0:
                 errs = agent_tools.check_python_files()
                 if errs:
                     repair_left -= 1
-                    _emit("verify_failed", detail=_clip(errs, 500))
+                    _emit("verify_failed", which="syntax", detail=_clip(errs, 500))
                     messages.append({"role": "assistant", "content": final_text})
                     messages.append({"role": "user", "content":
                                      "Verification failed — these Python files "
                                      "have syntax errors. Fix them, re-run "
                                      "check_python, then finish:\n" + errs})
                     continue
+                ran, ok, out = agent_tools.run_tests_status()
+                if ran and not ok:
+                    repair_left -= 1
+                    _emit("verify_failed", which="tests", detail=_clip(out, 500))
+                    messages.append({"role": "assistant", "content": final_text})
+                    messages.append({"role": "user", "content":
+                                     "Verification failed — the project's tests "
+                                     "did not pass. Investigate and fix, then "
+                                     "re-run run_tests and finish:\n" + out})
+                    continue
             if write and not plan:
                 _emit("verify_ok")
             break
 
-        # Record the assistant turn, then execute each requested tool.
+        # Record the assistant turn, then execute each requested tool. Keep the
+        # Anthropic thinking blocks so they replay correctly on the next turn
+        # (required for extended thinking + tool use).
         messages.append({"role": "assistant", "content": r.get("text", ""),
-                         "tool_calls": calls})
+                         "tool_calls": calls,
+                         "thinking_blocks": r.get("thinking_blocks") or []})
         for tc in calls:
             if _interrupted():
                 interrupted = True

@@ -81,15 +81,21 @@ Files live in the app's private storage under a `workspace/` git repo.
   the agent builds face the same ceiling: pure-Python (stdlib/WSGI) or static
   web apps preview on-device; anything needing native wheels won't.
 - **No arbitrary shell execution.** The agent edits files, syntax-checks
-  Python, runs pure-Python unittests in-process, and previews web apps in a
-  WebView — but there is no real shell (that needs an embedded proot layer).
-  The escape hatch is the cloud: push and let GitHub Actions build, then use
-  **Fix CI build** to feed failure logs back to the agent.
-- **Turn-taking is one-shot.** Speak → wait → hear result. You can Stop a
-  running task from the run bar, but not by voice.
-- **Model strings may need updating.** Defaults are `anthropic/claude-opus-4-8`
-  and `deepseek/deepseek-chat`; pick any listed model per session from the
-  model switcher (or set `LEAD_MODEL` / `WORKER_MODEL`).
+  Python, runs pure-Python unittests in-process (the verify gate now blocks
+  "done" on a failing test, not just a syntax error), fetches URLs
+  (`web_fetch`), and previews web apps in a WebView — but there is no real
+  shell (that needs an embedded proot layer). The escape hatch is the cloud:
+  push and let GitHub Actions build, then use **Fix CI build** to feed failure
+  logs back to the agent.
+- **Turn-taking is one-shot.** Speak → wait → hear result (enable
+  **Speak replies** to have answers read aloud). You can Stop a running task
+  from the run bar, but not by voice.
+- **Models.** Defaults are `anthropic/claude-opus-4-8` and
+  `deepseek/deepseek-chat`; pick any listed model per session from the model
+  switcher (or set `LEAD_MODEL` / `WORKER_MODEL`). Set a **Fallback model** in
+  Settings and a run that hits an overloaded/failed provider fails over to it
+  (e.g. Claude → DeepSeek) instead of dying. See `PARITY.md` for the full
+  feature-parity audit against claude.ai/code and the roadmap.
 
 ## Verifying the Python core locally (optional)
 

@@ -163,3 +163,10 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 
 /* Diff viewer */
 pre.filebody.diff { font-size: 12px; }
+
+/* Session rows with rename/delete actions */
+.sess-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sess-pick { flex: 1; cursor: pointer; }
+.sess-actions { display: flex; gap: 10px; flex-shrink: 0; }
+.sess-btn { cursor: pointer; opacity: .7; font-style: normal; padding: 2px 4px; }
+.sess-btn:active { opacity: 1; }

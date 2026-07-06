@@ -122,6 +122,74 @@ def t_grep(pattern="", glob="", **_):
     return "\n".join(hits) or "(no matches)"
 
 
+# --- web fetch (read-only, provider-agnostic) --------------------------------
+
+_TAG_RE = re.compile(r"(?is)<(script|style)\b.*?</\1>")
+_BLOCK_RE = re.compile(r"(?i)</(p|div|section|article|h[1-6]|li|tr|br|table|ul|ol|pre|blockquote)>")
+_ANYTAG_RE = re.compile(r"(?s)<[^>]+>")
+
+
+def _html_to_text(html: str) -> str:
+    """Very small HTML→text pass: drop script/style, turn block-ends into
+    newlines, strip remaining tags, unescape entities. No dependency."""
+    import html as _html
+    t = _TAG_RE.sub(" ", html)
+    t = _BLOCK_RE.sub("\n", t)
+    t = _ANYTAG_RE.sub("", t)
+    t = _html.unescape(t)
+    lines = [ln.strip() for ln in t.splitlines()]
+    out, blank = [], False
+    for ln in lines:
+        if ln:
+            out.append(ln)
+            blank = False
+        elif not blank:
+            out.append("")
+            blank = True
+    return "\n".join(out).strip()
+
+
+def t_web_fetch(url="", max_chars=20000, **_):
+    """Fetch a URL and return its text (HTML reduced to readable text).
+
+    Stdlib-only (urllib), so it works identically whichever model drives.
+    """
+    import urllib.request
+    import urllib.error
+    url = str(url).strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return "(url must start with http:// or https://)"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (voice-agent)",
+        "Accept": "text/html,application/xhtml+xml,text/plain,*/*",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            raw = resp.read(4_000_000)  # 4 MB cap
+    except urllib.error.HTTPError as e:
+        return f"(HTTP {e.code} fetching {url})"
+    except Exception as e:
+        return f"({type(e).__name__} fetching {url}: {e})"
+    charset = "utf-8"
+    if "charset=" in ctype:
+        charset = ctype.split("charset=", 1)[1].split(";")[0].strip() or "utf-8"
+    try:
+        body = raw.decode(charset, errors="replace")
+    except Exception:
+        body = raw.decode("utf-8", errors="replace")
+    if "html" in ctype or (not ctype and "<html" in body[:2000].lower()):
+        body = _html_to_text(body)
+    try:
+        limit = int(max_chars)
+    except Exception:
+        limit = 20000
+    limit = max(1000, min(limit, 100000))
+    clipped = len(body) > limit
+    return (f"URL: {url}\n\n" + body[:limit] +
+            (f"\n\n…[truncated at {limit} chars of {len(body)}]" if clipped else ""))
+
+
 # --- mutation ------------------------------------------------------------
 
 def t_write_file(path="", content="", **_):
@@ -192,31 +260,61 @@ def t_check_python(paths="", **_):
     return errs or "OK — no syntax errors"
 
 
+TEST_TIMEOUT = int(os.environ.get("AGENT_TEST_TIMEOUT", "30"))
+
+
+def run_tests_status(pattern="test*.py"):
+    """Run unittest discovery in-process on a daemon thread with a timeout.
+
+    Returns (ran: bool, ok: bool, output: str). A hung test (infinite loop)
+    times out instead of freezing the interpreter thread the UI waits on; the
+    stray thread is daemon so it can't keep the process alive.
+    """
+    import unittest
+    import threading
+    root = str(_workspace())
+    holder = {}
+
+    def _work():
+        stream = io.StringIO()
+        try:
+            loader = unittest.TestLoader()
+            suite = loader.discover(root, pattern=pattern or "test*.py",
+                                    top_level_dir=root)
+            n = suite.countTestCases()
+            if n == 0:
+                holder["res"] = (False, True, f"(no tests found matching {pattern})")
+                return
+            result = unittest.TextTestRunner(stream=stream, verbosity=2).run(suite)
+            ok = result.wasSuccessful()
+            verdict = "PASSED" if ok else "FAILED"
+            holder["res"] = (True, ok,
+                             f"{verdict}: {result.testsRun} tests, "
+                             f"{len(result.failures)} failures, "
+                             f"{len(result.errors)} errors\n" + stream.getvalue()[-4000:])
+        except Exception as e:
+            holder["res"] = (True, False,
+                             f"test run crashed: {e}\n{stream.getvalue()[-2000:]}")
+
+    t = threading.Thread(target=_work, daemon=True)
+    t.start()
+    t.join(TEST_TIMEOUT)
+    if t.is_alive():
+        return (True, False,
+                f"TIMEOUT: tests did not finish within {TEST_TIMEOUT}s "
+                "(possible infinite loop). Check for a non-terminating test.")
+    return holder.get("res", (False, True, "(no tests ran)"))
+
+
 def t_run_tests(pattern="test*.py", **_):
     """Run unittest discovery in-process and return the tail of the output.
 
     Runs on the embedded interpreter (no subprocess on Android), so only
     pure-Python tests work — which matches what this device can build anyway.
+    Bounded by AGENT_TEST_TIMEOUT (default 30s).
     """
-    import unittest
-    root = str(_workspace())
-    stream = io.StringIO()
-    try:
-        loader = unittest.TestLoader()
-        suite = loader.discover(root, pattern=pattern or "test*.py",
-                                top_level_dir=root)
-        n = suite.countTestCases()
-        if n == 0:
-            return f"(no tests found matching {pattern})"
-        runner = unittest.TextTestRunner(stream=stream, verbosity=2)
-        result = runner.run(suite)
-        out = stream.getvalue()
-        verdict = "PASSED" if result.wasSuccessful() else "FAILED"
-        return f"{verdict}: {result.testsRun} tests, " \
-               f"{len(result.failures)} failures, {len(result.errors)} errors\n" \
-               + out[-4000:]
-    except Exception as e:
-        return f"test run crashed: {e}\n{stream.getvalue()[-2000:]}"
+    _, _, out = run_tests_status(pattern)
+    return out
 
 
 # --- delegate to the implementer model --------------------------------------
@@ -335,6 +433,15 @@ READ_TOOLS = [
          "paths": {"type": "string", "description": "comma-separated .py paths (optional)"},
      }, []),
      "fn": t_check_python},
+    {"name": "web_fetch",
+     "description": "Fetch a URL (http/https) and return its readable text "
+                    "(HTML is reduced to text). Use for docs, API references, "
+                    "error pages, or a link the user pasted.",
+     "input_schema": _schema({
+         "url": {"type": "string", "description": "full http/https URL"},
+         "max_chars": {"type": "integer", "description": "cap on returned chars (optional)"},
+     }, ["url"]),
+     "fn": t_web_fetch},
 ]
 
 WRITE_TOOLS = [

@@ -124,6 +124,12 @@ def _anthropic_messages(messages):
             i += 1
         elif m["role"] == "assistant":
             blocks = []
+            # Thinking blocks (with their signatures) must be replayed FIRST and
+            # preserved verbatim: with extended thinking + tool use, Anthropic
+            # requires the prior turn's thinking to accompany the tool_use when
+            # tool results are sent back, or the request 400s / degrades.
+            for tb in m.get("thinking_blocks") or []:
+                blocks.append(tb)
             if m.get("content"):
                 blocks.append({"type": "text", "text": m["content"]})
             for tc in m.get("tool_calls") or []:
@@ -185,8 +191,9 @@ def _call_anthropic(model, system, cached_context, messages, tools,
 
     payload["stream"] = True
     resp = _post(url, headers, payload, stream=True)
-    text, reasoning, tool_calls = [], [], []
+    text, reasoning, tool_calls, thinking_blocks = [], [], [], []
     cur_tool = None
+    cur_think = None
     stop = ""
     usage_in = usage_out = usage_cached = 0
     with resp:
@@ -206,6 +213,11 @@ def _call_anthropic(model, system, cached_context, messages, tools,
                 cb = ev.get("content_block") or {}
                 if cb.get("type") == "tool_use":
                     cur_tool = {"id": cb.get("id"), "name": cb.get("name"), "json": ""}
+                elif cb.get("type") == "thinking":
+                    cur_think = {"type": "thinking", "thinking": "", "signature": ""}
+                elif cb.get("type") == "redacted_thinking":
+                    thinking_blocks.append({"type": "redacted_thinking",
+                                            "data": cb.get("data", "")})
             elif t == "content_block_delta":
                 d = ev.get("delta") or {}
                 dt = d.get("type")
@@ -214,6 +226,10 @@ def _call_anthropic(model, system, cached_context, messages, tools,
                     on_delta(d.get("text", ""))
                 elif dt == "thinking_delta":
                     reasoning.append(d.get("thinking", ""))
+                    if cur_think is not None:
+                        cur_think["thinking"] += d.get("thinking", "")
+                elif dt == "signature_delta" and cur_think is not None:
+                    cur_think["signature"] += d.get("signature", "")
                 elif dt == "input_json_delta" and cur_tool is not None:
                     cur_tool["json"] += d.get("partial_json", "")
             elif t == "content_block_stop":
@@ -225,13 +241,20 @@ def _call_anthropic(model, system, cached_context, messages, tools,
                     tool_calls.append({"id": cur_tool["id"], "name": cur_tool["name"],
                                        "args": args})
                     cur_tool = None
+                elif cur_think is not None:
+                    # Keep the block only if it carries a signature (unsigned
+                    # thinking cannot be replayed to the API).
+                    if cur_think.get("signature"):
+                        thinking_blocks.append(cur_think)
+                    cur_think = None
             elif t == "message_delta":
                 stop = (ev.get("delta") or {}).get("stop_reason") or stop
                 u = ev.get("usage") or {}
                 usage_out = u.get("output_tokens", usage_out)
     _account(usage_in, usage_out, usage_cached)
     return {"text": "".join(text), "reasoning": "".join(reasoning),
-            "tool_calls": tool_calls, "stop": stop or "end_turn",
+            "tool_calls": tool_calls, "thinking_blocks": thinking_blocks,
+            "stop": stop or "end_turn",
             "usage": {"input": usage_in, "output": usage_out,
                       "cache_read": usage_cached}}
 
@@ -242,10 +265,16 @@ def _parse_anthropic(result):
     reasoning = "".join(p.get("thinking", "") for p in parts if p.get("type") == "thinking")
     tool_calls = [{"id": p["id"], "name": p["name"], "args": p.get("input") or {}}
                   for p in parts if p.get("type") == "tool_use"]
+    # Preserve thinking/redacted_thinking blocks verbatim (with signatures) so
+    # they can be replayed on the next tool-loop turn.
+    thinking_blocks = [p for p in parts
+                       if p.get("type") in ("thinking", "redacted_thinking")
+                       and (p.get("signature") or p.get("type") == "redacted_thinking")]
     u = result.get("usage") or {}
     cached = u.get("cache_read_input_tokens", 0) or 0
     _account(u.get("input_tokens", 0), u.get("output_tokens", 0), cached)
     return {"text": text, "reasoning": reasoning, "tool_calls": tool_calls,
+            "thinking_blocks": thinking_blocks,
             "stop": result.get("stop_reason") or "end_turn",
             "usage": {"input": u.get("input_tokens", 0),
                       "output": u.get("output_tokens", 0),
@@ -426,10 +455,17 @@ def chat(model, system, messages, tools=None, max_tokens=8000,
 def chat_text(model, system, user, max_tokens=4000, on_delta=None):
     """Simple single-turn text call (no tools). Returns (text, reasoning).
 
-    Auto-continues once if the reply was cut off at max_tokens.
+    Auto-continues once if the reply was cut off at max_tokens. Falls over to
+    AGENT_FALLBACK_MODEL if the primary provider fails after retries.
     """
     messages = [{"role": "user", "content": user}]
-    r = chat(model, system, messages, max_tokens=max_tokens, on_delta=on_delta)
+    try:
+        r = chat(model, system, messages, max_tokens=max_tokens, on_delta=on_delta)
+    except Exception:
+        fb = (os.environ.get("AGENT_FALLBACK_MODEL") or "").strip()
+        if not fb or fb == model:
+            raise
+        r = chat(fb, system, messages, max_tokens=max_tokens, on_delta=on_delta)
     text, reasoning = r["text"], r["reasoning"]
     if r["stop"] == "max_tokens":
         messages.append({"role": "assistant", "content": text})
