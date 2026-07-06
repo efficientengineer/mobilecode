@@ -352,12 +352,9 @@ def _compact_settings() -> dict:
                       if k in _COMPACT_DEFAULTS})
         except Exception:
             pass
-    if _frugal_on():
-        # Carry less discussion history when spending less.
-        s["maxTurns"] = min(s["maxTurns"], 6)
-        s["codeTurns"] = min(s["codeTurns"], 4)
-        s["charBudget"] = min(s["charBudget"], 3000)
-        s["perTurn"] = min(s["perTurn"], 500)
+    # Note: frugal mode intentionally does NOT shrink these — the discussion is
+    # sent inside the cached context block, so trimming it saves little and can
+    # force re-reads. Frugal's real saving is reasoning-off (see llm._thinking_on).
     return s
 
 
@@ -818,8 +815,9 @@ def set_frugal(flag="1") -> str:
         if marker.exists():
             marker.unlink()
         os.environ["AGENT_FRUGAL"] = "0"
-    return ("Frugal mode ON — reasoning off, tighter context, smaller reads, "
-            "and split-file nudges to spend less." if on else "Frugal mode off")
+    return ("Frugal mode ON — turns reasoning OFF (its biggest real saving) and "
+            "nudges smaller files. Context is kept cached, not aggressively "
+            "pruned, so history stays cheap." if on else "Frugal mode off")
 
 
 def steer(text="") -> str:

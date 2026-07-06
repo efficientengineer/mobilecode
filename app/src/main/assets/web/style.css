@@ -189,3 +189,23 @@ pre.filebody.diff { font-size: 12px; }
 .bubble.agent pre.md-pre code { background: none; padding: 0; font-size: 12.5px;
   white-space: pre; }
 .bubble.agent strong { font-weight: 700; }
+
+/* Collapsible live progress (compact one-liner, tap to expand) */
+.live { padding: 0; }
+.live-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; }
+.live-now { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-family: monospace; font-size: 13px; opacity: .9; }
+.live-chev { opacity: .5; font-size: 12px; }
+.live-log { display: none; white-space: pre-wrap; font-family: monospace; font-size: 12.5px;
+  padding: 0 10px 10px; max-height: 38vh; overflow-y: auto; border-top: 1px solid var(--border); }
+.live.open .live-log { display: block; }
+
+/* Collapsible todos (current task one-liner, tap to expand) */
+#todos { padding: 0; max-height: none; overflow: visible; }
+#todos-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; }
+#todos-now { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+#todos-count { opacity: .7; font-size: 12px; }
+#todos-chev { opacity: .5; font-size: 12px; }
+#todos-body { display: none; padding: 0 12px 10px; max-height: 32vh; overflow-y: auto;
+  border-top: 1px solid var(--border); }
+#todos.open #todos-body { display: block; }

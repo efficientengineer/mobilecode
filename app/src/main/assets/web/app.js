@@ -200,18 +200,44 @@ async function steerRun(task) {
   try { await call("orch", { fn: "steer", arg: task }); } catch (e) {}
 }
 
-// Poll run events into a live element. Streams `delta` text into a tail
-// block so the model's reply appears as it is generated; tracks whether a
-// commit is pending user review. Returns { stop(), pendingCommit() }.
+// Scroll the chat to the bottom only if the user is already near it — so live
+// updates don't yank the view down while they're reading earlier messages.
+function maybeScroll() {
+  if (chat.scrollHeight - chat.scrollTop - chat.clientHeight < 140) {
+    chat.scrollTop = chat.scrollHeight;
+  }
+}
+
+// Poll run events into a COLLAPSIBLE live element: a one-line "step N · latest
+// activity" header (always visible) plus a full log revealed on tap, so the
+// progress feed never buries the conversation. Returns { stop, pendingCommit }.
 function makeLivePoller(live) {
+  live.classList.add("live");
+  live.innerHTML =
+    '<div class="live-head"><span class="live-now">Starting…</span><span class="live-chev">▸</span></div>' +
+    '<div class="live-log"></div>';
+  const nowEl = live.querySelector(".live-now");
+  const logEl = live.querySelector(".live-log");
+  const chevEl = live.querySelector(".live-chev");
+  live.querySelector(".live-head").onclick = () => {
+    const open = live.classList.toggle("open");
+    chevEl.textContent = open ? "▾" : "▸";
+    if (open) logEl.scrollTop = logEl.scrollHeight;
+  };
+
   const lines = [];
-  let stream = "";
+  let stream = "", stepN = 0, lastAct = "";
   let cursor = 0, polling = true, pending = false;
   function render() {
-    let t = lines.slice(-10).join("\n");
-    if (stream) t += (t ? "\n" : "") + "💬 " + stream.slice(-600);
-    live.textContent = t || "Starting…";
-    chat.scrollTop = chat.scrollHeight;
+    let now;
+    if (stream) now = "💬 " + stream;
+    else now = [stepN ? "step " + stepN : "", lastAct].filter(Boolean).join(" · ") || "working…";
+    nowEl.textContent = now.replace(/\s+/g, " ").trim().slice(0, 90);
+    let full = lines.join("\n");
+    if (stream) full += (full ? "\n" : "") + "💬 " + stream.slice(-600);
+    logEl.textContent = full;
+    if (live.classList.contains("open")) logEl.scrollTop = logEl.scrollHeight;
+    maybeScroll();
   }
   (async function poll() {
     while (polling) {
@@ -222,9 +248,9 @@ function makeLivePoller(live) {
           if (e.kind === "delta") { stream += e.text || ""; return; }
           if (e.kind === "todos") { renderTodos(e.todos || []); return; }
           if (e.kind === "pending_commit") pending = true;
-          if (e.kind === "step") stream = ""; // new model turn — reset the tail
+          if (e.kind === "step") { stepN = e.n; stream = ""; }
           const f = fmtEvent(e);
-          if (f) lines.push(f);
+          if (f) { lines.push(f); if (e.kind !== "step") lastAct = f; }
         });
         render();
       } catch (e) {}
@@ -320,16 +346,19 @@ const TODO_ICON = { completed: "✅", in_progress: "▶️", pending: "⬜" };
 function renderTodos(list) {
   const el = $("#todos");
   if (!el) return;
-  if (!list || !list.length) { el.classList.add("hidden"); el.innerHTML = ""; return; }
-  const done = list.filter((t) => t.status === "completed").length;
+  if (!list || !list.length) { el.classList.add("hidden"); el.classList.remove("open"); return; }
   el.classList.remove("hidden");
-  el.innerHTML =
-    `<div class="todos-head">Tasks ${done}/${list.length}</div>` +
-    list.map((t) =>
-      `<div class="todo-item ${t.status}">${TODO_ICON[t.status] || "⬜"} ${escapeHtml(t.content)}</div>`
-    ).join("");
+  const done = list.filter((t) => t.status === "completed").length;
+  const cur = list.find((t) => t.status === "in_progress") || list.find((t) => t.status === "pending");
+  $("#todos-now").textContent = cur ? (TODO_ICON[cur.status] || "") + " " + cur.content : "✅ all tasks done";
+  $("#todos-count").textContent = done + "/" + list.length;
+  $("#todos-body").innerHTML = list.map((t) =>
+    `<div class="todo-item ${t.status}">${TODO_ICON[t.status] || "⬜"} ${escapeHtml(t.content)}</div>`).join("");
 }
-function clearTodos() { renderTodos([]); }
+function clearTodos() {
+  const el = $("#todos");
+  if (el) { el.classList.add("hidden"); el.classList.remove("open"); }
+}
 
 function fmtEvent(e) {
   switch (e.kind) {
@@ -1068,6 +1097,11 @@ $("#input").addEventListener("input", (e) => {
   e.target.style.height = "auto";
   e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
 });
+const _todosHead = $("#todos-head");
+if (_todosHead) _todosHead.onclick = () => {
+  const open = $("#todos").classList.toggle("open");
+  $("#todos-chev").textContent = open ? "▾" : "▸";
+};
 $("#micBtn").onclick = () => { _dictBase = $("#input").value.trim(); setStatus("Listening…"); call("listen"); };
 $("#stopBtn").onclick = () => { $("#runlabel").textContent = "Stopping…"; call("orch", { fn: "interrupt" }); };
 document.querySelectorAll(".mode").forEach((b) => {

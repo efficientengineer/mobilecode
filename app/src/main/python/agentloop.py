@@ -125,7 +125,11 @@ def _drain_steer() -> list:
 # rarely and hard rather than a little every step. Knobs live in the same
 # .agent/compaction.json the discussion compactor uses.
 
-_LOOP_DEFAULTS = {"loopBudget": 80000, "keepSteps": 4}
+# Budget is deliberately HIGH: with provider prompt caching, carrying the
+# growing transcript is cheap (cache hits), while editing earlier messages to
+# "save" context invalidates the cache and makes the model re-read — costing
+# MORE. So we only prune when genuinely near the context window.
+_LOOP_DEFAULTS = {"loopBudget": 300000, "keepSteps": 6}
 
 
 def _loop_settings() -> dict:
@@ -139,9 +143,6 @@ def _loop_settings() -> dict:
                     s[k] = max(0, int(data[k]))
     except Exception:
         pass
-    if _frugal_on():
-        s["loopBudget"] = min(s["loopBudget"] or 30000, 30000)
-        s["keepSteps"] = min(s["keepSteps"] or 2, 2)
     return s
 
 
@@ -150,29 +151,31 @@ def _msg_len(m) -> int:
 
 
 def prune_messages(messages: list) -> int:
-    """Elide old bulky tool results once the transcript exceeds the budget.
+    """Only act when the transcript is genuinely near the context limit.
 
-    The last `keepSteps` assistant turns (and everything after them) are
-    protected so the model keeps its working set. Returns chars saved.
+    Below budget we change NOTHING — editing earlier messages invalidates the
+    provider prompt cache (so the whole tail is re-billed at full price) and
+    makes the model re-read files, which costs MORE than carrying the cached
+    history. Over budget: drop stale reads first, then elide the oldest tool
+    results outside the protected tail (last `keepSteps` assistant turns).
     """
     s = _loop_settings()
     budget = s["loopBudget"]
     if budget <= 0 or sum(_msg_len(m) for m in messages) <= budget:
         return 0
-    # Protect the tail: everything from the keepSteps-th assistant turn
-    # (counted from the end), plus the initial user task.
-    cutoff = 0
-    seen = 0
+    saved = _trim_superseded(messages)
+    if sum(_msg_len(m) for m in messages) <= budget:
+        return saved
+    cutoff, seen = 0, 0
     for i in range(len(messages) - 1, -1, -1):
         if messages[i]["role"] == "assistant":
             seen += 1
             if seen >= s["keepSteps"]:
                 cutoff = i
                 break
-    saved = 0
     for m in messages[1:cutoff]:
         if m["role"] == "tool" and _msg_len(m) > 200 and \
-                not m.get("content", "").startswith("(elided "):
+                not m.get("content", "").startswith(("(elided ", "(stale")):
             n = _msg_len(m)
             m["content"] = (f"(elided {n} chars of {m.get('name', 'tool')} "
                             "output to save context — re-run the tool if you "
@@ -358,8 +361,9 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             else:
                 messages.append({"role": "user", "content": note.strip()})
             _emit("steer", text=" | ".join(steer_msgs))
-        # Trim stale reads first (free, always safe), then budget-prune the rest.
-        saved = _trim_superseded(messages) + prune_messages(messages)
+        # Prune ONLY when near the context limit — otherwise we keep the cache
+        # warm (cheaper) instead of thrashing it. See prune_messages.
+        saved = prune_messages(messages)
         if saved:
             _emit("pruned", chars=saved)
         buf = _DeltaBuffer()

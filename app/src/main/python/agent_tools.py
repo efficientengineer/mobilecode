@@ -75,14 +75,17 @@ def _frugal_on() -> bool:
 
 
 def _read_cap() -> int:
-    return 400 if _frugal_on() else 800
+    # Constant: smaller reads just make the model re-read (more steps, more
+    # cost). File-per-feature keeps files small enough that 800 lines is plenty.
+    return 800
 
 
 def _grep_cap() -> int:
-    return 100 if _frugal_on() else 200
+    return 200
 
 
 def _split_threshold() -> int:
+    # Frugal keeps the stricter split nudge (small files are a genuine win).
     return 250 if _frugal_on() else 450
 
 
