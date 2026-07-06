@@ -51,8 +51,17 @@ def _frugal_on() -> bool:
 
 
 def _thinking_on() -> bool:
-    # Frugal mode forces reasoning off (it's the biggest avoidable output cost).
-    return os.environ.get("AGENT_THINKING", "0") == "1" and not _frugal_on()
+    # Reasoning is captured/shown only when effort is on. Frugal forces it off
+    # (the biggest avoidable output cost). AGENT_EFFORT (off/low/medium/high) is
+    # the control; the legacy AGENT_THINKING on/off toggle is the fallback.
+    if _frugal_on():
+        return False
+    e = (os.environ.get("AGENT_EFFORT", "") or "").strip().lower()
+    if e in ("off", "none", "0"):
+        return False
+    if e in ("low", "medium", "high", "max"):
+        return True
+    return os.environ.get("AGENT_THINKING", "0") == "1"
 
 
 def _arg_path(args):

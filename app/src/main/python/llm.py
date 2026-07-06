@@ -118,10 +118,33 @@ def parse_tool_args(raw):
     return out
 
 
+# Reasoning "effort" → an Anthropic thinking budget. Higher effort reasons more
+# (and costs more); "off" sends no thinking block at all. DeepSeek V4 has only a
+# Thinking/Non-Thinking switch, so there effort collapses to on (any level) / off.
+_EFFORT_BUDGET = {"low": 4000, "medium": 12000, "high": 24000}
+
+
+def _effort() -> str:
+    """Current reasoning effort: off / low / medium / high.
+
+    Frugal mode forces it off (its biggest real saving). When AGENT_EFFORT is
+    unset we fall back to the legacy on/off AGENT_THINKING toggle (on == medium),
+    so older callers keep working.
+    """
+    if os.environ.get("AGENT_FRUGAL", "0") == "1":
+        return "off"
+    e = (os.environ.get("AGENT_EFFORT", "") or "").strip().lower()
+    if e == "max":
+        return "high"
+    if e in ("off", "none", "0"):
+        return "off"
+    if e in ("low", "medium", "high"):
+        return e
+    return "medium" if os.environ.get("AGENT_THINKING", "0") == "1" else "off"
+
+
 def _thinking_on() -> bool:
-    # Frugal mode forces reasoning off at the request (its biggest saving).
-    return (os.environ.get("AGENT_THINKING", "0") == "1"
-            and os.environ.get("AGENT_FRUGAL", "0") != "1")
+    return _effort() != "off"
 
 
 # --- low-level HTTP with retries -------------------------------------------
@@ -237,8 +260,15 @@ def _call_anthropic(model, system, cached_context, messages, tools,
     }
     if tools:
         payload["tools"] = _anthropic_tools(tools)
-    if _thinking_on():
-        payload["thinking"] = {"type": "adaptive", "display": "summarized"}
+    eff = _effort()
+    if eff != "off":
+        # Extended thinking with an explicit budget: the effort level IS the
+        # budget, so "high" reasons (and bills) more than "low". budget_tokens
+        # must stay under max_tokens, so give the answer headroom above it.
+        budget = _EFFORT_BUDGET.get(eff, 12000)
+        if payload["max_tokens"] <= budget:
+            payload["max_tokens"] = budget + 4000
+        payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
     headers = {
         "x-api-key": key,
         "anthropic-version": "2023-06-01",

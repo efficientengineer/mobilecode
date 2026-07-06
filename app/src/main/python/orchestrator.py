@@ -55,14 +55,71 @@ _LAST_REASON = ""
 _LAST_EDIT_CTX = ""
 
 
+# Reasoning "effort" is the single knob the UI drives. llm.py turns it into a
+# real request-level setting per provider — an Anthropic thinking budget that
+# grows with the level, or DeepSeek V4's Thinking/Non-Thinking switch — so "high"
+# spends more tokens for deeper reasoning (good for an Opus orchestrator/reviewer)
+# and "off" stops reasoning, and its cost, entirely. It persists in a marker file
+# like frugal, and is republished to the env each run for llm.py to read.
+_EFFORT_LEVELS = ["off", "low", "medium", "high"]
+
+_EFFORT_HINT = {
+    "off": " — no reasoning; cheapest and fastest.",
+    "low": " — brief reasoning.",
+    "medium": " — balanced reasoning.",
+    "high": " — deep reasoning; best for a strong orchestrator/reviewer, costs most.",
+}
+
+
+def _effort_value() -> str:
+    e = (os.environ.get("AGENT_EFFORT", "") or "").strip().lower()
+    if e == "max":
+        return "high"
+    if e in _EFFORT_LEVELS:
+        return e
+    try:
+        m = (_agent_dir() / "effort").read_text().strip().lower()
+        if m in _EFFORT_LEVELS:
+            return m
+    except Exception:
+        pass
+    # Back-compat: derive from the legacy on/off Thinking toggle.
+    return "medium" if os.environ.get("AGENT_THINKING", "0") == "1" else "off"
+
+
+def get_effort(_=None) -> str:
+    return _effort_value()
+
+
+def set_effort(level="medium") -> str:
+    lvl = (str(level) or "").strip().lower()
+    if lvl == "max":
+        lvl = "high"
+    if lvl not in _EFFORT_LEVELS:
+        lvl = "medium"
+    os.environ["AGENT_EFFORT"] = lvl
+    # Keep the legacy toggle in agreement for anything still reading it.
+    os.environ["AGENT_THINKING"] = "0" if lvl == "off" else "1"
+    try:
+        (_agent_dir() / "effort").write_text(lvl)
+    except Exception:
+        pass
+    return "Effort: " + lvl + _EFFORT_HINT.get(lvl, "")
+
+
+def cycle_effort(_=None) -> str:
+    cur = _effort_value()
+    idx = _EFFORT_LEVELS.index(cur) if cur in _EFFORT_LEVELS else 0
+    return set_effort(_EFFORT_LEVELS[(idx + 1) % len(_EFFORT_LEVELS)])
+
+
 def _thinking_on() -> bool:
-    return os.environ.get("AGENT_THINKING", "0") == "1"
+    return _effort_value() != "off"
 
 
 def set_thinking(flag="1") -> str:
-    on = str(flag) in ("1", "true", "on")
-    os.environ["AGENT_THINKING"] = "1" if on else "0"
-    return "Thinking capture " + ("on" if on else "off")
+    # Legacy on/off entry point, now expressed through effort (on == medium).
+    return set_effort("medium" if str(flag) in ("1", "true", "on") else "off")
 
 
 def get_thinking(_=None) -> str:
@@ -793,8 +850,10 @@ def _begin_run() -> None:
             (_agent_dir() / name).unlink()
         except Exception:
             pass
-    # Publish frugal state to the env so llm.py (no workspace concept) sees it.
+    # Publish frugal + effort state to the env so llm.py (no workspace concept)
+    # sees them at request time.
     os.environ["AGENT_FRUGAL"] = "1" if _frugal_on() else "0"
+    os.environ["AGENT_EFFORT"] = _effort_value()
 
 
 def _frugal_on() -> bool:

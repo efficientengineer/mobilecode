@@ -548,8 +548,9 @@ class MainActivity : AppCompatActivity() {
     // APK. Falls back to the built-in lists if the manifest can't be read.
     private fun manifestList(key: String, fallback: List<String>): List<String> =
         try {
-            val arr = JSONObject(fetchRaw("ota_manifest.json")).optJSONArray(key) ?: return fallback
-            (0 until arr.length()).map { arr.getString(it) }.ifEmpty { fallback }
+            val arr = JSONObject(fetchRaw("ota_manifest.json")).optJSONArray(key)
+            if (arr == null) fallback
+            else (0 until arr.length()).map { arr.getString(it) }.ifEmpty { fallback }
         } catch (e: Throwable) { fallback }
 
     private fun updateAgent(): String = try {

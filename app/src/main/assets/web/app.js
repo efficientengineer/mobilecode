@@ -571,9 +571,9 @@ function updateCavemanLabel(on) {
   const b = document.querySelector('[data-act="caveman"]');
   if (b) b.textContent = "Caveman: " + (on ? "on" : "off");
 }
-function updateThinkingLabel(on) {
-  const b = document.querySelector('[data-act="thinking"]');
-  if (b) b.textContent = "Thinking: " + (on ? "on" : "off");
+function updateEffortLabel(level) {
+  const b = document.querySelector('[data-act="effort"]');
+  if (b) b.textContent = "Effort: " + (level || "off");
 }
 
 function addApprove() {
@@ -764,12 +764,14 @@ const actions = {
     updateFrugalLabel(next === "1");
     refreshStats();
   },
-  async thinking() {
-    const cur = (await call("orch", { fn: "get_thinking" })).text.trim();
-    const next = cur === "1" ? "0" : "1";
-    const r = await call("orch", { fn: "set_thinking", arg: next });
+  async effort() {
+    // Cycle off → low → medium → high → off. Higher = more reasoning tokens
+    // (an Anthropic thinking budget / DeepSeek's Thinking switch), so crank it
+    // up for an Opus orchestrator/reviewer and drop it to save cost.
+    const r = await call("orch", { fn: "cycle_effort" });
     bubble(r.text, "sys");
-    updateThinkingLabel(next === "1");
+    updateEffortLabel((await call("orch", { fn: "get_effort" })).text.trim());
+    refreshStats();
   },
   async guidelines() {
     const cur = (await call("orch", { fn: "get_guidelines" })).text || "";
@@ -1204,7 +1206,7 @@ document.querySelectorAll(".mode").forEach((b) => {
   // Text/URL shared into the app before the UI was ready.
   try { const sh = await call("shared.consume"); if (sh && sh.text) receiveShared(sh.text); } catch (e) {}
   try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
-  try { updateThinkingLabel((await call("orch", { fn: "get_thinking" })).text.trim() === "1"); } catch (e) {}
+  try { updateEffortLabel((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
   try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
   try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
   updateSpeakLabel(autoSpeakOn());
