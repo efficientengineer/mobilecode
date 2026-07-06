@@ -21,6 +21,12 @@
     </div>
   </header>
 
+  <div id="subbar">
+    <button id="modelChip" class="chip" data-act="modelSwitch" title="Switch model">🧠 <span id="modelName">…</span> ▾</button>
+    <button id="clearChip" class="chip" data-act="clearContext" title="Clear context">🧹 Clear</button>
+    <div id="balance" class="balchip">—</div>
+  </div>
+
   <main id="chat"></main>
 
   <div id="status"></div>
@@ -40,6 +46,7 @@
 
   <footer id="composer">
     <textarea id="input" rows="1" placeholder="Type or dictate a task…"></textarea>
+    <button id="askBtn" class="icon" title="Ask (not saved to context)">❓</button>
     <button id="sendBtn" class="pill">Send</button>
     <button id="micBtn" class="icon">🎤</button>
   </footer>

@@ -43,7 +43,25 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 .bubble.agent { align-self: flex-start; background: var(--agent); border-bottom-left-radius: 5px; }
 .bubble.sys { align-self: center; background: transparent; color: var(--muted); font-size: 12.5px; max-width: 92%; text-align: center; }
 
+#subbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+  background: var(--panel); border-bottom: 1px solid var(--border); }
+.chip { background: var(--panel2); color: var(--text); border-radius: 16px;
+  padding: 6px 12px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 4px; }
+.chip:active { background: var(--border); }
+#modelChip { max-width: 55%; overflow: hidden; }
+#modelChip #modelName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#balance { margin-left: auto; }
+.balchip { background: #0d3a24; color: #4ade80; border: 1px solid #14532d;
+  border-radius: 16px; padding: 6px 14px; font-size: 14px; font-weight: 800;
+  white-space: nowrap; }
+.balchip.low { background: #3a1414; color: #f87171; border-color: #7f1d1d; }
+.balchip.none { background: var(--panel2); color: var(--muted); border-color: var(--border); font-weight: 600; }
+
 #status { min-height: 18px; text-align: center; color: var(--muted); font-size: 12px; padding: 2px 0; }
+
+.bubble.eph { opacity: .92; border: 1px dashed var(--border); }
+.bubble.user.eph { background: #1e3a5f; }
+.eph-tag { align-self: center; color: var(--muted); font-size: 11px; margin: -2px 0 2px; }
 
 #runbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px;
   background: var(--panel); border-top: 1px solid var(--border); }

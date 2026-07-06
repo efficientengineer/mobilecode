@@ -909,6 +909,24 @@ def _chat_reply(task: str) -> str:
     return _call(LEAD_MODEL, system, user)
 
 
+def ask(task="") -> str:
+    """Ephemeral question: answer using the current context but DO NOT record
+    the question or the answer to the discussion. Lets the user check something
+    without polluting (or paying to carry) future context."""
+    try:
+        q = str(task).strip()
+        if not q:
+            return "(empty question)"
+        context = _full_context(q, "chat")
+        system = ("You are a helpful coding assistant. Answer the user's side "
+                  "question directly and concisely. Do not modify files. This "
+                  "is a one-off question and will not be remembered.")
+        user = (f"{context}\n\n" if context else "") + "QUESTION: " + q
+        return _call(LEAD_MODEL, system, user)
+    except Exception:
+        return "Error answering question:\n" + traceback.format_exc()
+
+
 def _plan_path() -> Path:
     return Path(os.environ.get("HOME", "/tmp")) / ".pending_plan.json"
 

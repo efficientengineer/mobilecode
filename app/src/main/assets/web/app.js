@@ -66,11 +66,18 @@ function bubble(text, kind, runId) {
   return d;
 }
 
+function shortModel(m) {
+  if (!m) return "default";
+  const s = String(m);
+  return s.includes("/") ? s.slice(s.indexOf("/") + 1) : s;
+}
+
 async function refreshHeader() {
   const m = await call("session.meta");
   $("#subtitle").textContent =
-    (m.name || "session") + " • " + (m.activeRepo || "no repo") +
-    " • " + (m.orchestrator || "default");
+    (m.name || "session") + " • " + (m.activeRepo || "no repo");
+  const mn = $("#modelName");
+  if (mn) mn.textContent = shortModel(m.orchestrator);
 }
 
 async function loadHistory() {
@@ -97,15 +104,31 @@ async function refreshStats() {
       const pins = JSON.parse((await call("orch", { fn: "list_context_files" })).text);
       if (pins.length) s += ` · 📎${pins.length}`;
     } catch (e) {}
-    const b = JSON.parse((await call("py.call", { module: "git_ops", fn: "balance_value" })).text);
-    if (b.deepseek != null) {
-      if (_balStart == null) _balStart = b.deepseek;
-      const used = (_balStart - b.deepseek);
-      s += ` · bal ${b.deepseek.toFixed(2)}${b.currency}`;
-      if (used > 0) s += ` (−${used.toFixed(2)} this run)`;
-    }
     $("#stats").textContent = s;
   } catch (e) {}
+  refreshBalance();
+}
+
+async function refreshBalance() {
+  const el = $("#balance");
+  if (!el) return;
+  try {
+    const b = JSON.parse((await call("py.call", { module: "git_ops", fn: "balance_value" })).text);
+    if (b.deepseek == null) {
+      el.className = "balchip none";
+      el.textContent = "no balance";
+      return;
+    }
+    if (_balStart == null) _balStart = b.deepseek;
+    const used = _balStart - b.deepseek;
+    el.className = "balchip" + (b.deepseek < 1 ? " low" : "");
+    let t = `${b.deepseek.toFixed(2)} ${b.currency || ""}`.trim();
+    if (used > 0.001) t += ` (−${used.toFixed(2)})`;
+    el.textContent = t;
+  } catch (e) {
+    el.className = "balchip none";
+    el.textContent = "balance ?";
+  }
 }
 
 // --- Run state machine (queue + live progress + interrupt) --------------
@@ -468,6 +491,42 @@ const actions = {
     const dl = $("#ml");
     if (dl) dl.innerHTML = (r.models || []).map((m) => `<option value="${m}">`).join("");
   },
+  async modelSwitch() {
+    const [meta, agg] = await Promise.all([call("session.meta"), call("models.aggregate")]);
+    const all = agg.models || [];
+    const cur = meta.orchestrator || "";
+    const implementer = meta.implementer || "";
+    const recent = getRecentModels(); // oldest → newest
+    const rank = (m) => recent.indexOf(m);
+    // Unused models first (alpha), then used models by recency ascending, so the
+    // most-recently-used sits at the very bottom (closest to the thumb).
+    const sorted = all.slice().sort((a, b) => {
+      const ra = rank(a), rb = rank(b);
+      if (ra < 0 && rb < 0) return a.localeCompare(b);
+      if (ra < 0) return -1;
+      if (rb < 0) return 1;
+      return ra - rb;
+    });
+    const rows = sorted.length
+      ? sorted.map((m) =>
+          `<div class="list-item" data-model="${escapeHtml(m)}">
+             <span>${m === cur ? "● " : ""}${escapeHtml(shortModel(m))}<div class="sub">${escapeHtml(m)}</div></span>
+             ${rank(m) >= 0 ? '<span class="sub">recent</span>' : ""}</div>`
+        ).join("")
+      : `<div class="hint">No models available — add an API key in Settings.</div>`;
+    modal("Switch model", rows +
+      `<div class="hint">Sorted with your most recently used at the bottom.</div>`);
+    $("#modalBody").querySelectorAll("[data-model]").forEach((el) => {
+      el.onclick = async () => {
+        const m = el.dataset.model;
+        await call("session.setModels", { orchestrator: m, implementer });
+        pushRecentModel(m);
+        closeSheet("#modal");
+        await refreshHeader();
+        bubble("Model → " + shortModel(m), "sys");
+      };
+    });
+  },
   async settings() {
     const s = await call("settings.get");
     modal("Settings",
@@ -547,7 +606,35 @@ async function showFile(rel) {
 }
 
 function escapeHtml(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// --- Recently-used models (local only, no token cost) -------------------
+function getRecentModels() {
+  try { return JSON.parse(localStorage.getItem("recentModels") || "[]"); } catch (e) { return []; }
+}
+function pushRecentModel(m) {
+  let r = getRecentModels().filter((x) => x !== m);
+  r.push(m);
+  r = r.slice(-12);
+  try { localStorage.setItem("recentModels", JSON.stringify(r)); } catch (e) {}
+}
+
+// --- Ephemeral question (not saved to context) --------------------------
+async function askEphemeral(q) {
+  const wrap = document.createElement("div");
+  wrap.className = "eph-tag";
+  wrap.textContent = "— side question (not saved) —";
+  chat.appendChild(wrap);
+  const u = bubble(q, "user"); u.classList.add("eph");
+  setStatus("Thinking…");
+  try {
+    const r = await call("orch", { fn: "ask", arg: q });
+    const a = bubble(r.text || "(no answer)", "agent"); a.classList.add("eph");
+  } catch (e) {
+    bubble("Ask failed: " + e.message, "sys");
+  }
+  setStatus("");
 }
 
 // --- Wire up -------------------------------------------------------------
@@ -561,6 +648,12 @@ document.querySelectorAll("[data-close]").forEach((b) => {
 $("#sendBtn").onclick = () => {
   const t = $("#input").value.trim();
   if (t) { $("#input").value = ""; submit(t); }
+};
+$("#askBtn").onclick = () => {
+  const t = $("#input").value.trim();
+  if (!t) { setStatus("Type a question first"); return; }
+  $("#input").value = ""; $("#input").style.height = "auto";
+  askEphemeral(t);
 };
 $("#input").addEventListener("input", (e) => {
   e.target.style.height = "auto";
