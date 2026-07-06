@@ -402,6 +402,41 @@ def latest_build() -> str:
         return "Status check failed:\n" + traceback.format_exc()
 
 
+def pr_check(_=None) -> str:
+    """Structured PR + CI status for the background watcher. JSON:
+    {branch, pr, state, ci, url}. state: none|open|closed|merged|error;
+    ci: none|passing|failing|running. Keeps the Kotlin worker logic trivial."""
+    try:
+        full = _remote_full_name(_workspace())
+        if not full:
+            return json.dumps({"state": "none", "ci": "none", "reason": "no repo"})
+        branch = current_branch()
+        owner = full.split("/")[0]
+        prs = _api("GET", f"/repos/{full}/pulls?head={owner}:{branch}&state=all&per_page=1")
+        if not prs:
+            return json.dumps({"branch": branch, "pr": None, "state": "none", "ci": "none"})
+        pr = prs[0]
+        state = "merged" if pr.get("merged_at") else pr.get("state", "open")
+        ci = "none"
+        try:
+            sha = pr["head"]["sha"]
+            runs = _api("GET", f"/repos/{full}/commits/{sha}/check-runs").get("check_runs", [])
+            if runs:
+                if any(r.get("conclusion") in ("failure", "timed_out", "cancelled")
+                       for r in runs):
+                    ci = "failing"
+                elif all(r.get("status") == "completed" for r in runs):
+                    ci = "passing"
+                else:
+                    ci = "running"
+        except Exception:
+            pass
+        return json.dumps({"branch": branch, "pr": pr.get("number"), "state": state,
+                           "ci": ci, "url": pr.get("html_url", "")})
+    except Exception as e:
+        return json.dumps({"state": "error", "ci": "none", "reason": str(e)[:200]})
+
+
 def ci_failure_log(_=None) -> str:
     """Tail of the failed job's log from the most recent workflow run.
 

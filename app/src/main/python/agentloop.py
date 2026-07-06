@@ -46,6 +46,26 @@ def _interrupted() -> bool:
     return os.environ.get("AGENT_INTERRUPT", "0") == "1"
 
 
+def _drain_steer() -> list:
+    """Read + clear any mid-run guidance the user queued (orchestrator.steer)."""
+    fp = _agent_dir() / "steer.jsonl"
+    if not fp.exists():
+        return []
+    out = []
+    try:
+        for line in fp.read_text(encoding="utf-8").splitlines():
+            try:
+                t = json.loads(line).get("text", "").strip()
+                if t:
+                    out.append(t)
+            except Exception:
+                pass
+        fp.unlink()
+    except Exception:
+        return []
+    return out
+
+
 # --- in-run context pruning --------------------------------------------------
 # The loop's own transcript (tool results, mostly) grows every step; without a
 # cap a long run re-sends megabytes per step. Old tool results are elided in
@@ -246,6 +266,18 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             break
         steps += 1
         _emit("step", n=steps)
+        # Mid-run steering: fold any guidance the user typed while running into
+        # the conversation before the next model call. Attach to the trailing
+        # tool-results / user turn so the user/assistant alternation stays valid.
+        steer_msgs = _drain_steer()
+        if steer_msgs:
+            note = ("\n\n[User guidance mid-run — adjust course accordingly]:\n- "
+                    + "\n- ".join(steer_msgs))
+            if messages and messages[-1]["role"] in ("tool", "user"):
+                messages[-1]["content"] = (messages[-1].get("content") or "") + note
+            else:
+                messages.append({"role": "user", "content": note.strip()})
+            _emit("steer", text=" | ".join(steer_msgs))
         saved = prune_messages(messages)
         if saved:
             _emit("pruned", chars=saved)

@@ -23,6 +23,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +39,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 /**
  * Thin native shell: a full-screen WebView whose UI is HTML/CSS/JS loaded from
@@ -376,6 +382,36 @@ class MainActivity : AppCompatActivity() {
         }
         "listen" -> { withContext(Dispatchers.Main) { startListening() }; JSONObject().put("ok", true) }
         "run.active" -> JSONObject().put("active", activeRuns > 0)
+        "pr.watch" -> {
+            val watch = getSharedPreferences(PrWatchWorker.PREFS, MODE_PRIVATE)
+            val (lead, worker) = effectiveModels()
+            val autofix = arg.optBoolean("autofix", false)
+            watch.edit()
+                .putString("workspace", sessions.activeDir().absolutePath)
+                .putString("lead", lead)
+                .putString("worker", worker)
+                .putBoolean("autofix", autofix)
+                .remove("lastNotified")
+                .apply()
+            val req = PeriodicWorkRequestBuilder<PrWatchWorker>(15, TimeUnit.MINUTES)
+                .setConstraints(
+                    Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .build()
+            WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+                PrWatchWorker.WORK_NAME, ExistingPeriodicWorkPolicy.UPDATE, req)
+            text("Watching this PR" + (if (autofix) " with auto-fix" else "") +
+                " — you'll be notified on CI changes.")
+        }
+        "pr.unwatch" -> {
+            WorkManager.getInstance(applicationContext).cancelUniqueWork(PrWatchWorker.WORK_NAME)
+            getSharedPreferences(PrWatchWorker.PREFS, MODE_PRIVATE).edit().clear().apply()
+            text("Stopped watching.")
+        }
+        "pr.watchState" -> {
+            val watch = getSharedPreferences(PrWatchWorker.PREFS, MODE_PRIVATE)
+            JSONObject().put("watching", watch.contains("workspace"))
+                .put("autofix", watch.getBoolean("autofix", false))
+        }
         "battery.exempt" -> {
             // Ask Android to exclude the app from battery optimization so
             // long background runs aren't killed by Doze.
@@ -548,5 +584,10 @@ class MainActivity : AppCompatActivity() {
 
         // Number of agent runs in flight; survives Activity recreation.
         @Volatile private var activeRuns = 0
+
+        /** Foreground agent runs in flight — the PR watcher skips auto-fix while
+         *  one is active to avoid two loops sharing a workspace. */
+        @JvmStatic
+        fun runsActive(): Int = activeRuns
     }
 }

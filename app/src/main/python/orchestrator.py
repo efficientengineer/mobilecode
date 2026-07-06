@@ -781,14 +781,29 @@ def _new_run_id() -> str:
 
 
 def _begin_run() -> None:
-    """Reset per-run state so events/interrupt/usage/todos start clean."""
+    """Reset per-run state so events/interrupt/usage/todos/steer start clean."""
     _clear_events()
     os.environ["AGENT_INTERRUPT"] = "0"
     llm.reset_usage()
+    for name in ("todos.json", "steer.jsonl"):
+        try:
+            (_agent_dir() / name).unlink()
+        except Exception:
+            pass
+
+
+def steer(text="") -> str:
+    """Queue a guidance message for the CURRENTLY RUNNING loop. The loop picks
+    it up before its next model call and adjusts course (see agentloop)."""
+    t = str(text).strip()
+    if not t:
+        return "(nothing to steer)"
     try:
-        (_agent_dir() / "todos.json").unlink()
+        with open(_agent_dir() / "steer.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps({"text": t}) + "\n")
+        return "Steering the running task…"
     except Exception:
-        pass
+        return "Could not queue guidance."
 
 
 def get_usage(_=None) -> str:

@@ -184,13 +184,20 @@ function renderQueue() {
 }
 
 function submit(task) {
-  if (running) {
-    queue.push({ task, mode: currentMode });
-    bubble(task, "user");
-    renderQueue();
-    return;
-  }
+  if (running) { steerRun(task); return; }
   runTask(task, currentMode);
+}
+
+// While a run is in flight, a new message steers it — the agent folds it into
+// the live loop before its next model call — rather than queuing a fresh task.
+async function steerRun(task) {
+  bubble(task, "user");
+  const tag = document.createElement("div");
+  tag.className = "eph-tag";
+  tag.textContent = "↪ steering the running task";
+  chat.appendChild(tag);
+  chat.scrollTop = chat.scrollHeight;
+  try { await call("orch", { fn: "steer", arg: task }); } catch (e) {}
 }
 
 // Poll run events into a live element. Streams `delta` text into a tail
@@ -333,6 +340,7 @@ function fmtEvent(e) {
       return "   ✓ " + (e.result || e.name);
     case "reason": return "💭 " + (e.text || "").slice(0, 160);
     case "fallback": return "🔀 " + (e.frm || "primary") + " failed → falling back to " + (e.to || "fallback");
+    case "steer": return "↪ steering: " + (e.text || "");
     case "verify_failed": return "🧪 verification FAILED (" + (e.which || "check") + ") — repairing:\n" + (e.detail || "");
     case "verify_ok": return "🧪 verification passed";
     case "usage": return "∑ " + (e.input || 0) + " in / " + (e.output || 0) + " out tokens, " + (e.calls || 0) + " calls" +
@@ -553,6 +561,27 @@ const actions = {
   },
   fixBuild() {
     driveLive("Fixing CI build…", () => call("orch", { fn: "fix_build" }));
+  },
+  async watchPr() {
+    let st = {};
+    try { st = await call("pr.watchState"); } catch (e) {}
+    if (st.watching) {
+      modal("Watching PR",
+        `<div class="hint">This branch's PR is being watched${st.autofix ? " with <b>auto-fix</b>" : " (notify only)"}.
+         You'll get a notification when CI passes, fails, or the PR merges${st.autofix ? ", and the agent will fix &amp; push on a CI failure" : ""}.</div>
+         <div class="row" style="margin-top:12px"><button class="pill stop" id="unwatchBtn">Stop watching</button></div>`);
+      $("#unwatchBtn").onclick = async () => { closeSheet("#modal"); await runText("Unwatch", "pr.unwatch"); };
+      return;
+    }
+    modal("Watch this PR",
+      `<div class="hint">Poll the current branch's PR about every 15 min and notify you when CI
+       passes, fails, or it merges. <b>Auto-fix</b> additionally runs the agent on a CI failure and
+       pushes the fix to this branch (runs in the background; won't touch other branches).</div>
+       <div class="row" style="margin-top:12px">
+         <button class="pill ghost" id="notifyOnly">Notify only</button>
+         <button class="pill" id="autofixBtn">Auto-fix CI</button></div>`);
+    $("#notifyOnly").onclick = async () => { closeSheet("#modal"); await runText("Watch PR", "pr.watch", { autofix: false }); };
+    $("#autofixBtn").onclick = async () => { closeSheet("#modal"); await runText("Watch PR (auto-fix)", "pr.watch", { autofix: true }); };
   },
   async battery() {
     try {
