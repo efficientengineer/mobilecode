@@ -283,10 +283,14 @@ function makeLivePoller(live) {
     if (stream) now = "💬 " + stream;
     else now = [stepN ? "step " + stepN : "", lastAct].filter(Boolean).join(" · ") || "working…";
     nowEl.textContent = now.replace(/\s+/g, " ").trim().slice(0, 90);
+    // Capture whether the log is pinned to the bottom BEFORE we change its
+    // content. Only re-pin if it was — otherwise keep the user's scroll
+    // position exactly (never yank while they read back through the steps).
+    const logPinned = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
     let full = lines.join("\n");
     if (stream) full += (full ? "\n" : "") + "💬 " + stream.slice(-600);
     logEl.textContent = full;
-    if (live.classList.contains("open")) logEl.scrollTop = logEl.scrollHeight;
+    if (live.classList.contains("open") && logPinned) logEl.scrollTop = logEl.scrollHeight;
     maybeScroll();
   }
   (async function poll() {
