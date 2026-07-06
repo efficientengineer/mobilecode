@@ -74,6 +74,66 @@ def _set_origin(root: Path, full_name: str) -> None:
     (root / ".git" / "voiceagent_origin").write_text(full_name)
 
 
+# --- workspace commit + status (for the agent's git tools) ---------------
+
+def _changed(root: Path) -> list:
+    """Working-tree paths that differ from HEAD, excluding agent metadata."""
+    try:
+        st = porcelain.status(str(root))
+    except Exception:
+        return []
+    out = []
+    for p in st.untracked:
+        out.append(p.decode() if isinstance(p, bytes) else p)
+    for kind in ("add", "delete", "modify"):
+        out += [p.decode() if isinstance(p, bytes) else p
+                for p in st.staged.get(kind, [])]
+    out += [p.decode() if isinstance(p, bytes) else p for p in st.unstaged]
+    seen, uniq = set(), []
+    for p in out:
+        if p not in seen and ".agent/" not in p and p not in ("meta.json", "transcript.jsonl"):
+            seen.add(p)
+            uniq.append(p)
+    return uniq
+
+
+def status_summary() -> str:
+    """Branch, remote, and changed files — a git status for the agent."""
+    root = _workspace()
+    if not (root / ".git").exists():
+        return "No git repo yet (a commit will initialize one)."
+    changed = _changed(root)
+    lines = [f"branch: {current_branch()}",
+             f"remote: {_remote_full_name(root) or '(none)'}",
+             f"uncommitted changes: {len(changed)}"]
+    lines += [f"  {p}" for p in changed[:50]]
+    return "\n".join(lines)
+
+
+def commit(message: str = "") -> str:
+    """Stage every workspace file (except .git/.agent/app meta) and commit."""
+    try:
+        root = _workspace()
+        if not (root / ".git").exists():
+            porcelain.init(str(root))
+        if not _changed(root):
+            return "Nothing to commit."
+        for p in root.rglob("*"):
+            if ".git" in p.parts or ".agent" in p.parts or not p.is_file():
+                continue
+            if p.name in ("meta.json", "transcript.jsonl"):
+                continue
+            porcelain.add(str(root), paths=[str(p)])
+        msg = (message or "").strip() or "Update workspace"
+        cid = porcelain.commit(str(root), message=msg.encode(),
+                               author=b"Voice Agent <agent@device.local>",
+                               committer=b"Voice Agent <agent@device.local>")
+        cid = cid.decode() if isinstance(cid, bytes) else str(cid)
+        return f"Committed {cid[:8]}: {msg}"
+    except Exception:
+        return "Commit failed:\n" + traceback.format_exc()
+
+
 # --- GitHub REST ---------------------------------------------------------
 
 def current_user() -> str:

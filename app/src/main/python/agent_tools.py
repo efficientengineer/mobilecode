@@ -398,6 +398,87 @@ def t_delegate_edit(path="", instruction="", **_):
             "applied — VERIFY this file with read_file and fix the rest yourself")
 
 
+# --- git tools (wrap git_ops so the agent can orchestrate git itself) --------
+# git_ops is imported lazily inside each tool so the OTA loader's override copy
+# is picked up (agent_tools loads before git_ops).
+
+def t_git_status(**_):
+    import git_ops
+    return git_ops.status_summary()
+
+
+def t_git_branch(name="", **_):
+    import git_ops
+    return git_ops.start_branch(name)
+
+
+def t_git_commit(message="", **_):
+    import git_ops
+    return git_ops.commit(message)
+
+
+def t_git_push(**_):
+    import git_ops
+    return git_ops.push()
+
+
+def t_git_open_pr(title="", body="", **_):
+    import git_ops
+    return git_ops.create_pr(title, body)
+
+
+# --- todo list (TodoWrite-style live checklist) ------------------------------
+
+def _agent_dir() -> Path:
+    d = _workspace() / ".agent"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+_TODO_STATES = ("pending", "in_progress", "completed")
+
+
+def read_todos() -> list:
+    fp = _agent_dir() / "todos.json"
+    if fp.exists():
+        try:
+            return json.loads(fp.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+    return []
+
+
+def t_todo_write(todos=None, **_):
+    """Replace the task checklist. `todos` is a list of {content, status} where
+    status is pending | in_progress | completed. Overwrites the whole list."""
+    if not isinstance(todos, list):
+        return "(todos must be a list of {content, status})"
+    clean = []
+    for t in todos:
+        if isinstance(t, str):
+            t = {"content": t, "status": "pending"}
+        if not isinstance(t, dict):
+            continue
+        content = str(t.get("content", "")).strip()
+        if not content:
+            continue
+        status = str(t.get("status", "pending")).strip().lower()
+        if status not in _TODO_STATES:
+            status = "pending"
+        clean.append({"content": content, "status": status})
+    (_agent_dir() / "todos.json").write_text(json.dumps(clean), encoding="utf-8")
+    # Push a live event so the UI checklist updates during the run.
+    try:
+        import agentloop
+        agentloop._emit("todos", todos=clean)
+    except Exception:
+        pass
+    done = sum(1 for t in clean if t["status"] == "completed")
+    doing = next((t["content"] for t in clean if t["status"] == "in_progress"), "")
+    tail = f"; now: {doing}" if doing else ""
+    return f"todos updated ({done}/{len(clean)} done{tail})"
+
+
 # --- registry ----------------------------------------------------------------
 
 def _schema(props, required):
@@ -442,6 +523,10 @@ READ_TOOLS = [
          "max_chars": {"type": "integer", "description": "cap on returned chars (optional)"},
      }, ["url"]),
      "fn": t_web_fetch},
+    {"name": "git_status",
+     "description": "Show the current branch, remote, and uncommitted changes.",
+     "input_schema": _schema({}, []),
+     "fn": t_git_status},
 ]
 
 WRITE_TOOLS = [
@@ -471,6 +556,45 @@ WRITE_TOOLS = [
          "pattern": {"type": "string", "description": "filename pattern, default test*.py"},
      }, []),
      "fn": t_run_tests},
+    {"name": "todo_write",
+     "description": "Maintain a task checklist the user watches live. Call it "
+                    "at the start of a multi-step task with all steps, then "
+                    "again after each step to update statuses. Replaces the "
+                    "whole list each call. Keep exactly one item in_progress.",
+     "input_schema": _schema({
+         "todos": {"type": "array", "items": {
+             "type": "object",
+             "properties": {
+                 "content": {"type": "string"},
+                 "status": {"type": "string", "enum": list(_TODO_STATES)},
+             },
+             "required": ["content", "status"],
+         }},
+     }, ["todos"]),
+     "fn": t_todo_write},
+    {"name": "git_branch",
+     "description": "Create and switch to a work branch (safe: files unchanged). "
+                    "Blank name = agent/<workspace>. Do this before editing when "
+                    "you intend to open a PR.",
+     "input_schema": _schema({"name": {"type": "string"}}, []),
+     "fn": t_git_branch},
+    {"name": "git_commit",
+     "description": "Stage all workspace changes and commit with a message.",
+     "input_schema": _schema({"message": {"type": "string"}}, ["message"]),
+     "fn": t_git_commit},
+    {"name": "git_push",
+     "description": "Push the current branch to the GitHub remote. Only when the "
+                    "user asked to publish/push.",
+     "input_schema": _schema({}, []),
+     "fn": t_git_push},
+    {"name": "git_open_pr",
+     "description": "Open a pull request from the current branch to the repo's "
+                    "default branch (pushes first). Only when the user asked for "
+                    "a PR.",
+     "input_schema": _schema({
+         "title": {"type": "string"}, "body": {"type": "string"},
+     }, []),
+     "fn": t_git_open_pr},
 ]
 
 DELEGATE_TOOL = {

@@ -170,3 +170,13 @@ pre.filebody.diff { font-size: 12px; }
 .sess-actions { display: flex; gap: 10px; flex-shrink: 0; }
 .sess-btn { cursor: pointer; opacity: .7; font-style: normal; padding: 2px 4px; }
 .sess-btn:active { opacity: 1; }
+
+/* Live task checklist (TodoWrite) */
+#todos { padding: 8px 12px; border-top: 1px solid var(--border); background: var(--panel2);
+  max-height: 30vh; overflow-y: auto; font-size: 14px; }
+#todos.hidden { display: none; }
+.todos-head { font-weight: 600; opacity: .7; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .04em; margin-bottom: 4px; }
+.todo-item { padding: 2px 0; }
+.todo-item.completed { opacity: .55; text-decoration: line-through; }
+.todo-item.in_progress { font-weight: 600; }

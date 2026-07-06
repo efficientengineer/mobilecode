@@ -781,15 +781,25 @@ def _new_run_id() -> str:
 
 
 def _begin_run() -> None:
-    """Reset per-run state so events/interrupt/usage start clean."""
+    """Reset per-run state so events/interrupt/usage/todos start clean."""
     _clear_events()
     os.environ["AGENT_INTERRUPT"] = "0"
     llm.reset_usage()
+    try:
+        (_agent_dir() / "todos.json").unlink()
+    except Exception:
+        pass
 
 
 def get_usage(_=None) -> str:
     """Token usage of the current/most recent run (real API numbers)."""
     return json.dumps(llm.usage())
+
+
+def get_todos(_=None) -> str:
+    """The current task checklist (JSON list of {content, status})."""
+    fp = _agent_dir() / "todos.json"
+    return fp.read_text(encoding="utf-8") if fp.exists() else "[]"
 
 
 def _runs_dir() -> Path:

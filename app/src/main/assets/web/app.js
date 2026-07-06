@@ -210,6 +210,7 @@ function makeLivePoller(live) {
         cursor = r.cursor;
         (r.events || []).forEach((e) => {
           if (e.kind === "delta") { stream += e.text || ""; return; }
+          if (e.kind === "todos") { renderTodos(e.todos || []); return; }
           if (e.kind === "pending_commit") pending = true;
           if (e.kind === "step") stream = ""; // new model turn — reset the tail
           const f = fmtEvent(e);
@@ -226,6 +227,7 @@ function makeLivePoller(live) {
 async function runTask(task, mode) {
   running = true;
   bubble(task, "user");
+  clearTodos();
   $("#runbar").classList.remove("hidden");
   $("#runlabel").textContent = mode === "plan" ? "Planning…" : "Working…";
   const live = document.createElement("div");
@@ -280,6 +282,7 @@ function drainQueue() {
 // Live progress for an arbitrary agent call (e.g. plan approval, fix build).
 async function driveLive(label, promiseFactory) {
   running = true;
+  clearTodos();
   $("#runbar").classList.remove("hidden");
   $("#runlabel").textContent = label;
   const live = document.createElement("div");
@@ -295,8 +298,28 @@ async function driveLive(label, promiseFactory) {
 const TOOL_ICONS = {
   read_file: "📖", list_files: "📂", grep: "🔍", write_file: "✏️",
   str_replace: "✂️", delete_file: "🗑", check_python: "🧪", run_tests: "🧪",
-  delegate_edit: "🤝", propose_plan: "📋",
+  delegate_edit: "🤝", propose_plan: "📋", web_fetch: "🌐", todo_write: "☑️",
+  git_status: "🔧", git_branch: "🌿", git_commit: "💾", git_push: "⬆️",
+  git_open_pr: "🔀",
 };
+
+const TODO_ICON = { completed: "✅", in_progress: "▶️", pending: "⬜" };
+
+// The live task checklist (TodoWrite). Rendered into #todos, which lives
+// OUTSIDE #chat so it survives history reloads; cleared at each run start.
+function renderTodos(list) {
+  const el = $("#todos");
+  if (!el) return;
+  if (!list || !list.length) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  const done = list.filter((t) => t.status === "completed").length;
+  el.classList.remove("hidden");
+  el.innerHTML =
+    `<div class="todos-head">Tasks ${done}/${list.length}</div>` +
+    list.map((t) =>
+      `<div class="todo-item ${t.status}">${TODO_ICON[t.status] || "⬜"} ${escapeHtml(t.content)}</div>`
+    ).join("");
+}
+function clearTodos() { renderTodos([]); }
 
 function fmtEvent(e) {
   switch (e.kind) {
@@ -312,6 +335,7 @@ function fmtEvent(e) {
     case "usage": return "∑ " + (e.input || 0) + " in / " + (e.output || 0) + " out tokens, " + (e.calls || 0) + " calls" +
       (e.cache ? " · " + e.cache + " cached" : "");
     case "pruned": return "🧹 context pruned (−" + (e.chars || 0) + " chars of old tool output)";
+    case "todos": return ""; // rendered in the #todos panel, not the log
     case "pending_commit": return "⏸ Changes held for your review (autocommit off)";
     case "error": return "⚠️ " + (e.detail || "error");
     case "plan_start": return "🧠 Orchestrator planning…";
@@ -338,6 +362,8 @@ async function reattachLive() {
   const live = document.createElement("div");
   live.className = "live"; live.textContent = "Reattaching…";
   chat.appendChild(live);
+  // Show whatever checklist the in-flight run has already produced.
+  try { renderTodos(JSON.parse((await call("orch", { fn: "get_todos" })).text)); } catch (e) {}
   const poller = makeLivePoller(live);
   while (true) {
     try {
