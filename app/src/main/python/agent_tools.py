@@ -48,6 +48,22 @@ def _resolve(rel: str) -> Path:
     return fp
 
 
+def _need_path(path, tool):
+    """Return an error string if `path` is unusable, else None. Guards the
+    common failure where a model omits/renames the path arg and it defaults to
+    '' — which resolves to the workspace root (a directory)."""
+    if not str(path).strip():
+        return (f"({tool} needs a non-empty 'path' argument, e.g. "
+                "\"index.html\" or \"src/app.py\" — relative to the workspace root)")
+    try:
+        fp = _resolve(path)
+    except ValueError as e:
+        return f"({e})"
+    if fp.is_dir():
+        return f"('{path}' is a directory, not a file)"
+    return None
+
+
 _SKIP_DIRS = {".git", ".agent", "__pycache__", "node_modules"}
 
 
@@ -64,7 +80,11 @@ def _iter_files(root: Path):
 # --- inspection --------------------------------------------------------------
 
 def t_read_file(path="", start_line=0, end_line=0, **_):
+    if not str(path).strip():
+        return "(read_file needs a non-empty 'path' argument, relative to the workspace root)"
     fp = _resolve(path)
+    if fp.is_dir():
+        return (f"('{path}' is a directory — use list_files to see its contents)")
     if not fp.exists() or not fp.is_file():
         return f"(no such file: {path})"
     try:
@@ -193,6 +213,9 @@ def t_web_fetch(url="", max_chars=20000, **_):
 # --- mutation ------------------------------------------------------------
 
 def t_write_file(path="", content="", **_):
+    err = _need_path(path, "write_file")
+    if err:
+        return err
     fp = _resolve(path)
     fp.parent.mkdir(parents=True, exist_ok=True)
     fp.write_text(content, encoding="utf-8")
@@ -201,6 +224,9 @@ def t_write_file(path="", content="", **_):
 
 
 def t_str_replace(path="", old="", new="", replace_all=False, **_):
+    err = _need_path(path, "str_replace")
+    if err:
+        return err
     fp = _resolve(path)
     if not fp.exists():
         return f"(no such file: {path} — use write_file to create it)"
@@ -221,6 +247,9 @@ def t_str_replace(path="", old="", new="", replace_all=False, **_):
 
 
 def t_delete_file(path="", **_):
+    err = _need_path(path, "delete_file")
+    if err:
+        return err
     fp = _resolve(path)
     if not fp.exists():
         return f"(no such file: {path})"

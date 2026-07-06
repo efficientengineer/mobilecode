@@ -142,7 +142,7 @@ def _anthropic_messages(messages):
             while i < len(messages) and messages[i]["role"] == "tool":
                 t = messages[i]
                 blocks.append({"type": "tool_result", "tool_use_id": t["tool_call_id"],
-                               "content": t["content"][:30000]})
+                               "content": (t.get("content") or "(empty)")[:30000]})
                 i += 1
             out.append({"role": "user", "content": blocks})
     # Cache breakpoint on the newest message: in a tool loop the whole
@@ -300,18 +300,24 @@ def _openai_messages(system, cached_context, messages):
         if m["role"] == "user":
             out.append({"role": "user", "content": m["content"]})
         elif m["role"] == "assistant":
-            entry = {"role": "assistant", "content": m.get("content") or None}
             tcs = m.get("tool_calls") or []
+            content = m.get("content") or None
+            entry = {"role": "assistant", "content": content}
             if tcs:
                 entry["tool_calls"] = [
                     {"id": tc["id"], "type": "function",
                      "function": {"name": tc["name"],
                                   "arguments": json.dumps(tc["args"])}}
                     for tc in tcs]
+            elif not content:
+                # DeepSeek/OpenAI reject an assistant message with neither
+                # content nor tool_calls — give it a minimal placeholder.
+                entry["content"] = " "
             out.append(entry)
         else:
+            # Tool results must be non-empty too.
             out.append({"role": "tool", "tool_call_id": m["tool_call_id"],
-                        "content": m["content"][:30000]})
+                        "content": (m.get("content") or "(empty)")[:30000]})
     return out
 
 
