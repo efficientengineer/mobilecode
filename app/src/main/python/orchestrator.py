@@ -17,9 +17,17 @@ workspace path inside app storage; we never write with bare filenames.
 """
 
 import os
+import sys
 import json
 import traceback
 from pathlib import Path
+
+# OTA resilience: make modules added to the manifest after this APK shipped (and
+# therefore not in the bundled agent_loader's _MODULES) importable, by putting
+# the override dir on sys.path. See agent_tools.py for the full explanation.
+_ovr = os.environ.get("AGENT_OVERRIDE_DIR", "")
+if _ovr and os.path.isdir(_ovr) and _ovr not in sys.path:
+    sys.path.insert(0, _ovr)
 
 from dulwich import porcelain
 from dulwich.repo import Repo

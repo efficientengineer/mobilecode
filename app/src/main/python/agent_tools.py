@@ -17,11 +17,21 @@ Tools:
 import io
 import os
 import re
+import sys
 import json
 import fnmatch
 from pathlib import Path
 
 import llm
+
+# OTA resilience: this build's agent_loader only loads the modules named in its
+# (bundled) _MODULES list. A module added to the manifest AFTER this APK shipped
+# (e.g. workflows, best_practices) lands in the override dir but the old loader
+# never registers it — so `import workflows` would fail with "no module named".
+# Putting the override dir on sys.path lets plain imports resolve those files.
+_ovr = os.environ.get("AGENT_OVERRIDE_DIR", "")
+if _ovr and os.path.isdir(_ovr) and _ovr not in sys.path:
+    sys.path.insert(0, _ovr)
 
 # Relative paths of files created/modified during the current run.
 TOUCHED = set()
@@ -637,7 +647,11 @@ def t_delegate_edit(path="", instruction="", **_):
 
 def t_brainstorm(topic="", count=4, criteria="", **_):
     """Run several idea agents in parallel, score them, return ranked ideas."""
-    import workflows
+    try:
+        import workflows
+    except Exception:
+        return ("(multi-agent workflows aren't loaded — tap Update agent to fetch "
+                "the latest modules, then try again)")
     if not str(topic).strip():
         return "(brainstorm needs a topic)"
     res = workflows.ideate(str(topic), n=count, criteria=str(criteria))
@@ -666,7 +680,11 @@ def t_brainstorm(topic="", count=4, criteria="", **_):
 
 def t_delegate_parallel(files=None, **_):
     """Build several files at once — one implementer per file, in parallel."""
-    import workflows
+    try:
+        import workflows
+    except Exception:
+        return ("(multi-agent workflows aren't loaded — tap Update agent to fetch "
+                "the latest modules, then try again)")
     items = files
     if isinstance(items, dict):
         items = [items]

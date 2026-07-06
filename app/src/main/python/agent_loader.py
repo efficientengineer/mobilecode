@@ -45,6 +45,13 @@ def _load_module(name, path):
 
 def _load_orchestrator():
     files = _override_files()
+    # Put the override dir on sys.path so EVERY downloaded module is importable
+    # by plain `import`, including ones added to the manifest after this build
+    # (which aren't in _MODULES). Without this a new OTA module fails with
+    # "no module named X" until the app is rebuilt.
+    d = os.environ.get("AGENT_OVERRIDE_DIR", "")
+    if d and os.path.isdir(d) and d not in sys.path:
+        sys.path.insert(0, d)
     if not files:
         import orchestrator
         return orchestrator
