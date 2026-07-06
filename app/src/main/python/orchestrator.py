@@ -607,6 +607,17 @@ def preview_context(_=None) -> str:
     return c if c else "(context is empty)"
 
 
+def get_guidelines(_=None) -> str:
+    """Current project guidelines text (for the editor)."""
+    _, mem = _memory()
+    return mem
+
+
+def set_guidelines(text="") -> str:
+    (_workspace() / "guidelines.md").write_text(str(text), encoding="utf-8")
+    return "Guidelines saved"
+
+
 def build_outline(_=None) -> str:
     """Read the project folder and (re)generate .agent/outline.md."""
     try:

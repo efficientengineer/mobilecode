@@ -354,6 +354,17 @@ const actions = {
     bubble(r.text, "sys");
     updateThinkingLabel(next === "1");
   },
+  async guidelines() {
+    const cur = (await call("orch", { fn: "get_guidelines" })).text || "";
+    modal("Guidelines (guidelines.md)",
+      `<textarea id="gtext" class="field" rows="14" style="min-height:240px">${escapeHtml(cur)}</textarea>
+       <div class="hint">Persistent project instructions — included in the model's context every prompt.</div>`,
+      async () => {
+        await call("orch", { fn: "set_guidelines", arg: $("#gtext").value });
+        bubble("Guidelines saved", "sys");
+        refreshStats();
+      });
+  },
   async previewContext() {
     const r = await call("orch", { fn: "preview_context" });
     modal("Context sent to the model", `<pre class="filebody">${escapeHtml(r.text || "(empty)")}</pre>`);
