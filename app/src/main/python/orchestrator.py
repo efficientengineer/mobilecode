@@ -490,6 +490,10 @@ def _full_context(task_hint: str = "", mode: str = "") -> str:
     mem_name, mem = _memory(root)
     if mem:
         parts.append(f"PROJECT GUIDELINES ({mem_name}):\n" + mem)
+    bp = _best_practices_section(task_hint, root)
+    if bp:
+        parts.append("BEST PRACTICES (apply these by default; the user's own "
+                     "take priority over the built-ins):\n" + bp)
     outline = _outline_file(root)
     if outline.exists():
         parts.append("PROJECT OUTLINE:\n" + outline.read_text(encoding="utf-8"))
@@ -697,6 +701,50 @@ def _depgraph_section(root: Path = None) -> str:
     try:
         import projectmap
         return projectmap.load_markdown(root or _workspace())
+    except Exception:
+        return ""
+
+
+def _best_practices_section(task_hint: str = "", root: Path = None) -> str:
+    """Relevant built-in + user best practices for this project (empty if none)."""
+    try:
+        import best_practices
+        return best_practices.render(task_hint, root or _workspace())
+    except Exception:
+        return ""
+
+
+def get_best_practices(_=None) -> str:
+    """The user's own global best-practices text (for the editor)."""
+    try:
+        import best_practices
+        return best_practices.get_user()
+    except Exception:
+        return ""
+
+
+def set_best_practices(text="") -> str:
+    try:
+        import best_practices
+        return best_practices.set_user(text)
+    except Exception as e:
+        return f"Save failed: {e}"
+
+
+def add_best_practice(text="") -> str:
+    """Append one rule to the user's global best practices (hands-free)."""
+    try:
+        import best_practices
+        return best_practices.add_user(text)
+    except Exception as e:
+        return f"Add failed: {e}"
+
+
+def preview_best_practices(_=None) -> str:
+    """The full block (built-in + user) that would be injected for this project."""
+    try:
+        import best_practices
+        return best_practices.preview()
     except Exception:
         return ""
 

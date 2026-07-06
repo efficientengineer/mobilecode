@@ -7,6 +7,7 @@
     "localrun.py",
     "templates.py",
     "projectmap.py",
+    "best_practices.py",
     "orchestrator.py"
   ],
   "web": [

@@ -827,6 +827,19 @@ const actions = {
         refreshStats();
       });
   },
+  async bestPractices() {
+    const cur = (await call("orch", { fn: "get_best_practices" })).text || "";
+    const active = (await call("orch", { fn: "preview_best_practices" })).text || "";
+    modal("Best practices (every project)",
+      `<textarea id="bptext" class="field" rows="9" style="min-height:170px" placeholder="- Your own rules, one per line, e.g. movement = floating joystick on the left half">${escapeHtml(cur)}</textarea>
+       <div class="hint">Your rules apply to <b>every</b> project and override the built-ins. Built-in mobile-game practices (floating joystick, safe areas, delta-time loops…) auto-apply to game projects.</div>
+       <details style="margin-top:8px"><summary class="hint">What's active for this project</summary><pre class="small">${escapeHtml(active)}</pre></details>`,
+      async () => {
+        await call("orch", { fn: "set_best_practices", arg: $("#bptext").value });
+        bubble("Best practices saved — applied to every project", "sys");
+        refreshStats();
+      });
+  },
   async previewContext() {
     const r = await call("orch", { fn: "preview_context" });
     modal("Context sent to the model", `<pre class="filebody">${escapeHtml(r.text || "(empty)")}</pre>`);
