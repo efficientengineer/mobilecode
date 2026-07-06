@@ -354,6 +354,10 @@ const actions = {
     bubble(r.text, "sys");
     updateThinkingLabel(next === "1");
   },
+  async previewContext() {
+    const r = await call("orch", { fn: "preview_context" });
+    modal("Context sent to the model", `<pre class="filebody">${escapeHtml(r.text || "(empty)")}</pre>`);
+  },
   async contextFiles() {
     let pinned = [];
     try { pinned = JSON.parse((await call("orch", { fn: "list_context_files" })).text); } catch (e) {}
@@ -463,8 +467,8 @@ function confirmClone(full) {
 }
 
 async function filesModal(path) {
-  const r = await call("fs.tree");
-  const all = r.files || [];
+  let all = [];
+  try { all = JSON.parse((await call("orch", { fn: "browse_files" })).text); } catch (e) {}
   const dirs = new Set(); const files = [];
   all.forEach((p) => {
     if (!p.startsWith(path)) return;
@@ -504,8 +508,8 @@ async function filesModal(path) {
 }
 
 async function showFile(rel) {
-  const r = await call("fs.read", { path: rel });
-  modal(rel, `<pre class="filebody">${escapeHtml(r.content || "(empty)")}</pre>`);
+  const r = await call("orch", { fn: "read_ws_file", arg: rel });
+  modal(rel, `<pre class="filebody">${escapeHtml(r.text || "(empty)")}</pre>`);
 }
 
 function escapeHtml(s) {

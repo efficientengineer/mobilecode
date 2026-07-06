@@ -84,6 +84,8 @@ def _list_repo_files(root: Path, max_files: int = 60) -> list[str]:
     for p in root.rglob("*"):
         if ".git" in p.parts or ".agent" in p.parts:
             continue
+        if p.name in ("meta.json", "transcript.jsonl"):
+            continue
         if p.is_file():
             files.append(str(p.relative_to(root)))
         if len(files) >= max_files:
@@ -203,7 +205,9 @@ def _plan_with_lead(task: str, root: Path) -> dict:
         "natural-language answer in \"reply\" and leave \"edits\" empty; do "
         "NOT create files just to respond. Use mode \"edit\" ONLY when the "
         "user is asking you to create or change code/files — set \"summary\" "
-        "and one \"edit\" per file. When in doubt, prefer \"chat\"."
+        "and one \"edit\" per file. When in doubt, prefer \"chat\". "
+        "Persistent project notes, instructions, or things to remember belong "
+        "in a file named guidelines.md (create or update it)."
     )
     context = _full_context(task).strip()
     context_block = f"{context}\n\n" if context else ""
@@ -347,9 +351,11 @@ def _commit(root: Path, message: str) -> str:
     git_dir = root / ".git"
     if not git_dir.exists():
         porcelain.init(str(root))
-    # Stage everything that isn't in .git or the agent's private .agent dir
+    # Stage everything that isn't in .git, the agent's .agent dir, or app meta
     for p in root.rglob("*"):
         if ".git" in p.parts or ".agent" in p.parts or not p.is_file():
+            continue
+        if p.name in ("meta.json", "transcript.jsonl"):
             continue
         porcelain.add(str(root), paths=[str(p)])
     commit_id = porcelain.commit(
@@ -425,13 +431,23 @@ def _read_discussion() -> list:
     return out
 
 
+def _memory(root: Path = None):
+    """The project guidelines file (guidelines.md, falling back to CLAUDE.md)."""
+    root = root or _workspace()
+    for name in ("guidelines.md", "CLAUDE.md"):
+        c = _read_file(root, name)
+        if c:
+            return name, c
+    return "guidelines.md", ""
+
+
 def _full_context(task_hint: str = "") -> str:
-    """Assemble the per-prompt context: memory + outline + recent discussion."""
+    """Assemble the per-prompt context: guidelines + outline + attached + discussion."""
     root = _workspace()
     parts = []
-    claude = _read_file(root, "CLAUDE.md")
-    if claude:
-        parts.append("PROJECT MEMORY (CLAUDE.md):\n" + claude)
+    mem_name, mem = _memory(root)
+    if mem:
+        parts.append(f"PROJECT GUIDELINES ({mem_name}):\n" + mem)
     outline = _outline_file(root)
     if outline.exists():
         parts.append("PROJECT OUTLINE:\n" + outline.read_text(encoding="utf-8"))
@@ -492,14 +508,14 @@ def context_counts(_=None) -> str:
     cave = _caveman_on()
     disc = _read_discussion()
     d = "\n".join(x.get("cave" if cave else "text", "") for x in disc)
-    claude = _read_file(_workspace(), "CLAUDE.md")
+    _, mem = _memory()
 
     def toks(s):
         return len(s) // 4
     return json.dumps({
         "outlineChars": len(o), "outlineTokens": toks(o),
         "discussionChars": len(d), "discussionTokens": toks(d),
-        "memoryTokens": toks(claude), "turns": len(disc), "caveman": cave,
+        "memoryTokens": toks(mem), "turns": len(disc), "caveman": cave,
     })
 
 
@@ -557,6 +573,38 @@ def remove_context_file(path="") -> str:
     lst = [p for p in lst if p != str(path)]
     _ctx_files_path().write_text(json.dumps(lst), encoding="utf-8")
     return f"Removed {path}"
+
+
+# --- File browser (shows .agent/ so you can see outline.md etc.) ----------
+
+def browse_files(_=None) -> str:
+    """All workspace files EXCEPT .git and app metadata. Includes .agent/*."""
+    root = _workspace()
+    files = []
+    for p in sorted(root.rglob("*")):
+        if ".git" in p.parts:
+            continue
+        if p.name in ("meta.json", "transcript.jsonl"):
+            continue
+        if p.is_file():
+            files.append(str(p.relative_to(root)))
+    return json.dumps(files)
+
+
+def read_ws_file(path="") -> str:
+    fp = _workspace() / str(path)
+    if fp.exists() and fp.is_file():
+        try:
+            return fp.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return ""
+    return ""
+
+
+def preview_context(_=None) -> str:
+    """Exactly what gets sent to the model as context this turn."""
+    c = _full_context()
+    return c if c else "(context is empty)"
 
 
 def build_outline(_=None) -> str:
