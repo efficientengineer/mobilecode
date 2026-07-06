@@ -110,6 +110,20 @@ class SessionManager(private val ctx: Context) {
         f.appendText(line + "\n")
     }
 
+    /** Delete the whole transcript for a session. */
+    fun clearTranscript(id: String) {
+        File(File(root, id), "transcript.jsonl").delete()
+    }
+
+    /** Keep only the last [keepLast] turns of the transcript. */
+    fun trimTranscript(id: String, keepLast: Int) {
+        val f = File(File(root, id), "transcript.jsonl")
+        if (!f.exists()) return
+        val lines = f.readLines()
+        if (lines.size <= keepLast) return
+        f.writeText(lines.takeLast(keepLast).joinToString("\n") + "\n")
+    }
+
     /** All turns for a session, oldest first, as (role, text) pairs. */
     fun turns(id: String): List<Pair<String, String>> {
         val f = File(File(root, id), "transcript.jsonl")

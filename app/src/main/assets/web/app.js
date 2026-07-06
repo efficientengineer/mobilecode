@@ -118,6 +118,34 @@ const actions = {
     bubble("Updating UI…", "sys");
     try { await call("updateUI"); } catch (e) { bubble("Update UI failed: " + e.message, "sys"); }
   },
+  async viewContext() {
+    const r = await call("context.get");
+    const turns = r.turns || [];
+    const body = turns.length
+      ? turns.map((t) =>
+          `<div class="list-item"><span><b>${t.role}</b><div class="sub">${escapeHtml(t.text).slice(0, 400)}</div></span></div>`
+        ).join("")
+      : `<div class="hint">(no context yet)</div>`;
+    modal("Context (" + turns.length + " turns)", body);
+  },
+  trimContext() {
+    modal("Trim context",
+      `<label>Keep the last N turns</label><input id="keepN" type="text" value="10" />
+       <div class="hint">Older turns are dropped from this session's memory.</div>`,
+      async () => {
+        const n = parseInt($("#keepN").value.trim(), 10) || 10;
+        await runText("Trim", "context.trim", { keep: n });
+        loadHistory();
+      });
+  },
+  clearContext() {
+    modal("Clear context",
+      `<div class="hint">Erase this session's conversation memory? The repo/files are untouched.</div>`,
+      async () => {
+        await runText("Clear", "context.clear");
+        loadHistory();
+      });
+  },
   newRepo() {
     modal("New GitHub repo",
       `<label>Repo name</label><input id="rn" type="text" placeholder="repo-name" />`,

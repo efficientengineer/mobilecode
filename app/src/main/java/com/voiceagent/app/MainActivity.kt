@@ -197,6 +197,29 @@ class MainActivity : AppCompatActivity() {
             sessions.appendTurn(id, "agent", result)
             text(result)
         }
+        "context.get", "session.turns2" -> withContext(Dispatchers.IO) {
+            val arr = JSONArray()
+            sessions.turns(sessions.activeId()).forEach {
+                arr.put(JSONObject().put("role", it.first).put("text", it.second))
+            }
+            JSONObject().put("turns", arr)
+        }
+        "context.clear" -> {
+            sessions.clearTranscript(sessions.activeId())
+            text("Context cleared")
+        }
+        "context.trim" -> {
+            val keep = arg.optInt("keep", 10)
+            sessions.trimTranscript(sessions.activeId(), keep)
+            text("Trimmed to last $keep turns")
+        }
+        "py.call" -> withContext(Dispatchers.IO) {
+            // Generic escape hatch: call a bundled Python function from the web
+            // layer so future features can ship OTA without a bridge change.
+            val a = arg.optJSONArray("args")
+            val args: Array<Any?> = if (a == null) arrayOf() else Array(a.length()) { a.get(it) }
+            text(py(arg.getString("module")).callAttr(arg.getString("fn"), *args).toString())
+        }
         "agent.commit" -> withContext(Dispatchers.IO) { text(py("orchestrator").callAttr("commit_now").toString()) }
         "git.push" -> withContext(Dispatchers.IO) { text(py("git_ops").callAttr("push").toString()) }
         "git.pull" -> withContext(Dispatchers.IO) { text(py("git_ops").callAttr("pull").toString()) }
