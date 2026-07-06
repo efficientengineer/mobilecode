@@ -53,6 +53,10 @@ const $ = (s) => document.querySelector(s);
 const chat = $("#chat");
 function setStatus(t) { $("#status").textContent = t || ""; }
 
+function estTokens(s) {
+  return Math.max(1, Math.round((s || "").length / 4));
+}
+
 function bubble(text, kind, runId) {
   const d = document.createElement("div");
   d.className = "bubble " + kind;
@@ -62,6 +66,13 @@ function bubble(text, kind, runId) {
     d.onclick = () => openRun(runId);
   }
   chat.appendChild(d);
+  // Per-message token estimate (UI only — never sent as context).
+  if (kind === "user" || kind === "agent") {
+    const t = document.createElement("div");
+    t.className = "tok " + kind;
+    t.textContent = "~" + estTokens(text) + " tokens";
+    chat.appendChild(t);
+  }
   chat.scrollTop = chat.scrollHeight;
   return d;
 }

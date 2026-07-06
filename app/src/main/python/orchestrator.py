@@ -405,13 +405,30 @@ _FILLER = {
 }
 
 
+# A word is alphanumeric and may contain internal hyphens/apostrophes, so
+# "2D", "3D", "z-index", "index.html" and "don't" stay intact; anything else
+# (a lone period, comma, colon…) is its own token.
+_WORD_RE = None
+
+
+def _word_re():
+    global _WORD_RE
+    if _WORD_RE is None:
+        _WORD_RE = _re.compile(r"[A-Za-z0-9]+(?:[-'.][A-Za-z0-9]+)*|[^\sA-Za-z0-9]")
+    return _WORD_RE
+
+
 def _caveman(text: str) -> str:
     if not text:
         return text
     def strip_line(line: str) -> str:
-        toks = _re.findall(r"[A-Za-z']+|[^A-Za-z'\s]", line)
-        out = [t for t in toks if t.lower() not in _FILLER]
-        return " ".join(out)
+        toks = [t for t in _word_re().findall(line) if t.lower() not in _FILLER]
+        s = " ".join(toks)
+        # Re-attach trailing/opening punctuation so it reads cleanly:
+        # "Good . Strong ." -> "Good. Strong."
+        s = _re.sub(r"\s+([.,!?;:)\]])", r"\1", s)
+        s = _re.sub(r"([(\[])\s+", r"\1", s)
+        return s
     return "\n".join(strip_line(l) for l in text.splitlines())
 
 
