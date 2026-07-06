@@ -86,6 +86,21 @@ def _split_threshold() -> int:
     return 250 if _frugal_on() else 450
 
 
+def _looks_vendored(path: str, content: str) -> bool:
+    """Heuristic: is this a pasted/minified library bundle that should be a CDN
+    reference instead? .min.* files, or big script/style files with a huge
+    single line (the hallmark of minification)."""
+    p = str(path).lower()
+    n = len(content)
+    if p.endswith((".min.js", ".min.css")) and n > 10000:
+        return True
+    if p.endswith((".js", ".mjs", ".cjs", ".css")) and n > 30000:
+        longest = max((len(l) for l in content.splitlines()), default=0)
+        if longest > 2000:
+            return True
+    return False
+
+
 _SKIP_DIRS = {".git", ".agent", "__pycache__", "node_modules"}
 
 
@@ -240,6 +255,14 @@ def t_write_file(path="", content="", **_):
     err = _need_path(path, "write_file")
     if err:
         return err
+    if _looks_vendored(path, content):
+        return ("(refused — this looks like a vendored/minified library "
+                f"(~{len(content) // 1000} KB, very long lines). Pasting library "
+                "source bloats every step's context and will truncate. Load it "
+                "from a pinned CDN instead: add a "
+                '<script src="https://cdn.jsdelivr.net/npm/PACKAGE@VERSION/..."></script> '
+                "tag (or an ESM import map) to your HTML and use it at runtime — "
+                "the library then never enters the workspace.)")
     fp = _resolve(path)
     fp.parent.mkdir(parents=True, exist_ok=True)
     fp.write_text(content, encoding="utf-8")
