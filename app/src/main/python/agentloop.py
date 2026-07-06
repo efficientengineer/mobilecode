@@ -46,6 +46,67 @@ def _interrupted() -> bool:
     return os.environ.get("AGENT_INTERRUPT", "0") == "1"
 
 
+# --- in-run context pruning --------------------------------------------------
+# The loop's own transcript (tool results, mostly) grows every step; without a
+# cap a long run re-sends megabytes per step. Old tool results are elided in
+# ONE batch when the budget is crossed — batching matters because provider
+# prefix caches are invalidated by any edit to earlier messages, so we prune
+# rarely and hard rather than a little every step. Knobs live in the same
+# .agent/compaction.json the discussion compactor uses.
+
+_LOOP_DEFAULTS = {"loopBudget": 80000, "keepSteps": 4}
+
+
+def _loop_settings() -> dict:
+    s = dict(_LOOP_DEFAULTS)
+    try:
+        fp = _agent_dir() / "compaction.json"
+        if fp.exists():
+            data = json.loads(fp.read_text(encoding="utf-8"))
+            for k in _LOOP_DEFAULTS:
+                if k in data:
+                    s[k] = max(0, int(data[k]))
+    except Exception:
+        pass
+    return s
+
+
+def _msg_len(m) -> int:
+    return len(m.get("content") or "")
+
+
+def prune_messages(messages: list) -> int:
+    """Elide old bulky tool results once the transcript exceeds the budget.
+
+    The last `keepSteps` assistant turns (and everything after them) are
+    protected so the model keeps its working set. Returns chars saved.
+    """
+    s = _loop_settings()
+    budget = s["loopBudget"]
+    if budget <= 0 or sum(_msg_len(m) for m in messages) <= budget:
+        return 0
+    # Protect the tail: everything from the keepSteps-th assistant turn
+    # (counted from the end), plus the initial user task.
+    cutoff = 0
+    seen = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i]["role"] == "assistant":
+            seen += 1
+            if seen >= s["keepSteps"]:
+                cutoff = i
+                break
+    saved = 0
+    for m in messages[1:cutoff]:
+        if m["role"] == "tool" and _msg_len(m) > 200 and \
+                not m.get("content", "").startswith("(elided "):
+            n = _msg_len(m)
+            m["content"] = (f"(elided {n} chars of {m.get('name', 'tool')} "
+                            "output to save context — re-run the tool if you "
+                            "need it again)")
+            saved += n - _msg_len(m)
+    return saved
+
+
 class _DeltaBuffer:
     """Batch streamed text into event-sized chunks so the events file stays sane."""
 
@@ -96,6 +157,18 @@ _PLAN_SYSTEM = (
     "Steps must be concrete enough that another agent could execute them."
 )
 
+_DELEGATE_GUIDANCE = (
+    "\n\nDELEGATION: a cheap implementer model ({worker}) is available via the "
+    "delegate_edit tool. You are the ORCHESTRATOR — prefer delegating file "
+    "creation and mechanical edits to it: one delegate_edit per file, with a "
+    "precise, self-contained instruction (name functions, describe behavior, "
+    "spell out anything it cannot infer). Reserve your own write_file/"
+    "str_replace for small surgical tweaks, fixes to the implementer's output, "
+    "and files where exact contents matter more than cost. ALWAYS verify "
+    "delegated work afterwards (read_file / check_python) — the implementer "
+    "is fast, not reliable."
+)
+
 _PROPOSE_PLAN_TOOL = {
     "name": "propose_plan",
     "description": "Finish planning: submit the plan for user approval.",
@@ -141,6 +214,9 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
     else:
         tools = agent_tools.toolset(write=write)
         system = _AGENT_SYSTEM
+        worker = (os.environ.get("WORKER_MODEL") or "").strip()
+        if write and worker:
+            system += _DELEGATE_GUIDANCE.format(worker=worker)
     if extra_system:
         system += "\n\n" + extra_system
 
@@ -157,6 +233,9 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             break
         steps += 1
         _emit("step", n=steps)
+        saved = prune_messages(messages)
+        if saved:
+            _emit("pruned", chars=saved)
         buf = _DeltaBuffer()
         try:
             r = llm.chat(model, system, messages, tools=tools,
@@ -225,7 +304,8 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                       "Progress so far is in the workspace — say 'continue' to keep going.")
 
     u = llm.usage()
-    _emit("usage", input=u["input"], output=u["output"], calls=u["calls"])
+    _emit("usage", input=u["input"], output=u["output"], calls=u["calls"],
+          cache=u.get("cache_read", 0))
     return {"text": final_text or "(no reply)", "reasoning": reasoning_last,
             "touched": sorted(agent_tools.TOUCHED), "plan": plan_out,
             "steps": steps, "usage": u, "interrupted": interrupted}

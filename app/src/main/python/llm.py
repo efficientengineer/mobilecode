@@ -37,20 +37,21 @@ BACKOFFS = [2, 4, 8, 16]
 
 # --- run-level usage accounting -------------------------------------------
 
-_USAGE = {"input": 0, "output": 0, "calls": 0}
+_USAGE = {"input": 0, "output": 0, "cache_read": 0, "calls": 0}
 
 
 def reset_usage() -> None:
-    _USAGE.update({"input": 0, "output": 0, "calls": 0})
+    _USAGE.update({"input": 0, "output": 0, "cache_read": 0, "calls": 0})
 
 
 def usage() -> dict:
     return dict(_USAGE)
 
 
-def _account(inp: int, out: int) -> None:
+def _account(inp: int, out: int, cached: int = 0) -> None:
     _USAGE["input"] += int(inp or 0)
     _USAGE["output"] += int(out or 0)
+    _USAGE["cache_read"] += int(cached or 0)
     _USAGE["calls"] += 1
 
 
@@ -138,6 +139,17 @@ def _anthropic_messages(messages):
                                "content": t["content"][:30000]})
                 i += 1
             out.append({"role": "user", "content": blocks})
+    # Cache breakpoint on the newest message: in a tool loop the whole
+    # conversation so far is the stable prefix of the NEXT call, so marking
+    # the tail makes every step after the first a prefix-cache hit.
+    if out:
+        last = out[-1]
+        if isinstance(last["content"], str):
+            last["content"] = [{"type": "text", "text": last["content"] or " "}]
+        if isinstance(last["content"], list) and last["content"]:
+            blk = last["content"][-1]
+            if isinstance(blk, dict):
+                blk["cache_control"] = {"type": "ephemeral"}
     return out
 
 
@@ -176,7 +188,7 @@ def _call_anthropic(model, system, cached_context, messages, tools,
     text, reasoning, tool_calls = [], [], []
     cur_tool = None
     stop = ""
-    usage_in = usage_out = 0
+    usage_in = usage_out = usage_cached = 0
     with resp:
         for data in _sse_lines(resp):
             if data == "[DONE]":
@@ -189,6 +201,7 @@ def _call_anthropic(model, system, cached_context, messages, tools,
             if t == "message_start":
                 u = (ev.get("message") or {}).get("usage") or {}
                 usage_in = u.get("input_tokens", 0)
+                usage_cached = u.get("cache_read_input_tokens", 0) or 0
             elif t == "content_block_start":
                 cb = ev.get("content_block") or {}
                 if cb.get("type") == "tool_use":
@@ -216,10 +229,11 @@ def _call_anthropic(model, system, cached_context, messages, tools,
                 stop = (ev.get("delta") or {}).get("stop_reason") or stop
                 u = ev.get("usage") or {}
                 usage_out = u.get("output_tokens", usage_out)
-    _account(usage_in, usage_out)
+    _account(usage_in, usage_out, usage_cached)
     return {"text": "".join(text), "reasoning": "".join(reasoning),
             "tool_calls": tool_calls, "stop": stop or "end_turn",
-            "usage": {"input": usage_in, "output": usage_out}}
+            "usage": {"input": usage_in, "output": usage_out,
+                      "cache_read": usage_cached}}
 
 
 def _parse_anthropic(result):
@@ -229,10 +243,13 @@ def _parse_anthropic(result):
     tool_calls = [{"id": p["id"], "name": p["name"], "args": p.get("input") or {}}
                   for p in parts if p.get("type") == "tool_use"]
     u = result.get("usage") or {}
-    _account(u.get("input_tokens", 0), u.get("output_tokens", 0))
+    cached = u.get("cache_read_input_tokens", 0) or 0
+    _account(u.get("input_tokens", 0), u.get("output_tokens", 0), cached)
     return {"text": text, "reasoning": reasoning, "tool_calls": tool_calls,
             "stop": result.get("stop_reason") or "end_turn",
-            "usage": {"input": u.get("input_tokens", 0), "output": u.get("output_tokens", 0)}}
+            "usage": {"input": u.get("input_tokens", 0),
+                      "output": u.get("output_tokens", 0),
+                      "cache_read": cached}}
 
 
 # --- OpenAI-compatible (DeepSeek, etc.) -------------------------------------
@@ -293,7 +310,7 @@ def _call_openai(provider, model, system, cached_context, messages, tools,
     text, reasoning = [], []
     tools_acc = {}  # index -> {id, name, args_json}
     stop = ""
-    usage_in = usage_out = 0
+    usage_in = usage_out = usage_cached = 0
     with resp:
         for data in _sse_lines(resp):
             if data == "[DONE]":
@@ -306,6 +323,7 @@ def _call_openai(provider, model, system, cached_context, messages, tools,
             if u:
                 usage_in = u.get("prompt_tokens", usage_in)
                 usage_out = u.get("completion_tokens", usage_out)
+                usage_cached = u.get("prompt_cache_hit_tokens", usage_cached) or 0
             choices = ev.get("choices") or []
             if not choices:
                 continue
@@ -337,11 +355,12 @@ def _call_openai(provider, model, system, cached_context, messages, tools,
             args = {}
         tool_calls.append({"id": slot["id"] or f"call_{idx}",
                            "name": slot["name"], "args": args})
-    _account(usage_in, usage_out)
+    _account(usage_in, usage_out, usage_cached)
     stop_map = {"stop": "end_turn", "tool_calls": "tool_use", "length": "max_tokens"}
     return {"text": "".join(text), "reasoning": "".join(reasoning),
             "tool_calls": tool_calls, "stop": stop_map.get(stop, stop or "end_turn"),
-            "usage": {"input": usage_in, "output": usage_out}}
+            "usage": {"input": usage_in, "output": usage_out,
+                      "cache_read": usage_cached}}
 
 
 def _parse_openai(result):
@@ -360,12 +379,15 @@ def _parse_openai(result):
         tool_calls.append({"id": tc.get("id") or "call_0",
                            "name": fn.get("name") or "", "args": args})
     u = result.get("usage") or {}
-    _account(u.get("prompt_tokens", 0), u.get("completion_tokens", 0))
+    cached = u.get("prompt_cache_hit_tokens", 0) or 0
+    _account(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), cached)
     stop = choices[0].get("finish_reason") or "stop"
     stop_map = {"stop": "end_turn", "tool_calls": "tool_use", "length": "max_tokens"}
     return {"text": msg.get("content") or "", "reasoning": msg.get("reasoning_content") or "",
             "tool_calls": tool_calls, "stop": stop_map.get(stop, stop),
-            "usage": {"input": u.get("prompt_tokens", 0), "output": u.get("completion_tokens", 0)}}
+            "usage": {"input": u.get("prompt_tokens", 0),
+                      "output": u.get("completion_tokens", 0),
+                      "cache_read": cached}}
 
 
 # --- public entry point ------------------------------------------------------

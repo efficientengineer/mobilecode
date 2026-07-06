@@ -335,6 +335,11 @@ _COMPACT_DEFAULTS = {
     "codeTurns": 6,       # tighter cap in code/plan modes (outline carries state)
     "charBudget": 6000,   # total char budget for the discussion block
     "perTurn": 800,       # truncate any single turn longer than this
+    # In-run pruning (read by agentloop): once the loop's own transcript
+    # exceeds loopBudget chars, old tool results are elided in one batch,
+    # protecting the last keepSteps model turns.
+    "loopBudget": 80000,
+    "keepSteps": 4,
 }
 
 

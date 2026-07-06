@@ -306,7 +306,9 @@ function fmtEvent(e) {
     case "reason": return "💭 " + (e.text || "").slice(0, 160);
     case "verify_failed": return "🧪 verification FAILED — repairing:\n" + (e.detail || "");
     case "verify_ok": return "🧪 verification passed";
-    case "usage": return "∑ " + (e.input || 0) + " in / " + (e.output || 0) + " out tokens, " + (e.calls || 0) + " calls";
+    case "usage": return "∑ " + (e.input || 0) + " in / " + (e.output || 0) + " out tokens, " + (e.calls || 0) + " calls" +
+      (e.cache ? " · " + e.cache + " cached" : "");
+    case "pruned": return "🧹 context pruned (−" + (e.chars || 0) + " chars of old tool output)";
     case "pending_commit": return "⏸ Changes held for your review (autocommit off)";
     case "error": return "⚠️ " + (e.detail || "error");
     case "plan_start": return "🧠 Orchestrator planning…";
@@ -570,12 +572,18 @@ const actions = {
        <label>Max turns kept (Code/Plan)</label>${num("codeTurns", s.codeTurns)}
        <label>Total char budget for discussion</label>${num("charBudget", s.charBudget)}
        <label>Truncate any single turn longer than (chars)</label>${num("perTurn", s.perTurn)}
+       <label>Agent-loop transcript budget (chars)</label>${num("loopBudget", s.loopBudget)}
+       <label>Loop steps protected from pruning</label>${num("keepSteps", s.keepSteps)}
        <div class="hint">Trims the discussion sent each prompt using plain rules — turn caps,
-       duplicate removal, per-turn truncation, and a char budget. Costs zero tokens.</div>`,
+       duplicate removal, per-turn truncation, and a char budget. The loop knobs
+       cap the agent's own working transcript inside one run: past the budget,
+       old tool outputs are elided (the agent can re-read files it still needs).
+       Costs zero tokens.</div>`,
       async () => {
         const payload = {
           maxTurns: $("#maxTurns").value, codeTurns: $("#codeTurns").value,
           charBudget: $("#charBudget").value, perTurn: $("#perTurn").value,
+          loopBudget: $("#loopBudget").value, keepSteps: $("#keepSteps").value,
         };
         await call("orch", { fn: "set_compaction", arg: JSON.stringify(payload) });
         bubble("Compaction settings saved", "sys");
