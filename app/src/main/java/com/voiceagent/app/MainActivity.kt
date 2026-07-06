@@ -8,6 +8,9 @@ import android.speech.SpeechRecognizer
 import android.content.Intent
 import android.speech.RecognitionListener
 import android.speech.tts.TextToSpeech
+import android.widget.ArrayAdapter
+import android.widget.AutoCompleteTextView
+import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -19,7 +22,10 @@ import com.voiceagent.app.databinding.ActivityMainBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
@@ -86,6 +92,14 @@ class MainActivity : AppCompatActivity() {
         prefs.getString("DEEPSEEK_API_KEY", null)?.let {
             os.get("environ")?.callAttr("__setitem__", "DEEPSEEK_API_KEY", it)
         }
+        // Model overrides. Fall back to the defaults so the Python side always
+        // has an explicit, valid model string to route with.
+        val lead = prefs.getString("LEAD_MODEL", null)?.takeIf { it.isNotBlank() }
+            ?: getString(R.string.lead_model_default)
+        val worker = prefs.getString("WORKER_MODEL", null)?.takeIf { it.isNotBlank() }
+            ?: getString(R.string.worker_model_default)
+        os.get("environ")?.callAttr("__setitem__", "LEAD_MODEL", lead)
+        os.get("environ")?.callAttr("__setitem__", "WORKER_MODEL", worker)
     }
 
     // --- Voice input ------------------------------------------------------
@@ -183,25 +197,125 @@ class MainActivity : AppCompatActivity() {
 
     private fun showKeyDialog() {
         val view = layoutInflater.inflate(R.layout.dialog_keys, null)
-        val anthropicField = view.findViewById<android.widget.EditText>(R.id.anthropicKey)
-        val deepseekField = view.findViewById<android.widget.EditText>(R.id.deepseekKey)
+        val anthropicField = view.findViewById<EditText>(R.id.anthropicKey)
+        val deepseekField = view.findViewById<EditText>(R.id.deepseekKey)
+        val leadField = view.findViewById<AutoCompleteTextView>(R.id.leadModel)
+        val workerField = view.findViewById<AutoCompleteTextView>(R.id.workerModel)
         val prefs = getSharedPreferences("keys", MODE_PRIVATE)
+
         anthropicField.setText(prefs.getString("ANTHROPIC_API_KEY", ""))
         deepseekField.setText(prefs.getString("DEEPSEEK_API_KEY", ""))
+        leadField.setText(
+            prefs.getString("LEAD_MODEL", "")?.takeIf { it.isNotBlank() }
+                ?: getString(R.string.lead_model_default)
+        )
+        workerField.setText(
+            prefs.getString("WORKER_MODEL", "")?.takeIf { it.isNotBlank() }
+                ?: getString(R.string.worker_model_default)
+        )
+
+        // Tapping the field pops the suggestion list (dropdown behaviour) once
+        // it has been populated; until then it's just an editable text box.
+        leadField.setOnClickListener { leadField.showDropDown() }
+        workerField.setOnClickListener { workerField.showDropDown() }
+
+        // Populate the dropdowns from each provider using the saved keys.
+        // Falls back silently to plain text entry when a key is missing, the
+        // device is offline, or the request fails.
+        populateModels(
+            leadField,
+            prefs.getString("ANTHROPIC_API_KEY", "").orEmpty()
+        ) { key -> fetchAnthropicModels(key) }
+        populateModels(
+            workerField,
+            prefs.getString("DEEPSEEK_API_KEY", "").orEmpty()
+        ) { key -> fetchDeepseekModels(key) }
 
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("API Keys")
+            .setTitle("Settings")
             .setView(view)
             .setPositiveButton("Save") { _, _ ->
                 prefs.edit()
                     .putString("ANTHROPIC_API_KEY", anthropicField.text.toString().trim())
                     .putString("DEEPSEEK_API_KEY", deepseekField.text.toString().trim())
+                    .putString("LEAD_MODEL", leadField.text.toString().trim())
+                    .putString("WORKER_MODEL", workerField.text.toString().trim())
                     .apply()
                 prepareWorkspaceEnv()
-                Toast.makeText(this, "Keys saved", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    /** Fetch a provider's model list off the main thread and fill the dropdown. */
+    private fun populateModels(
+        field: AutoCompleteTextView,
+        key: String,
+        fetch: (String) -> List<String>
+    ) {
+        if (key.isBlank()) return
+        lifecycleScope.launch {
+            val models = withContext(Dispatchers.IO) {
+                try {
+                    fetch(key)
+                } catch (e: Throwable) {
+                    emptyList()
+                }
+            }
+            if (models.isNotEmpty()) {
+                field.setAdapter(
+                    ArrayAdapter(
+                        this@MainActivity,
+                        android.R.layout.simple_dropdown_item_1line,
+                        models
+                    )
+                )
+            }
+        }
+    }
+
+    /** Anthropic Models API → ids prefixed with "anthropic/" for the router. */
+    private fun fetchAnthropicModels(key: String): List<String> {
+        val conn = (URL("https://api.anthropic.com/v1/models?limit=100").openConnection()
+                as HttpURLConnection).apply {
+            requestMethod = "GET"
+            setRequestProperty("x-api-key", key)
+            setRequestProperty("anthropic-version", "2023-06-01")
+            connectTimeout = 15000
+            readTimeout = 15000
+        }
+        return conn.use { readModelIds(it, "anthropic/") }
+    }
+
+    /** DeepSeek Models API (OpenAI-compatible) → ids prefixed with "deepseek/". */
+    private fun fetchDeepseekModels(key: String): List<String> {
+        val conn = (URL("https://api.deepseek.com/v1/models").openConnection()
+                as HttpURLConnection).apply {
+            requestMethod = "GET"
+            setRequestProperty("Authorization", "Bearer $key")
+            connectTimeout = 15000
+            readTimeout = 15000
+        }
+        return conn.use { readModelIds(it, "deepseek/") }
+    }
+
+    /** Parse a `{ "data": [ { "id": ... } ] }` body into prefixed model ids. */
+    private fun readModelIds(conn: HttpURLConnection, prefix: String): List<String> {
+        if (conn.responseCode != 200) return emptyList()
+        val body = conn.inputStream.bufferedReader().use { it.readText() }
+        val data = JSONObject(body).optJSONArray("data") ?: return emptyList()
+        return (0 until data.length()).mapNotNull { i ->
+            data.optJSONObject(i)?.optString("id")?.takeIf { it.isNotBlank() }
+        }.map { "$prefix$it" }
+    }
+
+    private inline fun <T> HttpURLConnection.use(block: (HttpURLConnection) -> T): T {
+        try {
+            return block(this)
+        } finally {
+            disconnect()
+        }
     }
 
     override fun onDestroy() {

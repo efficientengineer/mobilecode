@@ -1,37 +1,75 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:padding="20dp">
+    android:layout_height="wrap_content">
 
-    <TextView
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/anthropic_key_label"
-        android:paddingBottom="4dp" />
+        android:orientation="vertical"
+        android:padding="20dp">
 
-    <EditText
-        android:id="@+id/anthropicKey"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="sk-ant-..."
-        android:inputType="textVisiblePassword"
-        android:autofillHints="" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/anthropic_key_label"
+            android:paddingBottom="4dp" />
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/deepseek_key_label"
-        android:paddingTop="16dp"
-        android:paddingBottom="4dp" />
+        <EditText
+            android:id="@+id/anthropicKey"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="sk-ant-..."
+            android:inputType="textVisiblePassword"
+            android:autofillHints="" />
 
-    <EditText
-        android:id="@+id/deepseekKey"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="sk-..."
-        android:inputType="textVisiblePassword"
-        android:autofillHints="" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/deepseek_key_label"
+            android:paddingTop="16dp"
+            android:paddingBottom="4dp" />
 
-</LinearLayout>
+        <EditText
+            android:id="@+id/deepseekKey"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="sk-..."
+            android:inputType="textVisiblePassword"
+            android:autofillHints="" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/lead_model_label"
+            android:paddingTop="16dp"
+            android:paddingBottom="4dp" />
+
+        <AutoCompleteTextView
+            android:id="@+id/leadModel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/lead_model_default"
+            android:inputType="text"
+            android:completionThreshold="0"
+            android:autofillHints="" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/worker_model_label"
+            android:paddingTop="16dp"
+            android:paddingBottom="4dp" />
+
+        <AutoCompleteTextView
+            android:id="@+id/workerModel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/worker_model_default"
+            android:inputType="text"
+            android:completionThreshold="0"
+            android:autofillHints="" />
+
+    </LinearLayout>
+
+</ScrollView>

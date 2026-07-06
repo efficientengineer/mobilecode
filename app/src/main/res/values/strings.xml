@@ -8,4 +8,8 @@
     <string name="settings">Settings</string>
     <string name="anthropic_key_label">Anthropic API key (for Opus, the lead)</string>
     <string name="deepseek_key_label">DeepSeek API key (for the worker)</string>
+    <string name="lead_model_label">Lead model (planner)</string>
+    <string name="worker_model_label">Worker model (editor)</string>
+    <string name="lead_model_default">anthropic/claude-opus-4-8</string>
+    <string name="worker_model_default">deepseek/deepseek-chat</string>
 </resources>
