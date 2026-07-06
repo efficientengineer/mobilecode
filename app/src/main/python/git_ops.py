@@ -181,6 +181,39 @@ def list_tree() -> str:
     return json.dumps(files)
 
 
+def balances() -> str:
+    """Return provider balances. DeepSeek exposes one; Anthropic does not."""
+    import urllib.request
+    import urllib.error
+    lines = []
+    ds_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if ds_key:
+        try:
+            req = urllib.request.Request(
+                "https://api.deepseek.com/user/balance",
+                headers={"Authorization": f"Bearer {ds_key}",
+                         "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=30) as r:
+                info = json.loads(r.read().decode())
+            infos = info.get("balance_infos", [])
+            if infos:
+                for b in infos:
+                    lines.append(
+                        f"DeepSeek: {b.get('total_balance', '?')} "
+                        f"{b.get('currency', '')}".strip()
+                    )
+            else:
+                avail = info.get("is_available")
+                lines.append(f"DeepSeek: available={avail}")
+        except Exception as e:
+            lines.append(f"DeepSeek: error ({e})")
+    else:
+        lines.append("DeepSeek: no key set")
+    lines.append("Anthropic: balance not available via API")
+    return "\n".join(lines)
+
+
 def read_file(rel: str) -> str:
     """Return a workspace file's contents (empty string if missing)."""
     fp = _workspace() / rel

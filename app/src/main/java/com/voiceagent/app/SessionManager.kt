@@ -83,6 +83,20 @@ class SessionManager(private val ctx: Context) {
         f.appendText(line + "\n")
     }
 
+    /** All turns for a session, oldest first, as (role, text) pairs. */
+    fun turns(id: String): List<Pair<String, String>> {
+        val f = File(File(root, id), "transcript.jsonl")
+        if (!f.exists()) return emptyList()
+        return f.readLines().mapNotNull {
+            try {
+                val o = JSONObject(it)
+                o.optString("role") to o.optString("text")
+            } catch (e: Throwable) {
+                null
+            }
+        }
+    }
+
     /** The last [n] turns, oldest first, as "role: text" lines for context. */
     fun recentContext(id: String, n: Int = 6): String {
         val f = File(File(root, id), "transcript.jsonl")

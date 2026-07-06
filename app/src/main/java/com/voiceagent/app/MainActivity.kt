@@ -8,11 +8,15 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.view.Gravity
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -37,7 +41,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sessions: SessionManager
     private var speech: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
-    private val transcript = StringBuilder()
 
     private val micPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -70,10 +73,31 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.micButton.setOnClickListener { startListening() }
+        binding.sendButton.setOnClickListener {
+            val t = binding.inputText.text.toString().trim()
+            if (t.isNotEmpty()) {
+                binding.inputText.setText("")
+                submit(t)
+            }
+        }
 
-        appendLine("Ready. Tap the mic and speak a coding task.")
+        loadMessages()
         refreshSessionBar()
         maybePromptForKeys()
+    }
+
+    /** Render the active session's saved transcript as bubbles. */
+    private fun loadMessages() {
+        binding.messagesContainer.removeAllViews()
+        for ((role, text) in sessions.turns(sessions.activeId())) {
+            addBubble(text, role == "user")
+        }
+    }
+
+    /** User submitted a task (typed or spoken). */
+    private fun submit(task: String) {
+        addBubble(task, true)
+        runAgent(task)
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -90,6 +114,7 @@ class MainActivity : AppCompatActivity() {
             R.id.action_new_repo -> newRepoDialog()
             R.id.action_switch_repo -> switchRepoDialog()
             R.id.action_sessions -> sessionsDialog()
+            R.id.action_balance -> runGit("Balance") { it.callAttr("balances").toString() }
             R.id.action_settings -> showKeyDialog()
             else -> return super.onOptionsItemSelected(item)
         }
@@ -145,8 +170,7 @@ class MainActivity : AppCompatActivity() {
                         ?.trim()
                         .orEmpty()
                     if (text.isNotEmpty()) {
-                        appendLine("You: $text")
-                        runAgent(text)
+                        submit(text)
                     }
                 }
                 override fun onError(error: Int) {
@@ -195,7 +219,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             sessions.appendTurn(id, "agent", result)
-            appendLine("Agent: $result")
+            addBubble(result, false)
             speak(result.lineSequence().firstOrNull() ?: "Done")
             binding.micButton.isEnabled = true
             binding.statusText.text = getString(R.string.ready)
@@ -322,6 +346,7 @@ class MainActivity : AppCompatActivity() {
                 sessions.setActive(all[which].id)
                 prepareWorkspaceEnv()
                 refreshSessionBar()
+                loadMessages()
                 appendLine("Switched to session: ${all[which].name}")
             }
             .setNeutralButton("New session") { _, _ -> newSessionDialog() }
@@ -339,6 +364,7 @@ class MainActivity : AppCompatActivity() {
                 sessions.setActive(id)
                 prepareWorkspaceEnv()
                 refreshSessionBar()
+                loadMessages()
                 appendLine("Created session.")
             }
             .setNegativeButton("Cancel", null)
@@ -351,11 +377,39 @@ class MainActivity : AppCompatActivity() {
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "agent")
     }
 
-    private fun appendLine(line: String) {
-        transcript.append(line).append("\n\n")
-        binding.transcriptView.text = transcript.toString()
+    /** Status / system output shows as an agent-side (left) bubble. */
+    private fun appendLine(line: String) = addBubble(line, false)
+
+    private fun addBubble(text: String, fromUser: Boolean) {
+        val d = resources.displayMetrics.density
+        val tv = TextView(this).apply {
+            this.text = text
+            setTextIsSelectable(true)
+            textSize = 15f
+            val pad = (12 * d).toInt()
+            setPadding(pad, pad, pad, pad)
+            setBackgroundResource(if (fromUser) R.drawable.bubble_user else R.drawable.bubble_agent)
+            setTextColor(
+                ContextCompat.getColor(
+                    this@MainActivity,
+                    if (fromUser) R.color.bubble_user_text else R.color.bubble_agent_text
+                )
+            )
+            maxWidth = (resources.displayMetrics.widthPixels * 0.82).toInt()
+        }
+        val lp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            val v = (4 * d).toInt()
+            val h = (6 * d).toInt()
+            setMargins(h, v, h, v)
+            gravity = if (fromUser) Gravity.END else Gravity.START
+        }
+        tv.layoutParams = lp
+        binding.messagesContainer.addView(tv)
         binding.transcriptScroll.post {
-            binding.transcriptScroll.fullScroll(android.view.View.FOCUS_DOWN)
+            binding.transcriptScroll.fullScroll(View.FOCUS_DOWN)
         }
     }
 
@@ -433,23 +487,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateAgentCode(token: String, branch: String) {
-        if (token.isBlank()) {
-            Toast.makeText(this, "Add a GitHub token first", Toast.LENGTH_LONG).show()
-            return
-        }
+        // Repo is public, so no auth is needed — fetch the raw file directly.
         Toast.makeText(this, "Updating agent…", Toast.LENGTH_SHORT).show()
         lifecycleScope.launch {
             val outcome = withContext(Dispatchers.IO) {
                 try {
                     val url = URL(
-                        "https://api.github.com/repos/$AGENT_REPO/contents/" +
-                            "$AGENT_FILE_PATH?ref=$branch"
+                        "https://raw.githubusercontent.com/$AGENT_REPO/$branch/$AGENT_FILE_PATH"
                     )
                     val conn = (url.openConnection() as HttpURLConnection).apply {
                         requestMethod = "GET"
-                        setRequestProperty("Authorization", "Bearer $token")
-                        setRequestProperty("Accept", "application/vnd.github.raw")
-                        setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
                         connectTimeout = 20000
                         readTimeout = 20000
                     }
