@@ -8,6 +8,7 @@
     "templates.py",
     "projectmap.py",
     "best_practices.py",
+    "workflows.py",
     "orchestrator.py"
   ],
   "web": [

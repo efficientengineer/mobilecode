@@ -29,6 +29,7 @@ import os
 import re
 import json
 import time
+import threading
 import urllib.request
 import urllib.error
 
@@ -39,21 +40,27 @@ BACKOFFS = [2, 4, 8, 16]
 # --- run-level usage accounting -------------------------------------------
 
 _USAGE = {"input": 0, "output": 0, "cache_read": 0, "calls": 0}
+# Guards _USAGE: multi-agent workflows call chat() from several threads at once,
+# so the running totals must be updated under a lock or counts get lost.
+_USAGE_LOCK = threading.Lock()
 
 
 def reset_usage() -> None:
-    _USAGE.update({"input": 0, "output": 0, "cache_read": 0, "calls": 0})
+    with _USAGE_LOCK:
+        _USAGE.update({"input": 0, "output": 0, "cache_read": 0, "calls": 0})
 
 
 def usage() -> dict:
-    return dict(_USAGE)
+    with _USAGE_LOCK:
+        return dict(_USAGE)
 
 
 def _account(inp: int, out: int, cached: int = 0) -> None:
-    _USAGE["input"] += int(inp or 0)
-    _USAGE["output"] += int(out or 0)
-    _USAGE["cache_read"] += int(cached or 0)
-    _USAGE["calls"] += 1
+    with _USAGE_LOCK:
+        _USAGE["input"] += int(inp or 0)
+        _USAGE["output"] += int(out or 0)
+        _USAGE["cache_read"] += int(cached or 0)
+        _USAGE["calls"] += 1
 
 
 def _interrupted() -> bool:

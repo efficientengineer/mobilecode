@@ -623,6 +623,50 @@ def t_delegate_edit(path="", instruction="", **_):
             "applied — VERIFY this file with read_file and fix the rest yourself")
 
 
+# --- multi-agent workflows (fan out to several agents, then judge) ----------
+
+def t_brainstorm(topic="", count=4, criteria="", **_):
+    """Run several idea agents in parallel, score them, return ranked ideas."""
+    import workflows
+    if not str(topic).strip():
+        return "(brainstorm needs a topic)"
+    res = workflows.ideate(str(topic), n=count, criteria=str(criteria))
+    cands = res["candidates"]
+    by_n = {r["n"]: r for r in res["ranking"]}
+    order = [r["n"] for r in res["ranking"]] or list(range(1, len(cands) + 1))
+    for i in range(1, len(cands) + 1):  # append any the judge missed
+        if i not in order:
+            order.append(i)
+    out = [f"Brainstormed {len(cands)} ideas for “{res['topic']}” (best first):"]
+    for n in order:
+        if not (1 <= n <= len(cands)):
+            continue
+        c = cands[n - 1]
+        r = by_n.get(n)
+        head = f"\n[{n}]"
+        if c["angle"]:
+            head += f" ({c['angle']})"
+        if r:
+            head += f" — {r['score']:.0f}/10: {r['why']}"
+        out.append(head + "\n" + c["text"])
+    out.append(f"\nTop pick: [{res['best']}]. Present these to the user and ask "
+               "which to build (or whether to combine ideas).")
+    return "\n".join(out)
+
+
+def t_delegate_parallel(files=None, **_):
+    """Build several files at once — one implementer per file, in parallel."""
+    import workflows
+    items = files
+    if isinstance(items, dict):
+        items = [items]
+    res = workflows.parallel_edits(items or [])
+    if not res:
+        return "(no files given — pass files=[{path, instruction}, ...])"
+    return "Parallel build (" + str(len(res)) + " files):\n" + \
+        "\n".join(f"- {r['result']}" for r in res)
+
+
 # --- git tools (wrap git_ops so the agent can orchestrate git itself) --------
 # git_ops is imported lazily inside each tool so the OTA loader's override copy
 # is picked up (agent_tools loads before git_ops).
@@ -803,6 +847,18 @@ READ_TOOLS = [
      "description": "Show the current branch, remote, and uncommitted changes.",
      "input_schema": _schema({}, []),
      "fn": t_git_status},
+    {"name": "brainstorm",
+     "description": "Run several idea-generating agents IN PARALLEL on a topic, "
+                    "then score and rank their ideas. Use when the user wants "
+                    "multiple options/concepts to choose from — game mechanics, "
+                    "art directions, names, level ideas, enemy designs. Returns "
+                    "diverse ranked ideas; present them and ask which to build.",
+     "input_schema": _schema({
+         "topic": {"type": "string", "description": "what to brainstorm"},
+         "count": {"type": "integer", "description": "how many ideas (default 4, max 8)"},
+         "criteria": {"type": "string", "description": "what makes a good idea here (optional)"},
+     }, ["topic"]),
+     "fn": t_brainstorm},
 ]
 
 WRITE_TOOLS = [
@@ -889,6 +945,23 @@ DELEGATE_TOOL = {
     "fn": t_delegate_edit,
 }
 
+DELEGATE_PARALLEL_TOOL = {
+    "name": "delegate_parallel",
+    "description": "Build MULTIPLE independent files at once — one implementer per "
+                   "file, running in parallel (much faster than one at a time). "
+                   "Each item is {path, instruction} with a precise, "
+                   "self-contained spec. Use for several new files (e.g. "
+                   "player.js, enemies.js, ui.js); verify each afterward.",
+    "input_schema": _schema({
+        "files": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"path": {"type": "string"},
+                           "instruction": {"type": "string"}},
+            "required": ["path", "instruction"]}},
+    }, ["files"]),
+    "fn": t_delegate_parallel,
+}
+
 
 def toolset(write=True, delegate=True):
     tools = list(READ_TOOLS)
@@ -896,6 +969,7 @@ def toolset(write=True, delegate=True):
         tools += WRITE_TOOLS
         if delegate and (os.environ.get("WORKER_MODEL") or "").strip():
             tools.append(DELEGATE_TOOL)
+            tools.append(DELEGATE_PARALLEL_TOOL)
     return tools
 
 
