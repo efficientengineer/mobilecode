@@ -28,11 +28,20 @@ window.nativeReject = (id, msg) => {
 };
 window.nativeEvent = (type, payload) => {
   if (type === "speech-final") {
-    if (payload && payload.trim()) submit(payload.trim());
+    // Dictate into the box — do NOT auto-submit. Keep speaking to add more.
+    if (payload && payload.trim()) {
+      const box = $("#input");
+      box.value = (box.value ? box.value.trim() + " " : "") + payload.trim();
+      box.dispatchEvent(new Event("input"));
+      box.focus();
+    }
+    setStatus("");
   } else if (type === "status") {
     setStatus(payload);
   }
 };
+
+let currentMode = "auto";
 
 // --- DOM helpers ---------------------------------------------------------
 const $ = (s) => document.querySelector(s);
@@ -64,15 +73,35 @@ async function loadHistory() {
 // --- Submit (typed or spoken) -------------------------------------------
 async function submit(task) {
   bubble(task, "user");
-  setStatus("Thinking…");
+  setStatus(currentMode === "plan" ? "Planning…" : "Thinking…");
   try {
-    const r = await call("agent.run", { task });
+    const r = await call("agent.run", { task, mode: currentMode });
     bubble(r.text || "(no output)", "agent");
     call("speak", { text: (r.text || "").split("\n")[0] });
+    if (currentMode === "plan") addApprove();
   } catch (e) {
     bubble("Error: " + e.message, "agent");
   }
   setStatus("");
+}
+
+function addApprove() {
+  const btn = document.createElement("button");
+  btn.className = "approve";
+  btn.textContent = "✓ Approve & build";
+  btn.onclick = async () => {
+    btn.disabled = true;
+    bubble("Building the plan…", "sys");
+    try {
+      const r = await call("plan.approve");
+      bubble(r.text || "done", "agent");
+    } catch (e) {
+      bubble("Approve failed: " + e.message, "sys");
+    }
+    btn.remove();
+  };
+  chat.appendChild(btn);
+  chat.scrollTop = chat.scrollHeight;
 }
 
 // --- Simple action runner (git etc.) ------------------------------------
@@ -295,6 +324,13 @@ $("#input").addEventListener("input", (e) => {
   e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
 });
 $("#micBtn").onclick = () => { setStatus("Listening…"); call("listen"); };
+document.querySelectorAll(".mode").forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll(".mode").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    currentMode = b.dataset.mode;
+  };
+});
 
 // Boot
 (async function () {

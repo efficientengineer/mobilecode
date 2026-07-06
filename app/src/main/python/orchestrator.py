@@ -180,7 +180,11 @@ def _plan_with_lead(task: str, root: Path) -> dict:
     )
     context = os.environ.get("AGENT_CONTEXT", "").strip()
     context_block = f"RECENT CONVERSATION:\n{context}\n\n" if context else ""
+    mode = os.environ.get("AGENT_MODE", "auto").strip().lower()
+    nudge = ("The user explicitly requested file changes — use mode \"edit\" "
+             "and produce concrete edits.\n\n") if mode in ("code", "plan") else ""
     user = (
+        nudge +
         context_block +
         f"TASK:\n{task}\n\n"
         f"EXISTING FILES ({len(file_list)}):\n" + "\n".join(file_list)
@@ -265,42 +269,108 @@ def _commit(root: Path, message: str) -> str:
     return commit_id.decode() if isinstance(commit_id, bytes) else str(commit_id)
 
 
+# --- Modes ---------------------------------------------------------------
+
+def _chat_reply(task: str) -> str:
+    """Plain conversational answer — no files, no commit."""
+    context = os.environ.get("AGENT_CONTEXT", "").strip()
+    system = ("You are a helpful coding assistant. Answer conversationally and "
+              "concisely. Do not create or modify files.")
+    user = (f"RECENT CONVERSATION:\n{context}\n\n" if context else "") + task
+    return _call(LEAD_MODEL, system, user)
+
+
+def _plan_path() -> Path:
+    return Path(os.environ.get("HOME", "/tmp")) / ".pending_plan.json"
+
+
+def _format_plan(plan: dict) -> str:
+    summary = plan.get("summary", "(plan)")
+    edits = plan.get("edits", [])
+    lines = ["PLAN: " + summary, ""]
+    for i, e in enumerate(edits, 1):
+        lines.append(f"{i}. {e.get('path','?')}")
+        lines.append(f"   {e.get('instruction','')}")
+    lines.append("")
+    lines.append("Approve to build these changes, or refine the plan.")
+    return "\n".join(lines)
+
+
+def _execute_edits(plan: dict, root: Path) -> str:
+    edits = plan.get("edits", [])
+    summary = plan.get("summary", "(no summary)")
+    changed = []
+    for edit in edits:
+        try:
+            changed.append(_edit_with_worker(edit, root))
+        except Exception as e:
+            changed.append(f"{edit.get('path','?')} [FAILED: {e}]")
+    message = _commit_message(summary, changed)
+    commit_id = _commit(root, message)[:8]
+    lines = [f"Done: {summary}", f"Files changed: {len(changed)}"]
+    lines += [f"  - {c}" for c in changed]
+    lines.append(f"Committed {commit_id}: {message}")
+    return "\n".join(lines)
+
+
 # --- Public entry point (called from Kotlin) -----------------------------
 
 def run_task(task: str) -> str:
     """
-    Full pipeline for one spoken instruction.
-    Returns a human-readable summary string for display + TTS.
+    Handle one turn. Mode comes from env AGENT_MODE:
+      chat  — just reply
+      code  — always make changes
+      plan  — produce a plan and stash it for approval (no writes)
+      auto  — let the model decide chat vs edit (default)
     """
     try:
         root = _workspace()
+        mode = os.environ.get("AGENT_MODE", "auto").strip().lower()
+
+        if mode == "chat":
+            return _chat_reply(task)
+
         plan = _plan_with_lead(task, root)
         edits = plan.get("edits", [])
 
-        # Conversational turn: reply in words, touch no files, no commit.
-        if plan.get("mode") == "chat" or not edits:
-            reply = plan.get("reply") or plan.get("summary") or "(no reply)"
-            return reply
-
-        summary = plan.get("summary", "(no summary)")
-        changed = []
-        for edit in edits:
+        if mode == "plan":
+            if not edits:
+                # Nothing to build — treat as a normal reply.
+                return plan.get("reply") or _chat_reply(task)
             try:
-                changed.append(_edit_with_worker(edit, root))
-            except Exception as e:
-                changed.append(f"{edit.get('path','?')} [FAILED: {e}]")
+                _plan_path().write_text(json.dumps(plan))
+            except Exception:
+                pass
+            return _format_plan(plan)
 
-        message = _commit_message(summary, changed)
-        commit_id = _commit(root, message)[:8]
+        if mode != "code":
+            # auto: honour the model's chat/edit decision.
+            if plan.get("mode") == "chat" or not edits:
+                return plan.get("reply") or plan.get("summary") or "(no reply)"
 
-        lines = [f"Done: {summary}",
-                 f"Files changed: {len(changed)}"]
-        lines += [f"  - {c}" for c in changed]
-        lines.append(f"Committed {commit_id}: {message}")
-        return "\n".join(lines)
+        if not edits:
+            return plan.get("reply") or "(nothing to change)"
+        return _execute_edits(plan, root)
 
     except Exception:
         return "Error during task:\n" + traceback.format_exc()
+
+
+def execute_plan() -> str:
+    """Build the previously-stashed plan (plan-mode approval)."""
+    try:
+        p = _plan_path()
+        if not p.exists():
+            return "No pending plan to approve."
+        plan = json.loads(p.read_text())
+        result = _execute_edits(plan, _workspace())
+        try:
+            p.unlink()
+        except Exception:
+            pass
+        return result
+    except Exception:
+        return "Approve failed:\n" + traceback.format_exc()
 
 
 def commit_now() -> str:

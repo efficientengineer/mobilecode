@@ -27,3 +27,7 @@ def _load_orchestrator():
 
 def run_task(task: str) -> str:
     return _load_orchestrator().run_task(task)
+
+
+def execute_plan() -> str:
+    return _load_orchestrator().execute_plan()

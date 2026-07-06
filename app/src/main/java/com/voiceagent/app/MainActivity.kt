@@ -191,10 +191,18 @@ class MainActivity : AppCompatActivity() {
         "agent.run" -> withContext(Dispatchers.IO) {
             val id = sessions.activeId()
             val task = arg.getString("task")
+            val mode = arg.optString("mode", "auto")
             sessions.appendTurn(id, "user", task)
-            py("os").get("environ")?.callAttr("__setitem__", "AGENT_CONTEXT", sessions.recentContext(id))
+            val env = py("os").get("environ")
+            env?.callAttr("__setitem__", "AGENT_CONTEXT", sessions.recentContext(id))
+            env?.callAttr("__setitem__", "AGENT_MODE", mode)
             val result = py("agent_loader").callAttr("run_task", task).toString()
             sessions.appendTurn(id, "agent", result)
+            text(result)
+        }
+        "plan.approve" -> withContext(Dispatchers.IO) {
+            val result = py("agent_loader").callAttr("execute_plan").toString()
+            sessions.appendTurn(sessions.activeId(), "agent", result)
             text(result)
         }
         "context.get", "session.turns2" -> withContext(Dispatchers.IO) {
