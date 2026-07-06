@@ -129,7 +129,12 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
   margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
 .list-item:active { background: var(--border); }
 .list-item .sub { color: var(--muted); font-size: 12px; }
-.filerow { padding: 11px 12px; border-bottom: 1px solid var(--border); }
+.pinbtn { background: var(--panel2); color: var(--accent); border: 1px solid var(--border);
+  border-radius: 10px; padding: 6px 10px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pinbtn.on { background: #3a1414; color: #f87171; border-color: #7f1d1d; }
+.filerow { padding: 11px 12px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.filerow span[data-e] { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .filerow:active { background: var(--panel2); }
 .dir { font-weight: 600; }
 pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--bg);

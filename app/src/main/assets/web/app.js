@@ -435,14 +435,16 @@ const actions = {
     let pinned = [];
     try { pinned = JSON.parse((await call("orch", { fn: "list_context_files" })).text); } catch (e) {}
     const body = (pinned.length
-      ? pinned.map((p) => `<div class="list-item" data-unpin="${p}"><span>${p}</span><span class="sub">tap to remove</span></div>`).join("")
+      ? pinned.map((p) => `<div class="list-item"><span>${escapeHtml(p)}</span><button class="pinbtn on" data-unpin="${escapeHtml(p)}">Remove</button></div>`).join("")
       : `<div class="hint">No files attached.</div>`) +
-      `<div class="hint">Add files from the Files screen (📌), so the model reads them as context.</div>`;
+      `<div class="hint">These files are sent to the model as context every turn. Add more from the Files screen.</div>`;
     modal("Attached files", body);
     $("#modalBody").querySelectorAll("[data-unpin]").forEach((el) => {
       el.onclick = async () => {
-        await call("orch", { fn: "remove_context_file", arg: el.dataset.unpin });
-        closeSheet("#modal"); refreshStats();
+        const r = await call("orch", { fn: "remove_context_file", arg: el.dataset.unpin });
+        bubble(r.text, "sys");
+        refreshStats();
+        actions.contextFiles(); // re-render remaining
       };
     });
   },
@@ -578,6 +580,8 @@ function confirmClone(full) {
 async function filesModal(path) {
   let all = [];
   try { all = JSON.parse((await call("orch", { fn: "browse_files" })).text); } catch (e) {}
+  let pinned = [];
+  try { pinned = JSON.parse((await call("orch", { fn: "list_context_files" })).text); } catch (e) {}
   const dirs = new Set(); const files = [];
   all.forEach((p) => {
     if (!p.startsWith(path)) return;
@@ -589,11 +593,15 @@ async function filesModal(path) {
   const up = path ? `<div class="filerow dir" data-up="1">.. (up)</div>` : "";
   const body = up + (entries.length
     ? entries.map((e) => {
-        const pin = e.endsWith("/") ? "" : `<b data-pin="${path + e}" title="Attach to context"> 📌</b>`;
-        return `<div class="filerow ${e.endsWith("/") ? "dir" : ""}"><span data-e="${e}">${e}</span>${pin}</div>`;
+        if (e.endsWith("/")) {
+          return `<div class="filerow dir"><span data-e="${e}">${e}</span></div>`;
+        }
+        const on = pinned.includes(path + e);
+        const btn = `<button class="pinbtn ${on ? "on" : ""}" data-pin="${path + e}">${on ? "Remove from context" : "Add to context"}</button>`;
+        return `<div class="filerow"><span data-e="${e}">${on ? "📎 " : ""}${e}</span>${btn}</div>`;
       }).join("")
     : `<div class="hint">(empty)</div>`);
-  modal("/" + path, body);
+  modal("/" + path, body + `<div class="hint">📎 = sent to the model as context every turn. Tap "Remove from context" to stop sending a file.</div>`);
   $("#modalBody").querySelectorAll("[data-e]").forEach((el) => {
     el.onclick = () => {
       const e = el.dataset.e;
@@ -604,9 +612,12 @@ async function filesModal(path) {
   $("#modalBody").querySelectorAll("[data-pin]").forEach((el) => {
     el.onclick = async (ev) => {
       ev.stopPropagation();
-      const r = await call("orch", { fn: "add_context_file", arg: el.dataset.pin });
+      const p = el.dataset.pin;
+      const on = pinned.includes(p);
+      const r = await call("orch", { fn: on ? "remove_context_file" : "add_context_file", arg: p });
       bubble(r.text, "sys");
       refreshStats();
+      filesModal(path); // re-render to reflect new state
     };
   });
   const upEl = $("#modalBody").querySelector("[data-up]");
