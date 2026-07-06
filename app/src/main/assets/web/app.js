@@ -26,12 +26,17 @@ window.nativeReject = (id, msg) => {
   const p = _pending[id]; if (!p) return; delete _pending[id];
   p.reject(new Error(msg || "error"));
 };
+let _dictBase = "";
 window.nativeEvent = (type, payload) => {
-  if (type === "speech-final") {
-    // Dictate into the box — do NOT auto-submit. Keep speaking to add more.
+  const box = $("#input");
+  if (type === "speech-partial") {
+    box.value = _dictBase + (_dictBase ? " " : "") + (payload || "");
+    box.dispatchEvent(new Event("input"));
+  } else if (type === "speech-final") {
+    // Commit the utterance into the box; do NOT submit. Keep dictating.
     if (payload && payload.trim()) {
-      const box = $("#input");
-      box.value = (box.value ? box.value.trim() + " " : "") + payload.trim();
+      box.value = _dictBase + (_dictBase ? " " : "") + payload.trim();
+      _dictBase = box.value;
       box.dispatchEvent(new Event("input"));
       box.focus();
     }
@@ -66,8 +71,30 @@ async function refreshHeader() {
 
 async function loadHistory() {
   chat.innerHTML = "";
-  const r = await call("session.turns");
-  (r.turns || []).forEach((t) => bubble(t.text, t.role === "user" ? "user" : "agent"));
+  try {
+    const r = JSON.parse((await call("orch", { fn: "get_discussion" })).text);
+    (r.turns || []).forEach((t) => bubble(t.text, t.role === "user" ? "user" : "agent"));
+  } catch (e) {}
+  refreshStats();
+}
+
+// --- Context + balance stats -------------------------------------------
+let _balStart = null;
+async function refreshStats() {
+  try {
+    const c = JSON.parse((await call("orch", { fn: "context_counts" })).text);
+    let s = `ctx ~${(c.outlineTokens + c.discussionTokens + (c.memoryTokens || 0))}t ` +
+            `(outline ${c.outlineTokens} · disc ${c.discussionTokens} · ${c.turns} turns)`;
+    if (c.caveman) s += " · 🪨";
+    const b = JSON.parse((await call("py.call", { module: "git_ops", fn: "balance_value" })).text);
+    if (b.deepseek != null) {
+      if (_balStart == null) _balStart = b.deepseek;
+      const used = (_balStart - b.deepseek);
+      s += ` · bal ${b.deepseek.toFixed(2)}${b.currency}`;
+      if (used > 0) s += ` (−${used.toFixed(2)} this run)`;
+    }
+    $("#stats").textContent = s;
+  } catch (e) {}
 }
 
 // --- Submit (typed or spoken) -------------------------------------------
@@ -83,6 +110,12 @@ async function submit(task) {
     bubble("Error: " + e.message, "agent");
   }
   setStatus("");
+  refreshStats();
+}
+
+function updateCavemanLabel(on) {
+  const b = document.querySelector('[data-act="caveman"]');
+  if (b) b.textContent = "Caveman: " + (on ? "on" : "off");
 }
 
 function addApprove() {
@@ -148,32 +181,45 @@ const actions = {
     try { await call("updateUI"); } catch (e) { bubble("Update UI failed: " + e.message, "sys"); }
   },
   async viewContext() {
-    const r = await call("context.get");
-    const turns = r.turns || [];
+    let turns = [];
+    try { turns = JSON.parse((await call("orch", { fn: "get_discussion" })).text).turns || []; } catch (e) {}
     const body = turns.length
       ? turns.map((t) =>
           `<div class="list-item"><span><b>${t.role}</b><div class="sub">${escapeHtml(t.text).slice(0, 400)}</div></span></div>`
         ).join("")
       : `<div class="hint">(no context yet)</div>`;
-    modal("Context (" + turns.length + " turns)", body);
+    modal("Discussion (" + turns.length + " turns)", body);
   },
   trimContext() {
     modal("Trim context",
       `<label>Keep the last N turns</label><input id="keepN" type="text" value="10" />
-       <div class="hint">Older turns are dropped from this session's memory.</div>`,
+       <div class="hint">Older turns are dropped from this project's discussion.</div>`,
       async () => {
         const n = parseInt($("#keepN").value.trim(), 10) || 10;
-        await runText("Trim", "context.trim", { keep: n });
+        bubble((await call("orch", { fn: "trim_discussion", arg: String(n) })).text, "sys");
         loadHistory();
       });
   },
   clearContext() {
     modal("Clear context",
-      `<div class="hint">Erase this session's conversation memory? The repo/files are untouched.</div>`,
+      `<div class="hint">Erase this project's discussion memory? Files and outline are untouched.</div>`,
       async () => {
-        await runText("Clear", "context.clear");
+        bubble((await call("orch", { fn: "clear_discussion" })).text, "sys");
         loadHistory();
       });
+  },
+  async buildOutline() {
+    bubble("Building outline from the project files…", "sys");
+    bubble((await call("orch", { fn: "build_outline" })).text, "sys");
+    refreshStats();
+  },
+  async caveman() {
+    const cur = (await call("orch", { fn: "get_caveman" })).text.trim();
+    const next = cur === "1" ? "0" : "1";
+    const r = await call("orch", { fn: "set_caveman", arg: next });
+    bubble(r.text, "sys");
+    updateCavemanLabel(next === "1");
+    refreshStats();
   },
   newRepo() {
     modal("New GitHub repo",
@@ -323,7 +369,7 @@ $("#input").addEventListener("input", (e) => {
   e.target.style.height = "auto";
   e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
 });
-$("#micBtn").onclick = () => { setStatus("Listening…"); call("listen"); };
+$("#micBtn").onclick = () => { _dictBase = $("#input").value.trim(); setStatus("Listening…"); call("listen"); };
 document.querySelectorAll(".mode").forEach((b) => {
   b.onclick = () => {
     document.querySelectorAll(".mode").forEach((x) => x.classList.remove("active"));
@@ -335,5 +381,6 @@ document.querySelectorAll(".mode").forEach((b) => {
 // Boot
 (async function () {
   try { await refreshHeader(); await loadHistory(); } catch (e) {}
-  bubble("Ready. Type or tap 🎤 to speak a task.", "sys");
+  try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
+  bubble("Ready. Type or tap 🎤 to dictate a task.", "sys");
 })();

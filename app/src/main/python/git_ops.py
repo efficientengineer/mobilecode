@@ -174,7 +174,7 @@ def list_tree() -> str:
     root = _workspace()
     files = []
     for p in sorted(root.rglob("*")):
-        if ".git" in p.parts:
+        if ".git" in p.parts or ".agent" in p.parts:
             continue
         if p.is_file():
             files.append(str(p.relative_to(root)))
@@ -250,6 +250,28 @@ def balances() -> str:
         lines.append("DeepSeek: no key set")
     lines.append("Anthropic: balance not available via API")
     return "\n".join(lines)
+
+
+def balance_value(_=None) -> str:
+    """Structured balance for the UI. JSON: {deepseek: number|null, currency}."""
+    import urllib.request
+    ds_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    out = {"deepseek": None, "currency": ""}
+    if ds_key:
+        try:
+            req = urllib.request.Request(
+                "https://api.deepseek.com/user/balance",
+                headers={"Authorization": f"Bearer {ds_key}", "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=20) as r:
+                info = json.loads(r.read().decode())
+            infos = info.get("balance_infos", [])
+            if infos:
+                out["deepseek"] = float(infos[0].get("total_balance", 0) or 0)
+                out["currency"] = infos[0].get("currency", "")
+        except Exception:
+            pass
+    return json.dumps(out)
 
 
 def read_file(rel: str) -> str:

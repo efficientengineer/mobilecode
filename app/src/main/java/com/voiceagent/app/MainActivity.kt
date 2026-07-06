@@ -189,21 +189,18 @@ class MainActivity : AppCompatActivity() {
             JSONObject().put("ok", true)
         }
         "agent.run" -> withContext(Dispatchers.IO) {
-            val id = sessions.activeId()
-            val task = arg.getString("task")
-            val mode = arg.optString("mode", "auto")
-            sessions.appendTurn(id, "user", task)
-            val env = py("os").get("environ")
-            env?.callAttr("__setitem__", "AGENT_CONTEXT", sessions.recentContext(id))
-            env?.callAttr("__setitem__", "AGENT_MODE", mode)
-            val result = py("agent_loader").callAttr("run_task", task).toString()
-            sessions.appendTurn(id, "agent", result)
-            text(result)
+            // The orchestrator now owns the discussion/context (in the project
+            // folder), so we just set the mode and run.
+            py("os").get("environ")?.callAttr("__setitem__", "AGENT_MODE", arg.optString("mode", "auto"))
+            text(py("agent_loader").callAttr("run_task", arg.getString("task")).toString())
         }
         "plan.approve" -> withContext(Dispatchers.IO) {
-            val result = py("agent_loader").callAttr("execute_plan").toString()
-            sessions.appendTurn(sessions.activeId(), "agent", result)
-            text(result)
+            text(py("agent_loader").callAttr("execute_plan").toString())
+        }
+        "orch" -> withContext(Dispatchers.IO) {
+            // Generic call into an orchestrator function (OTA-updatable), so
+            // new context/project features ship without a native change.
+            text(py("agent_loader").callAttr("op", arg.getString("fn"), arg.optString("arg", "")).toString())
         }
         "context.get", "session.turns2" -> withContext(Dispatchers.IO) {
             val arr = JSONArray()
@@ -383,17 +380,22 @@ class MainActivity : AppCompatActivity() {
                 }
                 override fun onError(error: Int) { event("status", "") }
                 override fun onReadyForSpeech(params: Bundle?) { event("status", "Listening…") }
-                override fun onEndOfSpeech() { event("status", "Thinking…") }
+                override fun onEndOfSpeech() { event("status", "") }
                 override fun onBeginningOfSpeech() {}
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onPartialResults(partialResults: Bundle?) {
+                    val t = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()?.trim().orEmpty()
+                    if (t.isNotEmpty()) event("speech-partial", t)
+                }
                 override fun onEvent(eventType: Int, params: Bundle?) {}
             })
         }
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         }
         speech?.startListening(intent)
     }

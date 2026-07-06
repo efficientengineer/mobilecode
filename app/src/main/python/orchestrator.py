@@ -64,7 +64,7 @@ def _list_repo_files(root: Path, max_files: int = 60) -> list[str]:
     """A shallow view of the repo so the lead model has context."""
     files = []
     for p in root.rglob("*"):
-        if ".git" in p.parts:
+        if ".git" in p.parts or ".agent" in p.parts:
             continue
         if p.is_file():
             files.append(str(p.relative_to(root)))
@@ -178,8 +178,8 @@ def _plan_with_lead(task: str, root: Path) -> dict:
         "user is asking you to create or change code/files — set \"summary\" "
         "and one \"edit\" per file. When in doubt, prefer \"chat\"."
     )
-    context = os.environ.get("AGENT_CONTEXT", "").strip()
-    context_block = f"RECENT CONVERSATION:\n{context}\n\n" if context else ""
+    context = _full_context(task).strip()
+    context_block = f"{context}\n\n" if context else ""
     mode = os.environ.get("AGENT_MODE", "auto").strip().lower()
     nudge = ("The user explicitly requested file changes — use mode \"edit\" "
              "and produce concrete edits.\n\n") if mode in ("code", "plan") else ""
@@ -255,9 +255,9 @@ def _commit(root: Path, message: str) -> str:
     git_dir = root / ".git"
     if not git_dir.exists():
         porcelain.init(str(root))
-    # Stage everything that isn't in .git
+    # Stage everything that isn't in .git or the agent's private .agent dir
     for p in root.rglob("*"):
-        if ".git" in p.parts or not p.is_file():
+        if ".git" in p.parts or ".agent" in p.parts or not p.is_file():
             continue
         porcelain.add(str(root), paths=[str(p)])
     commit_id = porcelain.commit(
@@ -269,14 +269,176 @@ def _commit(root: Path, message: str) -> str:
     return commit_id.decode() if isinstance(commit_id, bytes) else str(commit_id)
 
 
+# --- Project context: memory, outline, discussion, caveman ---------------
+
+import re as _re
+
+
+def _agent_dir(root: Path = None) -> Path:
+    d = (root or _workspace()) / ".agent"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _discussion_file(root: Path = None) -> Path:
+    return _agent_dir(root) / "discussion.jsonl"
+
+
+def _outline_file(root: Path = None) -> Path:
+    return _agent_dir(root) / "outline.md"
+
+
+def _caveman_on() -> bool:
+    return os.environ.get("AGENT_CAVEMAN", "0") == "1" or (_agent_dir() / "caveman").exists()
+
+
+# Conservative filler set: articles, auxiliaries, politeness, and connectors.
+# Content words and pronouns are kept so meaning survives.
+_FILLER = {
+    "a", "an", "the", "is", "are", "am", "was", "were", "be", "been", "being",
+    "to", "of", "for", "please", "kindly", "just", "really", "very", "that",
+    "this", "so", "then", "and", "but", "with", "as", "at", "in", "on",
+    "would", "could", "should", "will", "shall", "do", "does", "did",
+}
+
+
+def _caveman(text: str) -> str:
+    if not text:
+        return text
+    def strip_line(line: str) -> str:
+        toks = _re.findall(r"[A-Za-z']+|[^A-Za-z'\s]", line)
+        out = [t for t in toks if t.lower() not in _FILLER]
+        return " ".join(out)
+    return "\n".join(strip_line(l) for l in text.splitlines())
+
+
+def _append_discussion(role: str, text: str) -> None:
+    rec = {"role": role, "text": text, "cave": _caveman(text)}
+    with open(_discussion_file(), "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
+def _read_discussion() -> list:
+    fp = _discussion_file()
+    if not fp.exists():
+        return []
+    out = []
+    for line in fp.read_text(encoding="utf-8").splitlines():
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            pass
+    return out
+
+
+def _full_context(task_hint: str = "") -> str:
+    """Assemble the per-prompt context: memory + outline + recent discussion."""
+    root = _workspace()
+    parts = []
+    claude = _read_file(root, "CLAUDE.md")
+    if claude:
+        parts.append("PROJECT MEMORY (CLAUDE.md):\n" + claude)
+    outline = _outline_file(root)
+    if outline.exists():
+        parts.append("PROJECT OUTLINE:\n" + outline.read_text(encoding="utf-8"))
+    disc = _read_discussion()[-12:]
+    if disc:
+        cave = _caveman_on()
+        lines = [f"{d['role']}: {d.get('cave' if cave else 'text', '')}" for d in disc]
+        parts.append("DISCUSSION SO FAR:\n" + "\n".join(lines))
+    return "\n\n".join(parts)
+
+
+# --- op targets (called from the web via agent_loader.op) ----------------
+
+def get_discussion(_=None) -> str:
+    """JSON {turns:[{role,text}]} of the original (display) messages."""
+    turns = [{"role": d["role"], "text": d.get("text", "")} for d in _read_discussion()]
+    return json.dumps({"turns": turns})
+
+
+def clear_discussion(_=None) -> str:
+    fp = _discussion_file()
+    if fp.exists():
+        fp.unlink()
+    return "Context cleared"
+
+
+def trim_discussion(keep="10") -> str:
+    try:
+        k = int(str(keep))
+    except Exception:
+        k = 10
+    fp = _discussion_file()
+    if not fp.exists():
+        return "Nothing to trim"
+    lines = fp.read_text(encoding="utf-8").splitlines()
+    if len(lines) > k:
+        fp.write_text("\n".join(lines[-k:]) + "\n", encoding="utf-8")
+    return f"Trimmed to last {k} turns"
+
+
+def context_counts(_=None) -> str:
+    outline = _outline_file()
+    o = outline.read_text(encoding="utf-8") if outline.exists() else ""
+    cave = _caveman_on()
+    disc = _read_discussion()
+    d = "\n".join(x.get("cave" if cave else "text", "") for x in disc)
+    claude = _read_file(_workspace(), "CLAUDE.md")
+
+    def toks(s):
+        return len(s) // 4
+    return json.dumps({
+        "outlineChars": len(o), "outlineTokens": toks(o),
+        "discussionChars": len(d), "discussionTokens": toks(d),
+        "memoryTokens": toks(claude), "turns": len(disc), "caveman": cave,
+    })
+
+
+def set_caveman(flag="1") -> str:
+    on = str(flag) in ("1", "true", "True", "on")
+    marker = _agent_dir() / "caveman"
+    if on:
+        marker.write_text("1")
+    elif marker.exists():
+        marker.unlink()
+    os.environ["AGENT_CAVEMAN"] = "1" if on else "0"
+    return "Caveman mode " + ("on" if on else "off")
+
+
+def get_caveman(_=None) -> str:
+    return "1" if _caveman_on() else "0"
+
+
+def build_outline(_=None) -> str:
+    """Read the project folder and (re)generate .agent/outline.md."""
+    try:
+        root = _workspace()
+        files = _list_repo_files(root, max_files=120)
+        snippets = []
+        for f in files[:40]:
+            c = _read_file(root, f)
+            if c and len(c) < 4000:
+                snippets.append(f"### {f}\n{c[:1500]}")
+        system = ("You are documenting a software project. Produce a concise "
+                  "outline in markdown covering: purpose, structure, key files, "
+                  "and open TODOs. Output markdown only, no fences.")
+        user = "FILES:\n" + "\n".join(files) + "\n\nSNIPPETS:\n" + "\n\n".join(snippets)
+        md = _call(LEAD_MODEL, system, user, max_tokens=1500)
+        _outline_file(root).write_text(md, encoding="utf-8")
+        return f"Outline updated ({len(md)} chars)"
+    except Exception:
+        return "Outline failed:\n" + traceback.format_exc()
+
+
 # --- Modes ---------------------------------------------------------------
 
 def _chat_reply(task: str) -> str:
     """Plain conversational answer — no files, no commit."""
-    context = os.environ.get("AGENT_CONTEXT", "").strip()
+    context = _full_context()
     system = ("You are a helpful coding assistant. Answer conversationally and "
               "concisely. Do not create or modify files.")
-    user = (f"RECENT CONVERSATION:\n{context}\n\n" if context else "") + task
+    user = (f"{context}\n\n" if context else "") + "USER: " + task
     return _call(LEAD_MODEL, system, user)
 
 
@@ -326,31 +488,34 @@ def run_task(task: str) -> str:
     try:
         root = _workspace()
         mode = os.environ.get("AGENT_MODE", "auto").strip().lower()
+        _append_discussion("user", task)
 
         if mode == "chat":
-            return _chat_reply(task)
+            reply = _chat_reply(task)
+            _append_discussion("agent", reply)
+            return reply
 
         plan = _plan_with_lead(task, root)
         edits = plan.get("edits", [])
 
         if mode == "plan":
             if not edits:
-                # Nothing to build — treat as a normal reply.
-                return plan.get("reply") or _chat_reply(task)
-            try:
-                _plan_path().write_text(json.dumps(plan))
-            except Exception:
-                pass
-            return _format_plan(plan)
+                result = plan.get("reply") or _chat_reply(task)
+            else:
+                try:
+                    _plan_path().write_text(json.dumps(plan))
+                except Exception:
+                    pass
+                result = _format_plan(plan)
+        elif mode != "code" and (plan.get("mode") == "chat" or not edits):
+            result = plan.get("reply") or plan.get("summary") or "(no reply)"
+        elif not edits:
+            result = plan.get("reply") or "(nothing to change)"
+        else:
+            result = _execute_edits(plan, root)
 
-        if mode != "code":
-            # auto: honour the model's chat/edit decision.
-            if plan.get("mode") == "chat" or not edits:
-                return plan.get("reply") or plan.get("summary") or "(no reply)"
-
-        if not edits:
-            return plan.get("reply") or "(nothing to change)"
-        return _execute_edits(plan, root)
+        _append_discussion("agent", result)
+        return result
 
     except Exception:
         return "Error during task:\n" + traceback.format_exc()
@@ -368,6 +533,7 @@ def execute_plan() -> str:
             p.unlink()
         except Exception:
             pass
+        _append_discussion("agent", result)
         return result
     except Exception:
         return "Approve failed:\n" + traceback.format_exc()

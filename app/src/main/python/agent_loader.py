@@ -31,3 +31,12 @@ def run_task(task: str) -> str:
 
 def execute_plan() -> str:
     return _load_orchestrator().execute_plan()
+
+
+def op(name: str, arg: str = "") -> str:
+    """Generic OTA entry point: call orchestrator.<name>(arg?) from the web."""
+    mod = _load_orchestrator()
+    fn = getattr(mod, name, None)
+    if fn is None:
+        return f"no such op: {name}"
+    return fn(arg) if arg != "" else fn()
