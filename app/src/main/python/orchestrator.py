@@ -990,12 +990,17 @@ def _finish_run(task: str, res: dict, run_id: str) -> str:
 # --- Modes ---------------------------------------------------------------
 
 def _chat_reply(task: str) -> str:
-    """Plain conversational answer — no files, no commit."""
+    """Plain conversational answer — no files, no commit. Streams deltas to the
+    run-events file so the UI shows the reply as it is generated."""
     context = _full_context(task, "chat")
     system = ("You are a helpful coding assistant. Answer conversationally and "
               "concisely. Do not create or modify files.")
     user = (f"{context}\n\n" if context else "") + "USER: " + task
-    return _call(LEAD_MODEL, system, user)
+    text, reason = llm.chat_text(LEAD_MODEL, system, user,
+                                 on_delta=lambda c: _emit("delta", text=c))
+    global _LAST_REASON
+    _LAST_REASON = reason
+    return text
 
 
 def ask(task="") -> str:

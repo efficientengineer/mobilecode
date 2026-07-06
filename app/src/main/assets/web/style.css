@@ -180,3 +180,12 @@ pre.filebody.diff { font-size: 12px; }
 .todo-item { padding: 2px 0; }
 .todo-item.completed { opacity: .55; text-decoration: line-through; }
 .todo-item.in_progress { font-weight: 600; }
+
+/* Markdown rendering inside agent bubbles */
+.bubble.agent code { font-family: monospace; font-size: 13px; background: var(--bg);
+  padding: 1px 4px; border-radius: 4px; }
+.bubble.agent pre.md-pre { background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px; margin: 6px 0; overflow-x: auto; }
+.bubble.agent pre.md-pre code { background: none; padding: 0; font-size: 12.5px;
+  white-space: pre; }
+.bubble.agent strong { font-weight: 700; }

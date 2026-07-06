@@ -60,7 +60,10 @@ function estTokens(s) {
 function bubble(text, kind, runId, ctxText) {
   const d = document.createElement("div");
   d.className = "bubble " + kind;
-  d.textContent = text;
+  // Agent replies render markdown (code blocks, bold, lists); user/sys stay
+  // plain text — safest, and there's nothing to format.
+  if (kind === "agent") d.innerHTML = renderMarkdown(text);
+  else d.textContent = text;
   if (runId) {
     d.classList.add("tappable");
     d.onclick = () => openRun(runId);
@@ -917,6 +920,38 @@ async function showFile(rel) {
 
 function escapeHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Minimal, XSS-safe markdown → HTML for agent replies. Everything is HTML-
+// escaped first, and only a fixed set of safe tags is emitted (pre/code/strong/
+// em/br). Links are rendered as plain text (no anchors) so a model reply can
+// never navigate the WebView or run script.
+function renderInline(seg) {
+  let s = escapeHtml(seg);
+  s = s.replace(/`([^`\n]+)`/g, (m, c) => "<code>" + c + "</code>");
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  s = s.replace(/^\s*#{1,6}\s+(.+)$/gm, "<strong>$1</strong>");
+  s = s.replace(/^\s*[-*]\s+(.+)$/gm, "• $1");
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1 ($2)");
+  return s.replace(/\n/g, "<br>");
+}
+function renderMarkdown(src) {
+  const parts = String(src == null ? "" : src).split("```");
+  let html = "";
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 1) {
+      let code = parts[i];
+      const nl = code.indexOf("\n");
+      if (nl >= 0 && /^[a-z0-9+#.\-]*$/i.test(code.slice(0, nl).trim())) {
+        code = code.slice(nl + 1); // drop the ```lang label line
+      }
+      html += '<pre class="md-pre"><code>' + escapeHtml(code.replace(/\s+$/, "")) + "</code></pre>";
+    } else {
+      html += renderInline(parts[i]);
+    }
+  }
+  return html;
 }
 
 // --- Recently-used models (local only, no token cost) -------------------
