@@ -20,6 +20,11 @@ import { movements, twinStick, platformer, autoRun } from './engine/control/move
 import { weapons, single, shotgun, burst, radial } from './engine/control/weapons.js';
 import { aim } from './engine/control/aim.js';
 import { behaviors, chase, flee, orbit, keepDistance, patrol, follow, guard } from './engine/control/behaviors.js';
+import { spawners } from './engine/control/spawners.js';
+import { pickups } from './engine/control/pickups.js';
+import { hazards } from './engine/control/hazards.js';
+import { difficulty } from './engine/control/difficulty.js';
+import { steering } from './engine/control/steering.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -190,5 +195,278 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   ctx.registries.enemies.flush(); ctx.signals.gameState.set('paused');
   const x0 = e.pos[0]; for (let i = 0; i < 5; i++) loop.step(1 / 60);
   check('paused: sim skipped, nothing moves', e.pos[0] === x0); }
+
+
+// ===== Round 1 components: spawners / pickups / hazards / difficulty / steering =====
+
+{
+  const { waves, endless, burst, boss, timed, chain } = spawners;
+// --- spawners (spawn directors) ---
+{
+  const mkApi = (liveRef) => {
+    const rec = { spawns: [], waves: [], cbs: [] };
+    return { rec,
+      count: () => liveRef.n,
+      spawn: (o) => rec.spawns.push(o),
+      setWave: (n) => { rec.waves.push(n); for (const c of rec.cbs) c(n); },
+      onWave: (cb) => rec.cbs.push(cb),
+      rng: { next: () => 0.5, range: (a, b) => (a + b) / 2, int: (a) => a } };
+  };
+
+  // waves: base batch on start, escalate when clear after delay
+  {
+    const live = { n: 0 }; const api = mkApi(live);
+    const d = waves({ base: 3, growth: 2, delay: 2 });
+    d(0.1, api);
+    check('waves spawns base on start', api.rec.spawns.length === 3);
+    check('waves announces wave 1', api.rec.waves[0] === 1);
+    live.n = 3; d(1, api);
+    check('waves holds while enemies alive', api.rec.spawns.length === 3);
+    live.n = 0; d(1, api);
+    check('waves waits out the delay', api.rec.spawns.length === 3);
+    d(1.5, api);
+    check('waves advances to wave 2', api.rec.waves[1] === 2);
+    check('waves wave2 size = base+growth', api.rec.spawns.length === 3 + 5);
+  }
+
+  // endless: rate trickle + long-frame catch-up + max cap
+  {
+    const live = { n: 0 }; const api = mkApi(live);
+    const d = endless({ rate: 2 });
+    d(0.4, api); check('endless waits for interval', api.rec.spawns.length === 0);
+    d(0.2, api); check('endless spawns at interval', api.rec.spawns.length === 1);
+    d(1.0, api); check('endless catches up long frame', api.rec.spawns.length === 3);
+    const live2 = { n: 5 }; const api2 = mkApi(live2);
+    endless({ rate: 100, max: 5 })(1, api2);
+    check('endless respects max', api2.rec.spawns.length === 0);
+  }
+
+  // burst: periodic clumps
+  {
+    const live = { n: 0 }; const api = mkApi(live);
+    const d = burst({ size: 4, every: 3 });
+    d(2.9, api); check('burst holds before period', api.rec.spawns.length === 0);
+    d(0.2, api); check('burst fires a clump', api.rec.spawns.length === 4);
+    d(3, api); check('burst fires again', api.rec.spawns.length === 8);
+  }
+
+  // timed: absolute schedule
+  {
+    const live = { n: 0 }; const api = mkApi(live);
+    const d = timed({ schedule: [{ at: 0, make: 'a' }, { at: 2, count: 3, make: 'b' }] });
+    d(0, api); check('timed fires at t=0', api.rec.spawns.length === 1);
+    d(1, api); check('timed idle before next cue', api.rec.spawns.length === 1);
+    d(1.5, api); check('timed fires batch at t>=2', api.rec.spawns.length === 4);
+    check('timed forwards make', api.rec.spawns[1].make === 'b');
+  }
+
+  // boss: gated on wave via onWave, one-shot
+  {
+    const live = { n: 0 }; const api = mkApi(live);
+    const d = boss({ atWave: 3, make: 'BOSS', escort: 2 });
+    d(0, api);
+    api.setWave(1); d(0, api); check('boss waits for atWave', api.rec.spawns.length === 0);
+    api.setWave(3); d(0, api);
+    check('boss spawns boss+escort', api.rec.spawns.length === 3);
+    check('boss marks the boss', api.rec.spawns[0].boss === true && api.rec.spawns[0].make === 'BOSS');
+    d(0, api); check('boss spawns only once', api.rec.spawns.length === 3);
+  }
+
+  // chain: waves drives, boss watches the forwarded wave
+  {
+    const live = { n: 0 }; const api = mkApi(live);
+    const d = chain(waves({ base: 2, growth: 0, delay: 0 }), boss({ atWave: 2, make: 'B' }));
+    d(0, api); check('chain runs its child directors', api.rec.spawns.length === 2);
+    live.n = 0; d(0.1, api);
+    check('chain forwards wave to a boss', api.rec.spawns.some((s) => s.boss));
+  }
+
+  check('spawners bundle exports every director', ['waves', 'endless', 'burst', 'boss', 'timed', 'chain'].every((k) => typeof spawners[k] === 'function'));
+}
+}
+
+{
+  // pickups.js — effect components mutate signals/player and return a tag
+  const sig = (v) => { let x = v; return { get: () => x, set: (n) => { x = n; }, update(fn){ x = fn(x); } }; };
+
+  // health raises playerHealth, capped at 100
+  const hctx = { signals: { playerHealth: sig(90) } };
+  const htag = pickups.health({ amount: 25 }).apply(hctx, {});
+  check('pickups.health caps at 100', hctx.signals.playerHealth.get() === 100 && htag === 'heal');
+
+  // shield stashes a timer on the player, stacking by max
+  const sp = {};
+  pickups.shield({ duration: 5 }).apply({}, sp);
+  pickups.shield({ duration: 3 }).apply({}, sp);
+  check('pickups.shield keeps longer timer', sp.shield === 5);
+
+  // scoreBonus bumps the score signal
+  const cctx = { signals: { score: sig(50) } };
+  check('pickups.scoreBonus adds points', pickups.scoreBonus({ points: 100 }).apply(cctx, {}) === 'score' && cctx.signals.score.get() === 150);
+
+  // speedBoost stashes mult + timer for movement to read
+  const bp = {};
+  pickups.speedBoost({ mult: 2, duration: 4 }).apply({}, bp);
+  check('pickups.speedBoost stashes buff', bp.speedMult === 2 && bp.speedTimer === 4);
+
+  // weaponSwap swaps ctx.weapon
+  const wctx = { weapon: null }; const gun = { id: 1 };
+  pickups.weaponSwap({ weapon: gun }).apply(wctx, {});
+  check('pickups.weaponSwap sets ctx.weapon', wctx.weapon === gun);
+
+  // magnet stashes radius + timer
+  const mp = {};
+  pickups.magnet({ radius: 6, duration: 5 }).apply({}, mp);
+  check('pickups.magnet stashes radius', mp.magnetRadius === 6 && mp.magnetTimer === 5);
+
+  // extraLife bumps a lives signal and refills health
+  const lctx = { signals: { lives: sig(2), playerHealth: sig(10) } };
+  check('pickups.extraLife adds life + refills', pickups.extraLife().apply(lctx, {}) === 'life' && lctx.signals.lives.get() === 3 && lctx.signals.playerHealth.get() === 100);
+
+  // makePickup helper wraps a tagged effect; partial ctx is safe
+  check('pickups.makePickup shape', pickups.makePickup('x', () => 't').kind === 'x');
+  check('pickups safe on partial ctx', (() => { try { pickups.health().apply({}, undefined); return true; } catch { return false; } })());
+}
+
+// --- hazards (environmental effect zones) ---
+{
+  const ent = (x, z, r = 0) => ({ pos: [x, 0, z], radius: r, vel: [0, 0, 0] });
+  const circle = { pos: [0, 0, 0], radius: 5 };
+  const box = { min: [-2, -2], max: [2, 2] };
+
+  const dz = hazards.damageZone({ dps: 10 });
+  check('hazards inside circle center', dz.inside(ent(0, 0), circle));
+  check('hazards outside circle', !dz.inside(ent(6, 0), circle));
+  check('hazards radius overlap counts', dz.inside(ent(5.5, 0, 1), circle));
+  check('hazards inside box', dz.inside(ent(1, 1), box));
+  check('hazards outside box', !dz.inside(ent(3, 3), box));
+  check('hazards null zone safe', !dz.inside(ent(0, 0), null));
+  check('hazards damageZone dt-scaled', Math.abs(dz.affect(ent(0, 0), 0.5, circle).damage - 5) < 1e-9);
+  check('hazards damageZone outside null', dz.affect(ent(9, 0), 1, circle) === null);
+
+  const dzE = ent(0, 0);
+  dz.affect(dzE, 1, circle);
+  check('hazards affect no mutation', dzE.vel[0] === 0 && dzE.pos[0] === 0);
+
+  const sp = hazards.spikes({ damage: 20 });
+  const s1 = ent(0, 0);
+  check('hazards spikes hit on entry', sp.affect(s1, 0.1, circle).damage === 20);
+  check('hazards spikes silent while staying', sp.affect(s1, 0.1, circle) === null);
+  s1.pos = [9, 0, 0];
+  check('hazards spikes leave = null', sp.affect(s1, 0.1, circle) === null);
+  s1.pos = [0, 0, 0];
+  check('hazards spikes re-trigger on re-entry', sp.affect(s1, 0.1, circle).damage === 20);
+  const s2 = ent(0, 0);
+  check('hazards spikes per-entity independent', sp.affect(s2, 0.1, circle).damage === 20);
+
+  const lv = hazards.lava({ dps: 30, slow: 0.5 }).affect(ent(0, 0), 1, circle);
+  check('hazards lava damage + slow', Math.abs(lv.damage - 30) < 1e-9 && lv.slow === 0.5);
+
+  check('hazards slowField mult', hazards.slowField({ mult: 0.3 }).affect(ent(0, 0), 1, circle).slow === 0.3);
+  check('hazards pit kills inside', hazards.pit().affect(ent(0, 0), 1, circle).kill === true);
+  check('hazards pit outside null', hazards.pit().affect(ent(99, 0), 1, circle) === null);
+
+  const wz = hazards.windZone({ force: [4, -2] });
+  const w = wz.affect(ent(0, 0), 0.5, circle);
+  check('hazards windZone push dt-scaled', Math.abs(w.push[0] - 2) < 1e-9 && Math.abs(w.push[1] + 1) < 1e-9);
+  check('hazards windZone outside null', wz.affect(ent(99, 0), 0.5, circle) === null);
+  check('hazards windZone outward is unit', Math.abs(Math.hypot(...wz.outward(ent(3, 0), circle)) - 1) < 1e-9);
+
+  check('hazards bundle complete', ['damageZone','spikes','lava','slowField','pit','windZone'].every(k => typeof hazards[k] === 'function'));
+}
+
+{
+  const { linear, stepped, waveBased, adaptive, flat, compose } = difficulty;
+// --- difficulty.js ---
+{
+  const keys = m => ['speedMul','hpMul','rateMul','damageMul'].every(k => typeof m[k] === 'number');
+  check('difficulty bundle', Object.keys(difficulty).length === 6 && difficulty.linear === linear && difficulty.adaptive === adaptive);
+
+  // flat: fixed multipliers forever
+  const f = flat({ hp: 0.5 });
+  check('difficulty flat fixed', f({ time: 999 }).hpMul === 0.5 && f({}).speedMul === 1);
+
+  // linear: base at 0, grows with time, deterministic, capped
+  const l = linear({ per: 0.1, unit: 60, cap: 3 });
+  check('difficulty linear keys', keys(l({ time: 0 })));
+  check('difficulty linear base', l({ time: 0 }).hpMul === 1);
+  check('difficulty linear grows', l({ time: 600 }).hpMul > l({ time: 60 }).hpMul);
+  check('difficulty linear deterministic', l({ time: 60 }).hpMul === l({ time: 60 }).hpMul);
+  check('difficulty linear cap', l({ time: 1e9 }).hpMul <= 3);
+
+  // stepped: discrete plateaus then jumps
+  const s = stepped({ every: 30, step: 0.25 });
+  check('difficulty stepped plateau', s({ time: 0 }).hpMul === s({ time: 29 }).hpMul);
+  check('difficulty stepped jump', s({ time: 30 }).hpMul > s({ time: 29 }).hpMul);
+
+  // waveBased: wave 1 = base, ramps per wave
+  const w = waveBased({ perWave: 0.15 });
+  check('difficulty wave base', w({ wave: 1 }).hpMul === 1);
+  check('difficulty wave grows', w({ wave: 5 }).hpMul > w({ wave: 2 }).hpMul);
+
+  // adaptive: eases up when winning, down (bounded by floor) when losing
+  const a = adaptive({ up: 0.2, down: 0.1 });
+  let hi; for (let i = 0; i < 6; i++) hi = a({ performance: 1 });
+  check('difficulty adaptive up', hi.hpMul > 1);
+  const a2 = adaptive({ floor: 0.5 });
+  let lo; for (let i = 0; i < 6; i++) lo = a2({ performance: 0 });
+  check('difficulty adaptive down', lo.hpMul <= 1 && lo.hpMul >= 0.5 - 1e-9);
+
+  // compose: multiplies curves
+  const c = compose(flat({ hp: 2 }), flat({ hp: 3 }));
+  check('difficulty compose', Math.abs(c({}).hpMul - 6) < 1e-9);
+
+  // robust to bad/missing state
+  check('difficulty nan safe', keys(l({ time: NaN })) && l({}).hpMul === 1);
+}
+}
+
+{
+  const { seek, flee, arrive, pursue, evade, separation, wander, combine } = steering;
+{
+  const L = (w) => Math.hypot(w[0], w[2]);
+  const near = (a, b, e = 1e-6) => Math.abs(a - b) < e;
+
+  // seek/flee are mirror unit*speed vectors on the ground plane (y===0)
+  let v = seek([0,0,0], [10,0,0], 5);
+  check('steering.seek dir+speed', near(v[0], 5) && v[1] === 0 && near(v[2], 0));
+  v = flee([0,0,0], [10,0,0], 5);
+  check('steering.flee is mirror', near(v[0], -5));
+  check('steering.seek degenerate zero', (() => { const w = seek([2,0,2],[2,0,2],5); return w[0]===0 && w[2]===0; })());
+
+  // arrive: full speed far out, ramps inside slowRadius, zero at goal
+  check('steering.arrive full far', near(L(arrive([0,0,0],[10,0,0],4,3)), 4));
+  check('steering.arrive half ramp', near(L(arrive([0,0,0],[1.5,0,0],4,3)), 2));
+  check('steering.arrive at goal zero', (() => { const w = arrive([5,0,5],[5,0,5],4,3); return w[0]===0 && w[2]===0; })());
+
+  // pursue leads a mover; degrades to seek when target is still
+  v = pursue({ pos:[0,0,0], vel:[0,0,0] }, { pos:[10,0,0], vel:[0,0,10] }, 5);
+  check('steering.pursue leads target', v[2] > 0 && near(L(v), 5));
+  v = pursue({ pos:[0,0,0], vel:[0,0,0] }, { pos:[10,0,0], vel:[0,0,0] }, 5);
+  check('steering.pursue stationary==seek', near(v[0], 5) && near(v[2], 0));
+
+  // evade flees the interception point
+  v = evade({ pos:[0,0,0], vel:[0,0,0] }, { pos:[10,0,0], vel:[0,0,10] }, 5);
+  check('steering.evade dodges lead', v[0] < 0 && v[2] < 0);
+
+  // separation: repel from crowd, zero when clear
+  v = separation([0,0,0], [[1,0,0],[0,0,1]], 3, 4);
+  check('steering.separation pushes off crowd', v[0] < 0 && v[2] < 0 && near(L(v), 4));
+  check('steering.separation clear==zero', (() => { const w = separation([0,0,0], [[20,0,20]], 3, 4); return w[0]===0 && w[2]===0; })());
+
+  // wander: bounded speed, deterministic with an rng, mutates heading
+  let st = { heading: 0, rng: { next: () => 1 } };
+  v = wander(st, { speed: 3 });
+  check('steering.wander speed clamp', near(L(v), 3) && st.heading !== 0);
+
+  // combine: weighted blend then clamp to maxSpeed
+  v = combine([{ v:[3,0,0], weight:1 }, { v:[0,0,4], weight:1 }]);
+  check('steering.combine sums', near(v[0], 3) && near(v[2], 4));
+  check('steering.combine clamps', near(L(combine([{v:[3,0,0]},{v:[0,0,4]}], 2.5)), 2.5));
+  check('steering.combine empty zero', (() => { const w = combine([]); return w[0]===0 && w[2]===0; })());
+
+  check('steering bundle complete', ['seek','flee','arrive','pursue','evade','separation','wander','combine'].every(k => typeof steering[k] === 'function'));
+}
+}
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
