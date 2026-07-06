@@ -50,8 +50,10 @@ chaquopy {
     defaultConfig {
         version = "3.11"
         pip {
-            // Pure-Python deps that Chaquopy can bundle (see README).
-            install("litellm")
+            // Only pure-Python deps that Chaquopy can bundle. litellm is NOT
+            // installable on Android (it pulls native/Rust deps such as
+            // fastuuid and tiktoken with no Android wheels), so orchestrator.py
+            // talks to the provider HTTP APIs directly via the stdlib instead.
             install("dulwich")
         }
     }

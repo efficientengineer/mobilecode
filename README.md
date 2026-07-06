@@ -21,7 +21,11 @@ Native Android (Kotlin)          Embedded Python (Chaquopy)        Remote
 - **Opus** is the lead: it reads your task and the repo, returns a JSON edit plan.
 - **DeepSeek V4** is the worker: it writes each file, cheaply.
 - **dulwich** does git with no binary (verified working).
-- **litellm** routes to both providers through one interface (verified working).
+- Model calls go out over plain **HTTPS via the Python stdlib** (`urllib`).
+  litellm was the original plan but can't be bundled on Android (it pulls
+  native/Rust deps like `fastuuid` and `tiktoken` that have no Android
+  wheels), so `orchestrator.py` calls the Anthropic and DeepSeek HTTP APIs
+  directly — no third-party HTTP dependency required.
 
 ## Build it — no Android Studio required (cloud build)
 
@@ -66,7 +70,8 @@ Files live in the app's private storage under a `workspace/` git repo.
   ship any API keys in the app — the current design correctly asks the *user*
   for their own keys, which is the right model for a public app.
 - **Dependency ceiling.** Only pure-Python packages that Chaquopy can bundle are
-  usable. `litellm` and `dulwich` are verified. Heavier frameworks (CrewAI,
+  usable. `dulwich` is verified; model calls use the stdlib `urllib` instead
+  of `litellm` (which needs native wheels Android lacks). Heavier frameworks (CrewAI,
   Aider) may pull C-extension dependencies that lack Android wheels — that's why
   this uses a hand-rolled orchestrator instead.
 - **Turn-taking is one-shot.** Speak → wait → hear result. No interrupting a

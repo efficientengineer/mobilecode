@@ -18,16 +18,18 @@ workspace path inside app storage; we never write with bare filenames.
 import os
 import json
 import traceback
+import urllib.request
+import urllib.error
 from pathlib import Path
 
-import litellm
 from dulwich import porcelain
 from dulwich.repo import Repo
 
 
 # --- Model configuration -------------------------------------------------
 
-# These strings are resolved by litellm. Adjust if provider names change.
+# Model strings carry a "<provider>/<model>" prefix so _call can route to the
+# right API. Adjust if provider names change.
 LEAD_MODEL = os.environ.get("LEAD_MODEL", "anthropic/claude-opus-4-20250514")
 WORKER_MODEL = os.environ.get("WORKER_MODEL", "deepseek/deepseek-chat")
 
@@ -80,16 +82,74 @@ def _write_file(root: Path, rel: str, content: str) -> None:
 
 # --- LLM calls -----------------------------------------------------------
 
+def _http_post_json(url: str, headers: dict, payload: dict) -> dict:
+    """Minimal JSON POST using the stdlib — no third-party HTTP deps.
+
+    litellm can't be bundled by Chaquopy (it pulls native/Rust deps like
+    fastuuid and tiktoken that lack Android wheels), so we talk to each
+    provider's HTTP API directly.
+    """
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {e.code} from {url}: {body}") from e
+
+
 def _call(model: str, system: str, user: str, max_tokens: int = 4000) -> str:
-    resp = litellm.completion(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        max_tokens=max_tokens,
+    """Route a chat completion to the right provider based on the model prefix.
+
+    Supports "anthropic/<model>" (Anthropic Messages API) and
+    "deepseek/<model>" or any other "<provider>/<model>" that speaks the
+    OpenAI-compatible chat/completions schema (DeepSeek does).
+    """
+    provider, _, model_name = model.partition("/")
+    if not model_name:
+        provider, model_name = "openai", model
+
+    if provider == "anthropic":
+        key = os.environ.get("ANTHROPIC_API_KEY", "")
+        result = _http_post_json(
+            "https://api.anthropic.com/v1/messages",
+            {
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            {
+                "model": model_name,
+                "max_tokens": max_tokens,
+                "system": system,
+                "messages": [{"role": "user", "content": user}],
+            },
+        )
+        parts = result.get("content", [])
+        return "".join(p.get("text", "") for p in parts if p.get("type") == "text")
+
+    # OpenAI-compatible providers (DeepSeek, etc.)
+    bases = {"deepseek": "https://api.deepseek.com"}
+    keys = {"deepseek": "DEEPSEEK_API_KEY"}
+    base = bases.get(provider, "https://api.openai.com")
+    key = os.environ.get(keys.get(provider, "OPENAI_API_KEY"), "")
+    result = _http_post_json(
+        f"{base}/v1/chat/completions",
+        {
+            "Authorization": f"Bearer {key}",
+            "content-type": "application/json",
+        },
+        {
+            "model": model_name,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        },
     )
-    return resp["choices"][0]["message"]["content"]
+    return result["choices"][0]["message"]["content"]
 
 
 def _plan_with_lead(task: str, root: Path) -> dict:
