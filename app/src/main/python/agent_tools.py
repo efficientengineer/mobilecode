@@ -583,6 +583,16 @@ def t_delegate_edit(path="", instruction="", **_):
         "SEARCH text must match the current file exactly. For a NEW file or "
         "full rewrite use one block with an EMPTY search section. Output ONLY "
         "blocks — no prose, no fences.")
+    # Inject the best practices relevant to THIS step — tag-matched on the
+    # instruction — so the implementer building this file follows them (e.g. a
+    # "floating joystick" instruction pulls the movement rule).
+    try:
+        import best_practices
+        bp = best_practices.render(instruction)
+    except Exception:
+        bp = ""
+    if bp:
+        system += "\n\nApply these best practices where they fit this file:\n" + bp
     user = (f"FILE: {path}\n\nCURRENT CONTENTS:\n"
             f"{current if current else '(new file)'}\n\nINSTRUCTION:\n{instruction}")
 

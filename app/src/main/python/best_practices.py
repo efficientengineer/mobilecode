@@ -161,6 +161,26 @@ PRACTICES = [
               "portrait", "rotat"],
      "text": "Verify on a real mid-range phone in both orientations with a notch "
              "— the desktop preview misrepresents size, touch, and speed."},
+    # --- architecture & decoupling (event-driven, ScriptableObject-style) ---
+    {"scope": "web", "core": True,
+     "tags": ["event", "architect", "decoupl", "coupling", "structur", "modular",
+              "depend", "communicat", "signal", "message", "pubsub", "observer",
+              "refactor", "spaghetti", "connect", "wire", "system"],
+     "text": "Decouple modules with a small EVENT BUS instead of importing each "
+             "other. Ship one events.js — on(name, fn) / off(name, fn) / "
+             "emit(name, data) over a {name: Set<fn>} map — and have modules talk "
+             "through named events ('score-changed', 'player-hit'): the emitter "
+             "never imports the listener. This keeps the dependency graph shallow "
+             "(each file imports events.js, not its peers) so you can add or "
+             "remove systems without touching the others."},
+    {"scope": "web", "core": False,
+     "tags": ["state", "store", "data", "global", "shared", "manager",
+              "singleton", "save", "config", "architect", "source", "truth",
+              "inventory", "progress"],
+     "text": "Keep shared state in ONE store module — a single source of truth "
+             "(ScriptableObject-style), not scattered globals or copies across "
+             "files. Systems read from the store and emit events to change it; "
+             "they never reach into each other to mutate state directly."},
 ]
 
 _GAME_FILE_SIGNALS = ("babylon", "phaser", "three", "pixi", "kaboom", "<canvas",

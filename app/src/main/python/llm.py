@@ -40,7 +40,10 @@ BACKOFFS = [2, 4, 8, 16]
 # --- run-level usage accounting -------------------------------------------
 
 _USAGE = {"input": 0, "output": 0, "cache_read": 0, "calls": 0}
-# Guards _USAGE: multi-agent workflows call chat() from several threads at once,
+# Per-model totals, keyed by the full "provider/model" id, so the UI can show
+# how much each model (orchestrator vs implementer) cost.
+_USAGE_BY_MODEL = {}
+# Guards both: multi-agent workflows call chat() from several threads at once,
 # so the running totals must be updated under a lock or counts get lost.
 _USAGE_LOCK = threading.Lock()
 
@@ -48,6 +51,7 @@ _USAGE_LOCK = threading.Lock()
 def reset_usage() -> None:
     with _USAGE_LOCK:
         _USAGE.update({"input": 0, "output": 0, "cache_read": 0, "calls": 0})
+        _USAGE_BY_MODEL.clear()
 
 
 def usage() -> dict:
@@ -55,12 +59,25 @@ def usage() -> dict:
         return dict(_USAGE)
 
 
-def _account(inp: int, out: int, cached: int = 0) -> None:
+def usage_by_model() -> dict:
     with _USAGE_LOCK:
-        _USAGE["input"] += int(inp or 0)
-        _USAGE["output"] += int(out or 0)
-        _USAGE["cache_read"] += int(cached or 0)
+        return {m: dict(v) for m, v in _USAGE_BY_MODEL.items()}
+
+
+def _account(inp: int, out: int, cached: int = 0, model: str = "") -> None:
+    inp, out, cached = int(inp or 0), int(out or 0), int(cached or 0)
+    with _USAGE_LOCK:
+        _USAGE["input"] += inp
+        _USAGE["output"] += out
+        _USAGE["cache_read"] += cached
         _USAGE["calls"] += 1
+        if model:
+            m = _USAGE_BY_MODEL.setdefault(
+                model, {"input": 0, "output": 0, "cache_read": 0, "calls": 0})
+            m["input"] += inp
+            m["output"] += out
+            m["cache_read"] += cached
+            m["calls"] += 1
 
 
 def _interrupted() -> bool:
@@ -285,7 +302,7 @@ def _call_anthropic(model, system, cached_context, messages, tools,
 
     if on_delta is None:
         result = _post(url, headers, payload, stream=False)
-        return _parse_anthropic(result)
+        return _parse_anthropic(result, "anthropic/" + model)
 
     payload["stream"] = True
     resp = _post(url, headers, payload, stream=True)
@@ -347,7 +364,7 @@ def _call_anthropic(model, system, cached_context, messages, tools,
                 u = ev.get("usage") or {}
                 usage_out = u.get("output_tokens", usage_out)
     in_total = usage_in + usage_cached + usage_create
-    _account(in_total, usage_out, usage_cached)
+    _account(in_total, usage_out, usage_cached, "anthropic/" + model)
     return {"text": "".join(text), "reasoning": "".join(reasoning),
             "tool_calls": tool_calls, "thinking_blocks": thinking_blocks,
             "stop": stop or "end_turn",
@@ -355,7 +372,7 @@ def _call_anthropic(model, system, cached_context, messages, tools,
                       "cache_read": usage_cached}}
 
 
-def _parse_anthropic(result):
+def _parse_anthropic(result, model=""):
     parts = result.get("content", [])
     text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
     reasoning = "".join(p.get("thinking", "") for p in parts if p.get("type") == "thinking")
@@ -373,7 +390,7 @@ def _parse_anthropic(result):
     # TOTAL (uncached + cache reads + cache writes) so `cache_read / input` is a
     # correct hit ratio, matching DeepSeek's total-prompt-tokens semantics.
     in_total = (u.get("input_tokens", 0) or 0) + cached + create
-    _account(in_total, u.get("output_tokens", 0), cached)
+    _account(in_total, u.get("output_tokens", 0), cached, model)
     return {"text": text, "reasoning": reasoning, "tool_calls": tool_calls,
             "thinking_blocks": thinking_blocks,
             "stop": result.get("stop_reason") or "end_turn",
@@ -444,7 +461,7 @@ def _call_openai(provider, model, system, cached_context, messages, tools,
 
     if on_delta is None:
         result = _post(url, headers, payload, stream=False)
-        return _parse_openai(result)
+        return _parse_openai(result, provider + "/" + model)
 
     payload["stream"] = True
     payload["stream_options"] = {"include_usage": True}
@@ -493,7 +510,7 @@ def _call_openai(provider, model, system, cached_context, messages, tools,
         slot = tools_acc[idx]
         tool_calls.append({"id": slot["id"] or f"call_{idx}",
                            "name": slot["name"], "args": parse_tool_args(slot["json"])})
-    _account(usage_in, usage_out, usage_cached)
+    _account(usage_in, usage_out, usage_cached, provider + "/" + model)
     stop_map = {"stop": "end_turn", "tool_calls": "tool_use", "length": "max_tokens"}
     return {"text": "".join(text), "reasoning": "".join(reasoning),
             "tool_calls": tool_calls, "stop": stop_map.get(stop, stop or "end_turn"),
@@ -501,7 +518,7 @@ def _call_openai(provider, model, system, cached_context, messages, tools,
                       "cache_read": usage_cached}}
 
 
-def _parse_openai(result):
+def _parse_openai(result, model=""):
     choices = result.get("choices") or []
     if not choices:
         raise RuntimeError("provider returned no choices: " +
@@ -515,7 +532,7 @@ def _parse_openai(result):
                            "args": parse_tool_args(fn.get("arguments"))})
     u = result.get("usage") or {}
     cached = u.get("prompt_cache_hit_tokens", 0) or 0
-    _account(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), cached)
+    _account(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), cached, model)
     stop = choices[0].get("finish_reason") or "stop"
     stop_map = {"stop": "end_turn", "tool_calls": "tool_use", "length": "max_tokens"}
     return {"text": msg.get("content") or "", "reasoning": msg.get("reasoning_content") or "",

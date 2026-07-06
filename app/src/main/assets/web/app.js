@@ -160,13 +160,27 @@ function showUsageDetail() {
   if (!u) return;
   const inp = u.input || 0, cr = u.cache_read || 0, out = u.output || 0;
   const pct = inp ? Math.round((100 * cr) / inp) : 0;
+  // Per-model breakdown (orchestrator vs implementer vs any others).
+  const bm = u.byModel || {};
+  const models = Object.keys(bm).sort((a, b) =>
+    (bm[b].input + bm[b].output) - (bm[a].input + bm[a].output));
+  let perModel = "";
+  if (models.length) {
+    perModel = `<div class="group-title">By model</div>` + models.map((m) => {
+      const v = bm[m], mcr = v.cache_read || 0, mi = v.input || 0;
+      const mp = mi ? Math.round((100 * mcr) / mi) : 0;
+      return `<div class="list-item"><span>${escapeHtml(m)}</span>
+        <b>${fmtK(mi)}↓ ${fmtK(v.output || 0)}↑ · ${v.calls || 0} calls · ${mp}% cached</b></div>`;
+    }).join("");
+  }
   modal("Tokens this run",
     `<div class="list-item"><span>Input total</span><b>${inp}</b></div>
      <div class="list-item"><span>&nbsp;&nbsp;· cached (cheap)</span><b>${cr} · ${pct}%</b></div>
      <div class="list-item"><span>&nbsp;&nbsp;· new (full price)</span><b>${inp - cr}</b></div>
      <div class="list-item"><span>Output</span><b>${out}</b></div>
      <div class="list-item"><span>Model calls</span><b>${u.calls || 0}</b></div>
-     <div class="hint">A high <b>cached %</b> means repeated context is being billed at a fraction of the price — the prompt cache is working. Actual dollars spent show in the balance chip.</div>`);
+     ${perModel}
+     <div class="hint">A high <b>cached %</b> means repeated context is being billed at a fraction of the price — the prompt cache is working. The by-model split shows orchestrator vs implementer spend. Actual dollars show in the balance chip.</div>`);
 }
 async function refreshStats() {
   try {

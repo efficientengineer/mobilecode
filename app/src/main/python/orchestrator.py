@@ -1005,8 +1005,14 @@ def steer(text="") -> str:
 
 
 def get_usage(_=None) -> str:
-    """Token usage of the current/most recent run (real API numbers)."""
-    return json.dumps(llm.usage())
+    """Token usage of the current/most recent run (real API numbers), including a
+    per-model breakdown so you can see orchestrator vs implementer spend."""
+    u = llm.usage()
+    try:
+        u["byModel"] = llm.usage_by_model()
+    except Exception:
+        u["byModel"] = {}
+    return json.dumps(u)
 
 
 def get_todos(_=None) -> str:
