@@ -30,8 +30,18 @@ from dulwich.repo import Repo
 
 # Model strings carry a "<provider>/<model>" prefix so _call can route to the
 # right API. Adjust if provider names change.
+#
+# LEAD_MODEL is the orchestrator/planner. WORKER_MODEL is the implementer/editor
+# and is OPTIONAL: if it's blank, the orchestrator does the edits itself
+# (single-agent mode). The (cheap) implementer also writes commit messages.
 LEAD_MODEL = os.environ.get("LEAD_MODEL", "anthropic/claude-opus-4-8")
 WORKER_MODEL = os.environ.get("WORKER_MODEL", "deepseek/deepseek-chat")
+
+
+def _impl_model() -> str:
+    """The implementer model, falling back to the orchestrator when unset."""
+    w = (WORKER_MODEL or "").strip()
+    return w if w else LEAD_MODEL
 
 # Keys are injected by the Kotlin layer into the environment before we run.
 # (For a public app they come from the user's own settings, never hardcoded.)
@@ -192,7 +202,7 @@ def _edit_with_worker(edit: dict, root: Path) -> str:
         f"CURRENT CONTENTS:\n{current if current else '(new file)'}\n\n"
         f"INSTRUCTION:\n{instruction}"
     )
-    new_content = _call(WORKER_MODEL, system, user)
+    new_content = _call(_impl_model(), system, user)
     new_content = new_content.strip()
     if new_content.startswith("```"):
         # drop first fence line and trailing fence
@@ -204,6 +214,27 @@ def _edit_with_worker(edit: dict, root: Path) -> str:
         new_content = "\n".join(lines)
     _write_file(root, path, new_content + "\n")
     return path
+
+
+def _commit_message(summary: str, changed: list) -> str:
+    """Have the cheap implementer model write a concise commit message.
+
+    Falls back to the plan summary if the model call fails, so a commit is
+    never blocked on message generation.
+    """
+    try:
+        system = (
+            "Write a single-line git commit message (max 72 chars) in the "
+            "imperative mood for the described change. Output ONLY the message, "
+            "no quotes, no prose, no trailing period."
+        )
+        files = "\n".join(f"  - {c}" for c in changed) or "  (none)"
+        user = f"CHANGE:\n{summary}\n\nFILES CHANGED:\n{files}"
+        msg = _call(_impl_model(), system, user, max_tokens=60).strip()
+        msg = msg.splitlines()[0].strip().strip('"').strip()
+        return msg or summary
+    except Exception:
+        return summary
 
 
 def _commit(root: Path, message: str) -> str:
@@ -245,12 +276,13 @@ def run_task(task: str) -> str:
             except Exception as e:
                 changed.append(f"{edit.get('path','?')} [FAILED: {e}]")
 
-        commit_id = _commit(root, f"{summary}")[:8]
+        message = _commit_message(summary, changed)
+        commit_id = _commit(root, message)[:8]
 
         lines = [f"Done: {summary}",
                  f"Files changed: {len(changed)}"]
         lines += [f"  - {c}" for c in changed]
-        lines.append(f"Committed as {commit_id}")
+        lines.append(f"Committed {commit_id}: {message}")
         return "\n".join(lines)
 
     except Exception:
