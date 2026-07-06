@@ -209,9 +209,9 @@ def _plan_with_lead(task: str, root: Path) -> dict:
         "Persistent project notes, instructions, or things to remember belong "
         "in a file named guidelines.md (create or update it)."
     )
-    context = _full_context(task).strip()
-    context_block = f"{context}\n\n" if context else ""
     mode = os.environ.get("AGENT_MODE", "auto").strip().lower()
+    context = _full_context(task, mode).strip()
+    context_block = f"{context}\n\n" if context else ""
     nudge = ("The user explicitly requested file changes — use mode \"edit\" "
              "and produce concrete edits.\n\n") if mode in ("code", "plan") else ""
     user = (
@@ -441,7 +441,94 @@ def _memory(root: Path = None):
     return "guidelines.md", ""
 
 
-def _full_context(task_hint: str = "") -> str:
+# --- deterministic (no-LLM) context compaction ---------------------------
+# All knobs are plain numbers; changing them costs zero tokens. Defaults are
+# tuned to keep recent context useful while capping the payload.
+_COMPACT_DEFAULTS = {
+    "maxTurns": 12,       # hard cap on discussion turns kept (any mode)
+    "codeTurns": 6,       # tighter cap in code/plan modes (outline carries state)
+    "charBudget": 6000,   # total char budget for the discussion block
+    "perTurn": 800,       # truncate any single turn longer than this
+}
+
+
+def _compact_settings() -> dict:
+    fp = _agent_dir() / "compaction.json"
+    s = dict(_COMPACT_DEFAULTS)
+    if fp.exists():
+        try:
+            s.update({k: int(v) for k, v in json.loads(fp.read_text()).items()
+                      if k in _COMPACT_DEFAULTS})
+        except Exception:
+            pass
+    return s
+
+
+def get_compaction(_=None) -> str:
+    return json.dumps(_compact_settings())
+
+
+def set_compaction(arg="") -> str:
+    try:
+        kw = json.loads(arg) if isinstance(arg, str) else dict(arg or {})
+    except Exception:
+        return "Bad compaction payload"
+    s = _compact_settings()
+    for k, v in kw.items():
+        if k in _COMPACT_DEFAULTS:
+            try:
+                s[k] = max(0, int(v))
+            except Exception:
+                pass
+    (_agent_dir() / "compaction.json").write_text(json.dumps(s), encoding="utf-8")
+    return "Compaction settings saved"
+
+
+def _clip_turn(text: str, limit: int) -> str:
+    """Keep head+tail of an over-long turn so both intent and outcome survive."""
+    if limit <= 0 or len(text) <= limit:
+        return text
+    head = limit * 2 // 3
+    tail = limit - head
+    return text[:head] + " …[clipped]… " + text[-tail:]
+
+
+def _compact_discussion(mode: str = "") -> list:
+    """Select + squeeze recent turns deterministically (no model calls).
+
+    Techniques: turn cap (mode-aware), drop consecutive duplicates, per-turn
+    truncation, and a total char budget applied newest-first.
+    """
+    s = _compact_settings()
+    cap = s["codeTurns"] if mode in ("code", "plan") else s["maxTurns"]
+    disc = _read_discussion()
+    cave = _caveman_on()
+
+    # 1) newest-first, cap the count
+    picked = disc[-cap:] if cap > 0 else []
+
+    # 2) drop consecutive duplicate turns (same role + same text)
+    deduped = []
+    for d in picked:
+        key = (d.get("role"), d.get("text", ""))
+        if deduped and (deduped[-1].get("role"), deduped[-1].get("text", "")) == key:
+            continue
+        deduped.append(d)
+
+    # 3) per-turn truncation + 4) total char budget (drop oldest first)
+    rendered, used = [], 0
+    for d in reversed(deduped):  # newest first for budgeting
+        body = _clip_turn(d.get("cave" if cave else "text", ""), s["perTurn"])
+        line = f"{d['role']}: {body}"
+        if s["charBudget"] and used + len(line) > s["charBudget"] and rendered:
+            break
+        rendered.append(line)
+        used += len(line)
+    rendered.reverse()
+    return rendered
+
+
+def _full_context(task_hint: str = "", mode: str = "") -> str:
     """Assemble the per-prompt context: guidelines + outline + attached + discussion."""
     root = _workspace()
     parts = []
@@ -463,10 +550,8 @@ def _full_context(task_hint: str = "") -> str:
     if att:
         parts.append("ATTACHED FILES (the user asked you to read these):\n" +
                      "\n\n".join(att))
-    disc = _read_discussion()[-12:]
-    if disc:
-        cave = _caveman_on()
-        lines = [f"{d['role']}: {d.get('cave' if cave else 'text', '')}" for d in disc]
+    lines = _compact_discussion(mode)
+    if lines:
         parts.append("DISCUSSION SO FAR:\n" + "\n".join(lines))
     return "\n\n".join(parts)
 
@@ -507,7 +592,10 @@ def context_counts(_=None) -> str:
     o = outline.read_text(encoding="utf-8") if outline.exists() else ""
     cave = _caveman_on()
     disc = _read_discussion()
-    d = "\n".join(x.get("cave" if cave else "text", "") for x in disc)
+    mode = os.environ.get("AGENT_MODE", "auto").strip().lower()
+    # Effective (compacted) discussion — what is actually sent this turn.
+    eff_lines = _compact_discussion(mode)
+    d = "\n".join(eff_lines)
     _, mem = _memory()
 
     def toks(s):
@@ -515,7 +603,8 @@ def context_counts(_=None) -> str:
     return json.dumps({
         "outlineChars": len(o), "outlineTokens": toks(o),
         "discussionChars": len(d), "discussionTokens": toks(d),
-        "memoryTokens": toks(mem), "turns": len(disc), "caveman": cave,
+        "memoryTokens": toks(mem), "turns": len(disc),
+        "sentTurns": len(eff_lines), "caveman": cave,
     })
 
 
@@ -603,7 +692,8 @@ def read_ws_file(path="") -> str:
 
 def preview_context(_=None) -> str:
     """Exactly what gets sent to the model as context this turn."""
-    c = _full_context()
+    mode = os.environ.get("AGENT_MODE", "auto").strip().lower()
+    c = _full_context("", mode)
     return c if c else "(context is empty)"
 
 
@@ -812,7 +902,7 @@ def _run_edits(task: str, plan: dict, root: Path, run_id: str) -> str:
 
 def _chat_reply(task: str) -> str:
     """Plain conversational answer — no files, no commit."""
-    context = _full_context()
+    context = _full_context(task, "chat")
     system = ("You are a helpful coding assistant. Answer conversationally and "
               "concisely. Do not create or modify files.")
     user = (f"{context}\n\n" if context else "") + "USER: " + task

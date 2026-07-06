@@ -88,8 +88,10 @@ let _balStart = null;
 async function refreshStats() {
   try {
     const c = JSON.parse((await call("orch", { fn: "context_counts" })).text);
+    const sent = c.sentTurns != null ? c.sentTurns : c.turns;
+    const turnStr = sent < c.turns ? `${sent}/${c.turns} turns` : `${c.turns} turns`;
     let s = `ctx ~${(c.outlineTokens + c.discussionTokens + (c.memoryTokens || 0))}t ` +
-            `(outline ${c.outlineTokens} · disc ${c.discussionTokens} · ${c.turns} turns)`;
+            `(outline ${c.outlineTokens} · disc ${c.discussionTokens} · ${turnStr})`;
     if (c.caveman) s += " · 🪨";
     try {
       const pins = JSON.parse((await call("orch", { fn: "list_context_files" })).text);
@@ -368,6 +370,27 @@ const actions = {
   async previewContext() {
     const r = await call("orch", { fn: "preview_context" });
     modal("Context sent to the model", `<pre class="filebody">${escapeHtml(r.text || "(empty)")}</pre>`);
+  },
+  async compaction() {
+    let s = {};
+    try { s = JSON.parse((await call("orch", { fn: "get_compaction" })).text); } catch (e) {}
+    const num = (id, val) => `<input type="text" inputmode="numeric" id="${id}" value="${val}" style="width:80px" />`;
+    modal("Context compaction (no AI, free)",
+      `<label>Max turns kept (Talk/Auto)</label>${num("maxTurns", s.maxTurns)}
+       <label>Max turns kept (Code/Plan)</label>${num("codeTurns", s.codeTurns)}
+       <label>Total char budget for discussion</label>${num("charBudget", s.charBudget)}
+       <label>Truncate any single turn longer than (chars)</label>${num("perTurn", s.perTurn)}
+       <div class="hint">Trims the discussion sent each prompt using plain rules — turn caps,
+       duplicate removal, per-turn truncation, and a char budget. Costs zero tokens.</div>`,
+      async () => {
+        const payload = {
+          maxTurns: $("#maxTurns").value, codeTurns: $("#codeTurns").value,
+          charBudget: $("#charBudget").value, perTurn: $("#perTurn").value,
+        };
+        await call("orch", { fn: "set_compaction", arg: JSON.stringify(payload) });
+        bubble("Compaction settings saved", "sys");
+        refreshStats();
+      });
   },
   async contextFiles() {
     let pinned = [];
