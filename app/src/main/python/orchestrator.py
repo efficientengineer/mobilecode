@@ -352,6 +352,12 @@ def _compact_settings() -> dict:
                       if k in _COMPACT_DEFAULTS})
         except Exception:
             pass
+    if _frugal_on():
+        # Carry less discussion history when spending less.
+        s["maxTurns"] = min(s["maxTurns"], 6)
+        s["codeTurns"] = min(s["codeTurns"], 4)
+        s["charBudget"] = min(s["charBudget"], 3000)
+        s["perTurn"] = min(s["perTurn"], 500)
     return s
 
 
@@ -790,6 +796,30 @@ def _begin_run() -> None:
             (_agent_dir() / name).unlink()
         except Exception:
             pass
+    # Publish frugal state to the env so llm.py (no workspace concept) sees it.
+    os.environ["AGENT_FRUGAL"] = "1" if _frugal_on() else "0"
+
+
+def _frugal_on() -> bool:
+    return os.environ.get("AGENT_FRUGAL", "0") == "1" or (_agent_dir() / "frugal").exists()
+
+
+def get_frugal(_=None) -> str:
+    return "1" if _frugal_on() else "0"
+
+
+def set_frugal(flag="1") -> str:
+    on = str(flag) in ("1", "true", "True", "on")
+    marker = _agent_dir() / "frugal"
+    if on:
+        marker.write_text("1")
+        os.environ["AGENT_FRUGAL"] = "1"
+    else:
+        if marker.exists():
+            marker.unlink()
+        os.environ["AGENT_FRUGAL"] = "0"
+    return ("Frugal mode ON — reasoning off, tighter context, smaller reads, "
+            "and split-file nudges to spend less." if on else "Frugal mode off")
 
 
 def steer(text="") -> str:

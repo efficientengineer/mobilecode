@@ -46,8 +46,55 @@ def _interrupted() -> bool:
     return os.environ.get("AGENT_INTERRUPT", "0") == "1"
 
 
+def _frugal_on() -> bool:
+    return os.environ.get("AGENT_FRUGAL", "0") == "1" or (_agent_dir() / "frugal").exists()
+
+
 def _thinking_on() -> bool:
-    return os.environ.get("AGENT_THINKING", "0") == "1"
+    # Frugal mode forces reasoning off (it's the biggest avoidable output cost).
+    return os.environ.get("AGENT_THINKING", "0") == "1" and not _frugal_on()
+
+
+def _arg_path(args):
+    for k in ("path", "file", "filename", "file_path", "filepath", "target"):
+        v = (args or {}).get(k)
+        if v is not None and str(v).strip():
+            return str(v)
+    return None
+
+
+def _trim_superseded(messages) -> int:
+    """Stub read_file results that a later read OR an edit of the same file has
+    made stale — they're dead weight re-sent on every subsequent step. The
+    newest read of each still-unedited file is kept intact. Returns chars saved."""
+    saved = 0
+    last_read = {}  # path -> index of its most recent still-relevant read result
+
+    def stub(idx, why):
+        nonlocal saved
+        c = messages[idx].get("content", "")
+        if c.startswith("(stale"):
+            return
+        new = f"(stale read — {why}; re-read the file if you still need it)"
+        saved += max(0, len(c) - len(new))
+        messages[idx]["content"] = new
+
+    for i, m in enumerate(messages):
+        if m.get("role") != "tool":
+            continue
+        path = m.get("_path")
+        if not path:
+            continue
+        name = m.get("name")
+        if name == "read_file":
+            if path in last_read:
+                stub(last_read[path], "superseded by a newer read")
+            last_read[path] = i
+        elif name in ("write_file", "str_replace", "delete_file", "delegate_edit"):
+            if path in last_read:
+                stub(last_read[path], "the file was edited after this read")
+                del last_read[path]
+    return saved
 
 
 def _drain_steer() -> list:
@@ -92,6 +139,9 @@ def _loop_settings() -> dict:
                     s[k] = max(0, int(data[k]))
     except Exception:
         pass
+    if _frugal_on():
+        s["loopBudget"] = min(s["loopBudget"] or 30000, 30000)
+        s["keepSteps"] = min(s["keepSteps"] or 2, 2)
     return s
 
 
@@ -160,14 +210,17 @@ _AGENT_SYSTEM = (
     "list_files) BEFORE editing. Never guess at file contents.\n"
     "- Prefer str_replace for targeted changes; write_file for new files or "
     "full rewrites.\n"
-    "- Large files can hit the model's output limit and get truncated. For a "
-    "big file (more than ~300 lines, e.g. a whole game in one index.html), "
-    "write a small skeleton first with write_file, then GROW it with "
-    "successive str_replace edits (append one section per call) so each call "
-    "stays small and reliable. After writing, verify the file actually ends "
-    "where it should — grep for the expected final token (a closing "
-    "</script>, </html>, or last function). If the tail is missing the write "
-    "was truncated; continue it with str_replace rather than rewriting.\n"
+    "- Structure every project as a CONTEXT-FRIENDLY 'file per feature' spine: "
+    "one small, single-responsibility file per feature (e.g. player.js, "
+    "enemies.js, dungeon.js, input.js) wired from a small entry file (an "
+    "index.html that loads them, or a main.js). This keeps each read and edit "
+    "small and cheap. NEVER build a whole app as one giant file.\n"
+    "- Keep files under ~300 lines; if one would grow past that, split it. "
+    "Writing a very large file in one call also risks hitting the output limit "
+    "and truncating — write a small skeleton, then grow it with str_replace. "
+    "After a big write, grep for the expected closing token (</script>, "
+    "</html>, last function); if it is missing the write truncated — continue "
+    "with str_replace rather than rewriting.\n"
     "- After editing Python, run check_python; if the project has tests, run "
     "run_tests. Fix what fails.\n"
     "- Keep the project self-contained and runnable on the device: plain "
@@ -290,7 +343,8 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             else:
                 messages.append({"role": "user", "content": note.strip()})
             _emit("steer", text=" | ".join(steer_msgs))
-        saved = prune_messages(messages)
+        # Trim stale reads first (free, always safe), then budget-prune the rest.
+        saved = _trim_superseded(messages) + prune_messages(messages)
         if saved:
             _emit("pruned", chars=saved)
         buf = _DeltaBuffer()
@@ -383,7 +437,8 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                 _emit("tool_done", name=tc["name"], detail=_clip(detail, 120),
                       result=_clip(result.splitlines()[0] if result else "", 160))
             messages.append({"role": "tool", "tool_call_id": tc["id"],
-                             "name": tc["name"], "content": result})
+                             "name": tc["name"], "content": result,
+                             "_path": _arg_path(tc.get("args"))})
         if plan_out is not None or interrupted:
             final_text = r.get("text", "")
             break

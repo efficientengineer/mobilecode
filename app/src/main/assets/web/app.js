@@ -457,6 +457,10 @@ function updateSpeakLabel(on) {
   const b = document.querySelector('[data-act="speak"]');
   if (b) b.textContent = "Speak replies: " + (on ? "on" : "off");
 }
+function updateFrugalLabel(on) {
+  const b = document.querySelector('[data-act="frugal"]');
+  if (b) b.textContent = "Frugal: " + (on ? "on" : "off");
+}
 function autoSpeakOn() {
   try { return localStorage.getItem("autoSpeak") === "1"; } catch (e) { return false; }
 }
@@ -656,6 +660,13 @@ const actions = {
     const r = await call("orch", { fn: "set_caveman", arg: next });
     bubble(r.text, "sys");
     updateCavemanLabel(next === "1");
+    refreshStats();
+  },
+  async frugal() {
+    const cur = (await call("orch", { fn: "get_frugal" })).text.trim();
+    const next = cur === "1" ? "0" : "1";
+    bubble((await call("orch", { fn: "set_frugal", arg: next })).text, "sys");
+    updateFrugalLabel(next === "1");
     refreshStats();
   },
   async thinking() {
@@ -1054,6 +1065,7 @@ document.querySelectorAll(".mode").forEach((b) => {
   try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
   try { updateThinkingLabel((await call("orch", { fn: "get_thinking" })).text.trim() === "1"); } catch (e) {}
   try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
+  try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
   updateSpeakLabel(autoSpeakOn());
   bubble("Ready. Type or tap 🎤 to dictate a task.", "sys");
 })();

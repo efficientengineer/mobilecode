@@ -119,7 +119,9 @@ def parse_tool_args(raw):
 
 
 def _thinking_on() -> bool:
-    return os.environ.get("AGENT_THINKING", "0") == "1"
+    # Frugal mode forces reasoning off at the request (its biggest saving).
+    return (os.environ.get("AGENT_THINKING", "0") == "1"
+            and os.environ.get("AGENT_FRUGAL", "0") != "1")
 
 
 # --- low-level HTTP with retries -------------------------------------------

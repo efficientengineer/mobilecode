@@ -64,6 +64,28 @@ def _need_path(path, tool):
     return None
 
 
+def _frugal_on() -> bool:
+    """Frugal mode = spend less: tighter reads/grep and split-file nudges."""
+    if os.environ.get("AGENT_FRUGAL", "0") == "1":
+        return True
+    try:
+        return (_agent_dir() / "frugal").exists()
+    except Exception:
+        return False
+
+
+def _read_cap() -> int:
+    return 400 if _frugal_on() else 800
+
+
+def _grep_cap() -> int:
+    return 100 if _frugal_on() else 200
+
+
+def _split_threshold() -> int:
+    return 250 if _frugal_on() else 450
+
+
 _SKIP_DIRS = {".git", ".agent", "__pycache__", "node_modules"}
 
 
@@ -95,8 +117,9 @@ def t_read_file(path="", start_line=0, end_line=0, **_):
     s = max(1, int(start_line or 1))
     e = int(end_line or 0) or len(lines)
     picked = lines[s - 1:e]
-    if len(picked) > 800:
-        picked = picked[:800] + [f"…({len(lines)} lines total; request a range for more)"]
+    cap = _read_cap()
+    if len(picked) > cap:
+        picked = picked[:cap] + [f"…({len(lines)} lines total; request a range for more)"]
     return "\n".join(f"{i + s}\t{l}" for i, l in enumerate(picked)) or "(empty file)"
 
 
@@ -125,6 +148,7 @@ def t_grep(pattern="", glob="", **_):
         return f"(bad regex: {e})"
     root = _workspace()
     hits = []
+    cap = _grep_cap()
     for p in _iter_files(root):
         rel = str(p.relative_to(root))
         if glob and not fnmatch.fnmatch(rel, glob):
@@ -136,8 +160,8 @@ def t_grep(pattern="", glob="", **_):
         for n, line in enumerate(text.splitlines(), 1):
             if rx.search(line):
                 hits.append(f"{rel}:{n}: {line.strip()[:200]}")
-                if len(hits) >= 200:
-                    hits.append("…(truncated at 200 matches)")
+                if len(hits) >= cap:
+                    hits.append(f"…(truncated at {cap} matches)")
                     return "\n".join(hits)
     return "\n".join(hits) or "(no matches)"
 
@@ -220,7 +244,16 @@ def t_write_file(path="", content="", **_):
     fp.parent.mkdir(parents=True, exist_ok=True)
     fp.write_text(content, encoding="utf-8")
     TOUCHED.add(str(path))
-    return f"wrote {path} ({len(content)} chars)"
+    nlines = content.count("\n") + 1
+    warn = ""
+    if nlines > _split_threshold():
+        # Reinforce the file-per-feature convention at write time: a big file is
+        # expensive to re-read every step and easy to truncate.
+        warn = (f" — NOTE: {nlines} lines. Keep a context-friendly 'file per "
+                "feature' layout: split distinct features into their own files "
+                "and wire them from a small entry file, so each read/edit stays "
+                "small and cheap.")
+    return f"wrote {path} ({len(content)} chars){warn}"
 
 
 def t_str_replace(path="", old="", new="", replace_all=False, **_):
