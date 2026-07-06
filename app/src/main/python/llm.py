@@ -26,6 +26,7 @@ chat() returns:
 """
 
 import os
+import re
 import json
 import time
 import urllib.request
@@ -57,6 +58,64 @@ def _account(inp: int, out: int, cached: int = 0) -> None:
 
 def _interrupted() -> bool:
     return os.environ.get("AGENT_INTERRUPT", "0") == "1"
+
+
+# --- tolerant tool-argument parsing -----------------------------------------
+# Models (DeepSeek especially) sometimes emit tool-call arguments that aren't
+# clean JSON: code-fenced, double-encoded, or truncated when the reply hits the
+# token cap mid-call. Rather than drop the whole call to {} — which makes the
+# model look like it "forgot" the arguments — recover as much as arrived.
+
+def _json_unescape(s: str) -> str:
+    try:
+        return json.loads('"' + s + '"')
+    except Exception:
+        return (s.replace('\\n', '\n').replace('\\t', '\t')
+                 .replace('\\"', '"').replace("\\\\", "\\"))
+
+
+_KV_STR = re.compile(r'"([A-Za-z0-9_]+)"\s*:\s*"((?:[^"\\]|\\.)*)"')
+_KV_LIT = re.compile(r'"([A-Za-z0-9_]+)"\s*:\s*(true|false|null|-?\d+(?:\.\d+)?)')
+_KV_TAIL = re.compile(r'"([A-Za-z0-9_]+)"\s*:\s*"((?:[^"\\]|\\.)*)$')
+
+
+def parse_tool_args(raw):
+    """Best-effort parse of a tool-call arguments blob into a dict."""
+    if isinstance(raw, dict):
+        return raw
+    s = str(raw or "").strip()
+    if not s:
+        return {}
+    if s.startswith("```"):
+        parts = s.split("```")
+        s = parts[1] if len(parts) >= 2 else s.strip("`")
+        if s.lower().startswith("json"):
+            s = s[4:]
+        s = s.strip()
+    # Clean JSON, or a JSON string that itself contains JSON (double-encoded).
+    cur = s
+    for _ in range(2):
+        try:
+            v = json.loads(cur)
+        except Exception:
+            break
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str):
+            cur = v.strip()
+            continue
+        break
+    # Salvage: pull whatever "key": value pairs arrived, tolerating a truncated
+    # final string value (e.g. a huge file content cut off by the token cap).
+    out = {}
+    for m in _KV_STR.finditer(s):
+        out[m.group(1)] = _json_unescape(m.group(2))
+    for m in _KV_LIT.finditer(s):
+        out.setdefault(m.group(1), json.loads(m.group(2)))
+    tail = _KV_TAIL.search(s)
+    if tail and tail.group(1) not in out:
+        out[tail.group(1)] = _json_unescape(tail.group(2))
+    return out
 
 
 def _thinking_on() -> bool:
@@ -234,12 +293,8 @@ def _call_anthropic(model, system, cached_context, messages, tools,
                     cur_tool["json"] += d.get("partial_json", "")
             elif t == "content_block_stop":
                 if cur_tool is not None:
-                    try:
-                        args = json.loads(cur_tool["json"] or "{}")
-                    except Exception:
-                        args = {}
                     tool_calls.append({"id": cur_tool["id"], "name": cur_tool["name"],
-                                       "args": args})
+                                       "args": parse_tool_args(cur_tool["json"])})
                     cur_tool = None
                 elif cur_think is not None:
                     # Keep the block only if it carries a signature (unsigned
@@ -384,12 +439,8 @@ def _call_openai(provider, model, system, cached_context, messages, tools,
     tool_calls = []
     for idx in sorted(tools_acc):
         slot = tools_acc[idx]
-        try:
-            args = json.loads(slot["json"] or "{}")
-        except Exception:
-            args = {}
         tool_calls.append({"id": slot["id"] or f"call_{idx}",
-                           "name": slot["name"], "args": args})
+                           "name": slot["name"], "args": parse_tool_args(slot["json"])})
     _account(usage_in, usage_out, usage_cached)
     stop_map = {"stop": "end_turn", "tool_calls": "tool_use", "length": "max_tokens"}
     return {"text": "".join(text), "reasoning": "".join(reasoning),
@@ -407,12 +458,9 @@ def _parse_openai(result):
     tool_calls = []
     for tc in msg.get("tool_calls") or []:
         fn = tc.get("function") or {}
-        try:
-            args = json.loads(fn.get("arguments") or "{}")
-        except Exception:
-            args = {}
         tool_calls.append({"id": tc.get("id") or "call_0",
-                           "name": fn.get("name") or "", "args": args})
+                           "name": fn.get("name") or "",
+                           "args": parse_tool_args(fn.get("arguments"))})
     u = result.get("usage") or {}
     cached = u.get("prompt_cache_hit_tokens", 0) or 0
     _account(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), cached)

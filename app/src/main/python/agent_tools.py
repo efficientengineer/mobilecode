@@ -649,11 +649,53 @@ def toolset(write=True, delegate=True):
     return tools
 
 
+# Common aliases models reach for. Keyed by our canonical param name; a tool
+# only ever pulls an alias into a param it actually declares, so there's no
+# cross-tool confusion (e.g. "text" fills content for write_file, message for
+# git_commit — whichever that tool has).
+_SYNONYMS = {
+    "path": ("file", "filename", "file_name", "filepath", "file_path",
+             "filePath", "target", "name", "pathname"),
+    "content": ("text", "data", "body", "contents", "file_content",
+                "fileContent", "value", "code", "source"),
+    "old": ("old_str", "old_string", "oldStr", "search", "find", "from",
+            "original", "target_text"),
+    "new": ("new_str", "new_string", "newStr", "replace", "replacement",
+            "to", "with"),
+    "url": ("link", "href", "uri", "address"),
+    "pattern": ("query", "regex", "q", "search", "expr"),
+    "message": ("msg", "text", "commit_message", "commitMessage", "m"),
+    "instruction": ("instructions", "task", "prompt", "detail"),
+    "todos": ("items", "tasks", "list", "todo", "todo_list"),
+    "title": ("subject", "name", "heading"),
+}
+
+
+def _normalize_args(tool, args: dict) -> dict:
+    """Fill any of the tool's declared params that arrived empty from a known
+    alias the model used instead — so the model's intent works even when it
+    names an argument differently than our schema."""
+    props = (tool.get("input_schema") or {}).get("properties") or {}
+    out = dict(args)
+    for canonical in props:
+        cur = out.get(canonical)
+        if cur is not None and str(cur).strip() != "":
+            continue
+        for alias in _SYNONYMS.get(canonical, ()):
+            if alias == canonical:
+                continue
+            val = args.get(alias)
+            if val is not None and str(val).strip() != "":
+                out[canonical] = val
+                break
+    return out
+
+
 def execute(tools, name, args) -> str:
     for t in tools:
         if t["name"] == name:
             try:
-                return str(t["fn"](**(args or {})))
+                return str(t["fn"](**_normalize_args(t, args or {})))
             except TypeError as e:
                 return f"(bad arguments for {name}: {e})"
             except Exception as e:
