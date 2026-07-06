@@ -709,7 +709,12 @@ def set_guidelines(text="") -> str:
 
 
 def build_outline(_=None) -> str:
-    """Read the project folder and (re)generate .agent/outline.md."""
+    """Read the project folder and (re)generate .agent/outline.md.
+
+    The outline is sent as context on every turn, so it must be dense: no
+    boilerplate, no generic advice, no restating the obvious. Terse fragments,
+    real facts only.
+    """
     try:
         root = _workspace()
         files = _list_repo_files(root, max_files=120)
@@ -718,11 +723,21 @@ def build_outline(_=None) -> str:
             c = _read_file(root, f)
             if c and len(c) < 4000:
                 snippets.append(f"### {f}\n{c[:1500]}")
-        system = ("You are documenting a software project. Produce a concise "
-                  "outline in markdown covering: purpose, structure, key files, "
-                  "and open TODOs. Output markdown only, no fences.")
+        system = (
+            "You write a DENSE project map that is re-sent as context every turn, "
+            "so every word must earn its place. Rules:\n"
+            "- Max ~150 words total. Terse fragments, not sentences.\n"
+            "- One line: what the project IS (concrete, not 'a minimal template').\n"
+            "- 'Files:' then `path — role` per real file, one phrase each. Skip empty/boilerplate files.\n"
+            "- Note key functions/entry points ONLY if evident from the snippets.\n"
+            "- NO generic advice, NO invented TODOs, NO 'likely'/'to be added' filler, "
+            "NO restating structure that the file list already shows.\n"
+            "- If little is known, write little. Output markdown only, no fences."
+        )
         user = "FILES:\n" + "\n".join(files) + "\n\nSNIPPETS:\n" + "\n\n".join(snippets)
-        md = _call(LEAD_MODEL, system, user, max_tokens=1500)
+        md = _call(LEAD_MODEL, system, user, max_tokens=600).strip()
+        if _caveman_on():
+            md = _caveman(md)
         _outline_file(root).write_text(md, encoding="utf-8")
         return f"Outline updated ({len(md)} chars)"
     except Exception:

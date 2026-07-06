@@ -107,6 +107,29 @@ async function refreshStats() {
     $("#stats").textContent = s;
   } catch (e) {}
   refreshBalance();
+  refreshAttachBar();
+}
+
+async function refreshAttachBar() {
+  const bar = $("#attachBar");
+  if (!bar) return;
+  let pinned = [];
+  try { pinned = JSON.parse((await call("orch", { fn: "list_context_files" })).text); } catch (e) {}
+  if (!pinned.length) { bar.classList.add("hidden"); bar.innerHTML = ""; return; }
+  bar.classList.remove("hidden");
+  bar.innerHTML =
+    `<span class="attach-label">Context:</span>` +
+    pinned.map((p) => {
+      const name = p.includes("/") ? p.slice(p.lastIndexOf("/") + 1) : p;
+      return `<span class="attach-chip" title="${escapeHtml(p)}">${escapeHtml(name)}<b data-rm="${escapeHtml(p)}">✕</b></span>`;
+    }).join("");
+  bar.querySelectorAll("[data-rm]").forEach((el) => {
+    el.onclick = async (ev) => {
+      ev.stopPropagation();
+      await call("orch", { fn: "remove_context_file", arg: el.dataset.rm });
+      refreshAttachBar(); refreshStats();
+    };
+  });
 }
 
 async function refreshBalance() {
@@ -342,10 +365,17 @@ const actions = {
   balance() { runText("Balance", "git.balances"); },
   cloudBuild() { runText("Cloud build", "git.cloudBuild"); },
   buildStatus() { runText("Build status", "git.buildStatus"); },
-  updateAgent() { runText("Update agent", "updateAgent"); },
-  async updateUI() {
-    bubble("Updating UI…", "sys");
-    try { await call("updateUI"); } catch (e) { bubble("Update UI failed: " + e.message, "sys"); }
+  async updateApp() {
+    bubble("Updating agent + UI…", "sys");
+    setStatus("Updating…");
+    try {
+      const a = await call("updateAgent");
+      bubble(a.text || "Agent updated", "sys");
+      await call("updateUI"); // fetches new web assets and reloads the WebView
+    } catch (e) {
+      bubble("Update failed: " + e.message, "sys");
+      setStatus("");
+    }
   },
   async viewContext() {
     let turns = [];
