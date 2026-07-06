@@ -6,6 +6,7 @@
     "git_ops.py",
     "localrun.py",
     "templates.py",
+    "projectmap.py",
     "orchestrator.py"
   ],
   "web": [

@@ -493,6 +493,12 @@ def _full_context(task_hint: str = "", mode: str = "") -> str:
     outline = _outline_file(root)
     if outline.exists():
         parts.append("PROJECT OUTLINE:\n" + outline.read_text(encoding="utf-8"))
+    dep = _depgraph_section(root)
+    if dep:
+        parts.append(
+            "DEPENDENCY MAP (path → files it imports; to understand a feature, "
+            "read its entry file then follow these edges — you should not need to "
+            "scan the whole project):\n" + dep)
     try:
         pinned = json.loads(list_context_files())
     except Exception:
@@ -678,9 +684,66 @@ _OUTLINE_RULES = (
     "- One line: what the project IS (concrete, not 'a minimal template').\n"
     "- 'Files:' then `path — role` per real file, one phrase each. Skip empty/boilerplate files.\n"
     "- Note key functions/entry points ONLY if evident from the snippets.\n"
+    "- If the project has distinct FEATURES, end with a short 'Features:' section "
+    "mapping each feature to the file to start reading from (e.g. `multiplayer — "
+    "net.js`), so a reader knows the entry point.\n"
     "- NO generic advice, NO invented TODOs, NO 'likely'/'to be added' filler, "
     "NO restating structure that the file list already shows."
 )
+
+
+def _depgraph_section(root: Path = None) -> str:
+    """Rendered dependency map from the persisted graph (empty if none)."""
+    try:
+        import projectmap
+        return projectmap.load_markdown(root or _workspace())
+    except Exception:
+        return ""
+
+
+def _auto_map_on() -> bool:
+    return os.environ.get("AGENT_AUTOMAP", "1") != "0"
+
+
+def refresh_project_map(_=None) -> str:
+    """Rebuild the dependency graph (deterministic, free) and refresh the outline
+    (diff-mode — the model runs only for files that changed). This is what lets
+    the agent jump to the right files instead of re-reading the whole project."""
+    parts = []
+    try:
+        import projectmap
+        g = projectmap.save_graph(_workspace())
+        parts.append(f"deps: {len(g)} files")
+    except Exception:
+        parts.append("deps: failed")
+    parts.append(build_outline())
+    return "Project map — " + "; ".join(parts)
+
+
+def _auto_refresh_map(mode: str = "") -> None:
+    """Best-effort map refresh at the start of an edit run. Cheap (the graph is
+    static; the outline skips the model when nothing changed) and never fatal."""
+    if not _auto_map_on() or mode == "chat":
+        return
+    try:
+        import projectmap
+        projectmap.save_graph(_workspace())
+    except Exception:
+        pass
+    try:
+        build_outline()
+    except Exception:
+        pass
+
+
+def deps(target="") -> str:
+    """JSON {target, read:[files]} — the import closure to read to understand
+    `target`. Exposed so the UI (or agent) can scope a feature."""
+    try:
+        import projectmap
+        return projectmap.deps_of(str(target).strip(), _workspace())
+    except Exception:
+        return json.dumps({"target": target, "read": []})
 
 
 def _outline_manifest_path(root: Path = None) -> Path:
@@ -1174,6 +1237,7 @@ def run_task(task: str) -> str:
             _append_discussion("agent", reply)
             return reply
 
+        _auto_refresh_map(mode)
         context = _full_context(task, mode).strip()
 
         if mode == "plan":
@@ -1228,6 +1292,7 @@ def execute_plan() -> str:
             for i, e in enumerate(plan.get("edits", []), 1))
         task = (f"Implement this approved plan.\n\nORIGINAL TASK:\n"
                 f"{plan.get('task', '')}\n\nPLAN: {plan.get('summary', '')}\n{steps}")
+        _auto_refresh_map("code")
         context = _full_context(task, "code").strip()
         res = agentloop.run(task, context=context, write=True)
         run_id = _new_run_id()
@@ -1253,6 +1318,7 @@ def fix_build(_=None) -> str:
         task = ("The cloud build (GitHub Actions) failed. Diagnose from the log "
                 "below, fix the workspace, and verify. Failure log (tail):\n\n" + log)
         _append_discussion("user", "Fix the failed cloud build", ctx="Fix the failed cloud build")
+        _auto_refresh_map("code")
         context = _full_context(task, "code").strip()
         res = agentloop.run(task, context=context, write=True)
         run_id = _new_run_id()

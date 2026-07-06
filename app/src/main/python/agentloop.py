@@ -218,8 +218,13 @@ _AGENT_SYSTEM = (
     "workspace. Work autonomously until the task is done.\n"
     "\n"
     "Method:\n"
-    "- Look before you leap: read the relevant files (read_file/grep/"
-    "list_files) BEFORE editing. Never guess at file contents.\n"
+    "- A PROJECT OUTLINE and DEPENDENCY MAP are in your context every turn. USE "
+    "THEM: to work on a feature, open its entry file (from the map) and follow "
+    "that file's import edges — read only those files. Do NOT list_files or grep "
+    "across the whole project when the map already shows where a feature lives; "
+    "search only for something the map doesn't cover.\n"
+    "- Look before you leap: read the specific files you will change BEFORE "
+    "editing them. Never guess at file contents.\n"
     "- Prefer str_replace for targeted changes; write_file for new files or "
     "full rewrites.\n"
     "- Structure every project as a CONTEXT-FRIENDLY 'file per feature' spine: "
@@ -434,6 +439,23 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                                      "Verification failed — the project's tests "
                                      "did not pass. Investigate and fix, then "
                                      "re-run run_tests and finish:\n" + out})
+                    continue
+                # (3) static-check touched web files: a <script>/<link>/import
+                # pointing at a local file that doesn't exist is deterministic
+                # breakage the model often misses. (Runtime JS errors are caught
+                # separately by the headless preview check.)
+                try:
+                    web_hard, _web_soft = agent_tools.check_web_files()
+                except Exception:
+                    web_hard = ""
+                if web_hard:
+                    repair_left -= 1
+                    _emit("verify_failed", which="web", detail=_clip(web_hard, 500))
+                    messages.append({"role": "assistant", "content": final_text})
+                    messages.append({"role": "user", "content":
+                                     "Verification failed — web files reference "
+                                     "local files that do not exist. Create them "
+                                     "or fix the paths, then finish:\n" + web_hard})
                     continue
             if write and not plan:
                 _emit("verify_ok")

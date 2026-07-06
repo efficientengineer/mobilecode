@@ -348,6 +348,143 @@ def t_check_python(paths="", **_):
     return errs or "OK — no syntax errors"
 
 
+def _strip_js_noncode(src: str) -> str:
+    """Blank out comments, strings, template literals, and regex so bracket
+    counting sees only code. Best-effort (no real JS parser on device)."""
+    out = []
+    i, n = 0, len(src)
+    prev = ""  # last significant code char, for the regex-vs-division heuristic
+    _re_pre = set("(,=:[!&|?{};+-*%<>~^")
+    while i < n:
+        c = src[i]
+        two = src[i:i + 2]
+        if two == "//":
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if two == "/*":
+            j = src.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        if c in "'\"`":
+            q = c
+            i += 1
+            while i < n and src[i] != q:
+                i += 2 if src[i] == "\\" else 1
+            i += 1
+            out.append("0")
+            prev = "0"
+            continue
+        if c == "/" and (prev == "" or prev in _re_pre):
+            j, inclass, ok = i + 1, False, False
+            while j < n:
+                cj = src[j]
+                if cj == "\\":
+                    j += 2
+                    continue
+                if cj == "\n":
+                    break
+                if cj == "[":
+                    inclass = True
+                elif cj == "]":
+                    inclass = False
+                elif cj == "/" and not inclass:
+                    ok = True
+                    break
+                j += 1
+            if ok:
+                i = j + 1
+                out.append("0")
+                prev = "0"
+                continue
+        if not c.isspace():
+            prev = c
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _js_bracket_report(rel: str, src: str) -> str:
+    """Return a note if () {} [] don't balance in code regions, else ''."""
+    code = _strip_js_noncode(src)
+    match = {")": "(", "}": "{", "]": "["}
+    stack = []
+    for ch in code:
+        if ch in "([{":
+            stack.append(ch)
+        elif ch in ")]}":
+            if not stack or stack[-1] != match[ch]:
+                return (f"{rel}: unbalanced '{ch}' — bracket mismatch "
+                        "(possible truncation or typo)")
+            stack.pop()
+    if stack:
+        return (f"{rel}: {len(stack)} unclosed '{stack[-1]}' "
+                "(file may be truncated)")
+    return ""
+
+
+def check_web_files(paths=None):
+    """Static checks for touched web files. Returns (hard, soft):
+      hard — deterministic breakage (a script/link/import points at a local file
+             that does not exist). Safe to auto-fail a run on.
+      soft — heuristic findings (unbalanced brackets) shown to the agent but not
+             auto-failed, since the headless preview is the real runtime check.
+    """
+    root = _workspace()
+    if paths is None:
+        paths = [p for p in TOUCHED
+                 if p.lower().endswith((".html", ".htm", ".js", ".mjs"))]
+    try:
+        import projectmap as pm
+    except Exception:
+        return "", ""
+    fileset = set()
+    for p in root.rglob("*"):
+        if ".git" in p.parts or ".agent" in p.parts:
+            continue
+        if p.is_file():
+            fileset.add(str(p.relative_to(root)).replace("\\", "/"))
+    hard, soft = [], []
+    for rel in paths:
+        fp = root / rel
+        if not fp.exists():
+            continue
+        low = rel.lower()
+        try:
+            text = fp.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        if low.endswith((".html", ".htm")):
+            for m in pm._HTML_REF.finditer(text):
+                ref = m.group(1)
+                if pm._is_external(ref) or ref.startswith(("#", "mailto:", "tel:")):
+                    continue
+                if not pm._resolve_path(root, rel, ref, fileset):
+                    hard.append(f"{rel}: references missing local file '{ref}'")
+        if low.endswith((".js", ".mjs")):
+            for m in pm._JS_IMPORT.finditer(text):
+                ref = m.group(1)
+                if pm._is_external(ref) or not ref.startswith((".", "/")):
+                    continue  # external/bare package specifier
+                if not pm._resolve_path(root, rel, ref, fileset):
+                    hard.append(f"{rel}: imports missing local file '{ref}'")
+            note = _js_bracket_report(rel, text)
+            if note:
+                soft.append(note)
+    return "\n".join(hard), "\n".join(soft)
+
+
+def t_check_web(paths="", **_):
+    lst = [p.strip() for p in str(paths).split(",") if p.strip()] or None
+    hard, soft = check_web_files(lst)
+    out = []
+    if hard:
+        out.append("MISSING REFERENCES:\n" + hard)
+    if soft:
+        out.append("POSSIBLE ISSUES (confirm in the preview):\n" + soft)
+    return "\n\n".join(out) or "OK — no obvious web issues"
+
+
 TEST_TIMEOUT = int(os.environ.get("AGENT_TEST_TIMEOUT", "30"))
 
 
@@ -602,6 +739,15 @@ READ_TOOLS = [
          "paths": {"type": "string", "description": "comma-separated .py paths (optional)"},
      }, []),
      "fn": t_check_python},
+    {"name": "check_web",
+     "description": "Static-check touched HTML/JS files: flags <script>/<link>/"
+                    "import references to local files that don't exist, and "
+                    "possible unbalanced brackets. Empty paths = every web file "
+                    "you touched this run.",
+     "input_schema": _schema({
+         "paths": {"type": "string", "description": "comma-separated .html/.js paths (optional)"},
+     }, []),
+     "fn": t_check_web},
     {"name": "web_fetch",
      "description": "Fetch a URL (http/https) and return its readable text "
                     "(HTML is reduced to text). Use for docs, API references, "

@@ -744,9 +744,11 @@ const actions = {
         loadHistory();
       });
   },
-  async buildOutline() {
-    bubble("Building outline from the project files…", "sys");
-    bubble((await call("orch", { fn: "build_outline" })).text, "sys");
+  async refreshMap() {
+    // Rebuild the dependency graph + outline the agent uses to avoid re-reading
+    // the whole project. Runs automatically each task too; this forces it now.
+    bubble("Refreshing project map (dependency graph + outline)…", "sys");
+    bubble((await call("orch", { fn: "refresh_project_map" })).text, "sys");
     refreshStats();
   },
   async caveman() {
