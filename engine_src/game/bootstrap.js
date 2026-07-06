@@ -9,6 +9,8 @@ import { config } from './config.js';
 import { makeLoop } from '../engine/core/loop.js';
 import { cameras } from '../engine/render/cameras.js';
 import { movements } from '../engine/control/movements.js';
+import { weapons } from '../engine/control/weapons.js';
+import { aim } from '../engine/control/aim.js';
 
 import { initInput } from '../engine/systems/input.js';
 import { initMovement } from '../engine/systems/movement.js';
@@ -30,11 +32,15 @@ export function start(canvas) {
   ctx.config = config;
   ctx.canvas = canvas;
 
-  // Pick a camera and a movement style (swappable components). For a platformer
-  // you'd pair cameras.sideScroller() with movements.platformer(); for a runner,
-  // movements.autoRun(); for a top-down twin-stick shooter, the defaults below.
+  // Pick the swappable components that define the feel. For a platformer you'd
+  // pair cameras.sideScroller() with movements.platformer(); for a runner,
+  // movements.autoRun(). Try weapons.shotgun()/burst()/radial() for a different
+  // gun, or aim.autoAim({range}) for one-thumb aim assist. Defaults below make a
+  // top-down twin-stick shooter.
   ctx.camera = cameras.topDown({ height: config.camHeight, back: config.camBack });
   ctx.movement = movements.twinStick({ speed: config.playerSpeed });
+  ctx.weapon = weapons.single({ cooldown: config.fireCooldown });
+  ctx.aim = aim.stick();
 
   // The systems that make up this game. Add or remove a line to change it;
   // events keep them decoupled, so order only matters within the same phase.

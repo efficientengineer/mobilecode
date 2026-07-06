@@ -38,10 +38,16 @@ Set `ctx.camera` in bootstrap to pick a view; all are swappable without touching
 ## Movement (reusable component — engine/control/movements.js)
 Set `ctx.movement` in bootstrap: `movements.twinStick({speed})` (top-down) · `movements.eightWay({speed})` · `movements.tank({speed,turn})` · `movements.platformer({speed,jump,gravity})` (side view, gravity+jump) · `movements.autoRun({speed,jump})` (endless runner). Each is `update(entity, input, dt)` where `input = {move:[x,z], aim:[x,z], jump}`. Default is twinStick.
 
+## Weapons (reusable component — engine/control/weapons.js)
+Set `ctx.weapon` in bootstrap to pick the gun (rhythm + pattern): `weapons.single({cooldown})` (default) · `weapons.rapid({cooldown})` (machine gun) · `weapons.shotgun({pellets,spreadDeg,cooldown})` (fan) · `weapons.burst({count,gap,cooldown})` (tap-fire) · `weapons.radial({ways,cooldown})` (nova/bomb). Each is a stateful `update(dt, firing, dir) → shots[]`; a shot is `{dir:[x,z], speed?, life?, damage?, scale?}`. The fire system spawns whatever it returns, so this is the one place that decides "what a shot is." Per-shot `damage` overrides `config.bulletDamage`.
+
+## Aim (reusable component — engine/control/aim.js)
+Set `ctx.aim` in bootstrap to pick how shots are pointed: `aim.stick()` (twin-stick, default) · `aim.facing()` (shoot where you move — one-stick/auto-fire) · `aim.manual()` (sticky: flick to set, holds after release) · `aim.autoAim({range})` (lock the nearest enemy — mobile aim assist). Each is `resolve(player, raw, ctx) → [x,z]` (a unit direction). The fire system asks the aimer each shot.
+
 ## Building a game from a description (the app's core job)
 The app's purpose is making games. Given a description, DON'T write an engine — pick components and glue:
 1. **View + movement** from the description: top-down shooter → `cameras.topDown` + `movements.twinStick`; platformer → `cameras.sideScroller` + `movements.platformer`; runner → `cameras.sideScroller` + `movements.autoRun`; true 2D → `cameras.flat2D`.
-2. **Systems** in `game/bootstrap.js`: keep the ones the game needs (movement, ai, collision, health, score, hud, audio, render, gamestate are almost always in; add `fire`/`spawn` for shooters, drop them for a pure platformer).
+2. **Systems** in `game/bootstrap.js`: keep the ones the game needs (movement, ai, collision, health, score, hud, audio, render, gamestate are almost always in; add `fire`/`spawn` for shooters, drop them for a pure platformer). For a shooter also pick `ctx.weapon` (single/rapid/shotgun/burst/radial) and `ctx.aim` (stick/facing/manual/autoAim) — e.g. a one-thumb mobile shooter is `aim.autoAim` + `weapons.rapid`.
 3. **Entities** (`game/entities.js`): mesh (box/sphere/cylinder/plane), color, size, stats — pure data. **Config** (`game/config.js`): the numbers.
 4. **Signals/registries** (`game/contracts.js`): add any the game needs.
 5. Ask the user AT MOST 1–2 questions only for genuinely ambiguous core choices (e.g. "waves or endless? health or one-hit?"). Otherwise pick sensible defaults and build.

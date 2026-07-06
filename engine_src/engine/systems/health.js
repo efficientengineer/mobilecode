@@ -10,7 +10,7 @@ export function initHealth(ctx) {
   on('enemy-hit', ({ enemy, bullet }) => {
     if (enemy.dead) return;                 // already killed this frame
     despawn(bullet);
-    enemy.hp -= ctx.config.bulletDamage;
+    enemy.hp -= (bullet.damage != null ? bullet.damage : ctx.config.bulletDamage);
     if (enemy.hp <= 0) { despawn(enemy); emit('enemy-died', enemy); }
   });
   on('player-hit', ({ enemy }) => {

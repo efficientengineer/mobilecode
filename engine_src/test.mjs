@@ -17,6 +17,8 @@ import { initScore } from './engine/systems/score.js';
 import { initCleanup } from './engine/systems/cleanup.js';
 import { cameras, topDown, sideScroller, flat2D, thirdPerson } from './engine/render/cameras.js';
 import { movements, twinStick, platformer, autoRun } from './engine/control/movements.js';
+import { weapons, single, shotgun, burst, radial } from './engine/control/weapons.js';
+import { aim } from './engine/control/aim.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -59,6 +61,34 @@ const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); pro
   check('autoRun runs forward constantly', e.vel[0] === 10); }
 { check('movement library exposes the variants', ['twinStick', 'eightWay', 'tank', 'platformer', 'autoRun'].every(k => typeof movements[k] === 'function')); }
 
+// ---- weapon controllers (pure) ----
+{ const g = single({ speed: 20, cooldown: 0.2 });
+  check('single fires one shot on the first tick', g(0.016, true, [0, 1]).length === 1);
+  check('single respects cooldown', g(0.016, true, [0, 1]).length === 0);
+  check('weapon holds fire when the trigger is up', single({})(0.5, false, [0, 1]).length === 0); }
+{ const sh = shotgun({ pellets: 5, spreadDeg: 30, cooldown: 0.6 })(0.7, true, [0, 1]);
+  check('shotgun fires every pellet', sh.length === 5);
+  check('shotgun center pellet points along the aim', Math.abs(sh[2].dir[0]) < 1e-9 && Math.abs(sh[2].dir[1] - 1) < 1e-9);
+  check('shotgun fans symmetrically', Math.abs(sh[0].dir[0] + sh[4].dir[0]) < 1e-9); }
+{ const w = burst({ count: 3, gap: 0.05, cooldown: 0.5 }); let n = 0;
+  for (let i = 0; i < 3; i++) n += w(0.05, true, [0, 1]).length;
+  check('burst fires exactly count shots', n === 3);
+  check('burst then rests', w(0.05, true, [0, 1]).length === 0); }
+{ const r = radial({ ways: 8, cooldown: 0.5 });
+  check('radial fires ways bullets at once', r(0.6, true, [0, 1]).length === 8);
+  check('radial respects cooldown', r(0.1, true, [0, 1]).length === 0); }
+{ check('weapon library exposes the variants', ['single', 'rapid', 'shotgun', 'burst', 'radial'].every(k => typeof weapons[k] === 'function')); }
+
+// ---- aim controllers ----
+{ check('aim.stick uses the raw stick', aim.stick()({ pos: [0, 0, 0], rot: 0 }, [1, 0], {}).join(',') === '1,0');
+  check('aim.stick falls back to facing when centered', aim.stick()({ pos: [0, 0, 0], rot: 0 }, [0, 0], {})[1] === 1); }
+{ const m = aim.manual(); m({ pos: [0, 0, 0], rot: 0 }, [1, 0], {});
+  check('aim.manual holds the last aim after release', m({ pos: [0, 0, 0], rot: 0 }, [0, 0], {}).join(',') === '1,0'); }
+{ const enemies = makeRegistry(); enemies.add({ pos: [3, 0, 0], dead: false }); enemies.add({ pos: [0, 0, 10], dead: false }); enemies.flush();
+  const d = aim.autoAim({ range: 20 })({ pos: [0, 0, 0], rot: 0 }, [0, 0], { registries: { enemies } });
+  check('aim.autoAim locks the nearest enemy', d[0] === 1 && d[1] === 0); }
+{ check('aim library exposes the variants', ['stick', 'facing', 'manual', 'autoAim'].every(k => typeof aim[k] === 'function')); }
+
 // ---- gameplay sim ----
 const ENT = { player: { mesh: 'cylinder', color: [0, 0, 1], scale: 1, radius: 0.6 },
   enemy: { mesh: 'sphere', color: [1, 0, 0], scale: 1, radius: 0.6, hp: 1, speed: 3 },
@@ -77,6 +107,11 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   check('spawn director created a wave', ctx.registries.enemies.size > 0);
   ctx.signals.firing.set(true); ctx.signals.aimInput.set([1, 0]); loop.step(1 / 60);
   check('firing produced a bullet', ctx.registries.bullets.size > 0); }
+
+{ clearEvents(); resetWorld(); const ctx = makeCtx(); ctx.weapon = shotgun({ pellets: 4, cooldown: 0.3 }); const loop = sim(ctx);
+  ctx.signals.player.set(spawn('player', { at: [0, 0, 0], radius: 0.6 }));
+  ctx.signals.aimInput.set([1, 0]); ctx.signals.firing.set(true); loop.step(1 / 60);
+  check('weapon component spawns a bullet per pellet', ctx.registries.bullets.size === 4); }
 
 { clearEvents(); resetWorld(); const ctx = makeCtx(); const loop = sim(ctx);
   const p = spawn('player', { at: [0, 0, 0], radius: 0.6 }); ctx.signals.player.set(p);
