@@ -28,4 +28,7 @@
     <string name="menu_balance">Balance</string>
     <string name="send">Send</string>
     <string name="type_hint">Type a task…</string>
+    <string name="menu_run">Run app (preview)</string>
+    <string name="menu_cloud_build">Build in cloud</string>
+    <string name="menu_build_status">Build status</string>
 </resources>

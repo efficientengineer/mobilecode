@@ -3,6 +3,12 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item android:id="@+id/action_files" android:title="@string/menu_files"
         app:showAsAction="never" />
+    <item android:id="@+id/action_run" android:title="@string/menu_run"
+        app:showAsAction="never" />
+    <item android:id="@+id/action_cloud_build" android:title="@string/menu_cloud_build"
+        app:showAsAction="never" />
+    <item android:id="@+id/action_build_status" android:title="@string/menu_build_status"
+        app:showAsAction="never" />
     <item android:id="@+id/action_commit" android:title="@string/menu_commit"
         app:showAsAction="never" />
     <item android:id="@+id/action_push" android:title="@string/menu_push"

@@ -108,6 +108,9 @@ class MainActivity : AppCompatActivity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             R.id.action_files -> startActivity(Intent(this, FilesActivity::class.java))
+            R.id.action_run -> startActivity(Intent(this, RunActivity::class.java))
+            R.id.action_cloud_build -> runGit("Cloud build") { it.callAttr("cloud_build").toString() }
+            R.id.action_build_status -> runGit("Build status") { it.callAttr("latest_build").toString() }
             R.id.action_commit -> runOrchestrator("commit_now")
             R.id.action_push -> runGit("Push") { it.callAttr("push").toString() }
             R.id.action_pull -> runGit("Pull") { it.callAttr("pull").toString() }

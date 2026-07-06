@@ -181,6 +181,44 @@ def list_tree() -> str:
     return json.dumps(files)
 
 
+def cloud_build() -> str:
+    """Trigger the active repo's first workflow (needs workflow_dispatch)."""
+    try:
+        full = _remote_full_name(_workspace())
+        if not full:
+            return "No repo set for this session."
+        repo = _api("GET", f"/repos/{full}")
+        branch = repo.get("default_branch", "main")
+        wfs = _api("GET", f"/repos/{full}/actions/workflows").get("workflows", [])
+        if not wfs:
+            return f"No workflows in {full} to build."
+        wf = wfs[0]
+        _api("POST", f"/repos/{full}/actions/workflows/{wf['id']}/dispatches",
+             {"ref": branch})
+        return (f"Triggered '{wf.get('name')}' on {full}@{branch}.\n"
+                f"Watch: https://github.com/{full}/actions")
+    except Exception:
+        return "Cloud build failed:\n" + traceback.format_exc()
+
+
+def latest_build() -> str:
+    """Status of the active repo's most recent workflow run."""
+    try:
+        full = _remote_full_name(_workspace())
+        if not full:
+            return "No repo set for this session."
+        runs = _api("GET", f"/repos/{full}/actions/runs?per_page=1").get(
+            "workflow_runs", [])
+        if not runs:
+            return "No runs yet."
+        r = runs[0]
+        status = r.get("status")
+        concl = r.get("conclusion") or "…"
+        return f"{status} / {concl}\n{r.get('html_url')}"
+    except Exception:
+        return "Status check failed:\n" + traceback.format_exc()
+
+
 def balances() -> str:
     """Return provider balances. DeepSeek exposes one; Anthropic does not."""
     import urllib.request
