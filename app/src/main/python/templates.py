@@ -295,6 +295,23 @@ TEMPLATES = [
 ]
 
 
+# Our own event-driven low-poly 3D engine (no third-party 3D lib). It ships as a
+# bundle in engine3d.py; the AI GLUES against engine/CONTRACTS.md rather than
+# rewriting the engine each game. Imported defensively so templates still work if
+# the (OTA) engine3d module isn't present in an older build.
+try:
+    import engine3d
+    TEMPLATES.insert(0, {
+        "id": "engine-3d",
+        "name": "3D game (our engine, low-poly)",
+        "description": "Our own event-driven WebGL engine + a playable twin-stick "
+                       "shooter. Systems are decoupled; you glue, not rewrite.",
+        "files": dict(engine3d.FILES),
+    })
+except Exception:
+    pass
+
+
 def list_templates(_=None) -> str:
     return json.dumps([{k: t[k] for k in ("id", "name", "description")}
                        for t in TEMPLATES])

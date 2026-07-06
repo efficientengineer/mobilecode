@@ -5,6 +5,7 @@
     "agentloop.py",
     "git_ops.py",
     "localrun.py",
+    "engine3d.py",
     "templates.py",
     "projectmap.py",
     "best_practices.py",

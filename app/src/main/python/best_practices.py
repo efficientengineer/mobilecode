@@ -181,6 +181,14 @@ PRACTICES = [
              "(ScriptableObject-style), not scattered globals or copies across "
              "files. Systems read from the store and emit events to change it; "
              "they never reach into each other to mutate state directly."},
+    {"scope": "web", "core": True,
+     "tags": ["engine", "game", "system", "glue", "spawn", "entity", "level",
+              "gameplay", "mechanic", "player", "enemy", "weapon", "wire"],
+     "text": "If the project has an engine/ folder with a CONTRACTS.md, GLUE — "
+             "don't rewrite. Read engine/CONTRACTS.md and edit only game/ "
+             "(contracts, entities, config, bootstrap); reuse the existing "
+             "systems, and add a new one only for behavior none provides. Never "
+             "re-implement the engine or add a 3D library."},
 ]
 
 _GAME_FILE_SIGNALS = ("babylon", "phaser", "three", "pixi", "kaboom", "<canvas",
