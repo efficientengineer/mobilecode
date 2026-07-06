@@ -91,6 +91,10 @@ async function refreshStats() {
     let s = `ctx ~${(c.outlineTokens + c.discussionTokens + (c.memoryTokens || 0))}t ` +
             `(outline ${c.outlineTokens} · disc ${c.discussionTokens} · ${c.turns} turns)`;
     if (c.caveman) s += " · 🪨";
+    try {
+      const pins = JSON.parse((await call("orch", { fn: "list_context_files" })).text);
+      if (pins.length) s += ` · 📎${pins.length}`;
+    } catch (e) {}
     const b = JSON.parse((await call("py.call", { module: "git_ops", fn: "balance_value" })).text);
     if (b.deepseek != null) {
       if (_balStart == null) _balStart = b.deepseek;
@@ -206,6 +210,8 @@ function fmtEvent(e) {
     case "plan_done": return "📋 Plan: " + (e.summary || "") + " (" + (e.files || []).length + " files)";
     case "round_start": return "── Round " + (e.round + 1) + ": " + (e.files || []).join(", ");
     case "impl_start": return "⚙️ implementer → " + e.path + "\n    " + (e.instruction || "").slice(0, 120);
+    case "impl_reason": return "   💭 " + (e.reason || "").slice(0, 160);
+    case "plan_reason": return "💭 " + (e.reason || "").slice(0, 160);
     case "impl_done": return "   ✓ " + e.path + " [" + e.status + "]";
     case "review_start": return "🔎 Orchestrator reviewing…";
     case "review_done": return "   review: " + e.status + (e.notes ? " — " + e.notes.slice(0, 120) : "");
@@ -222,13 +228,16 @@ async function openRun(runId) {
   const rounds = rec.rounds || [];
   if (!rounds.length) { modal("Run details", `<div class="hint">No details recorded.</div>`); return; }
   const html = rounds.map((rd) => {
+    const planThink = rd.plan_reasoning
+      ? `<div class="hint">orchestrator thinking:</div><pre class="small">${escapeHtml(rd.plan_reasoning.slice(0, 4000))}</pre>` : "";
     const files = (rd.handoffs || []).map((h) =>
       `<div class="run-file">${h.path} [${h.status}]</div>
-       <div class="hint">prompt to implementer:</div><pre class="small">${escapeHtml(h.instruction || "")}</pre>
-       <div class="hint">implementer output:</div><pre class="small">${escapeHtml((h.output || "").slice(0, 4000))}</pre>`
+       <div class="hint">prompt to implementer:</div><pre class="small">${escapeHtml(h.instruction || "")}</pre>` +
+      (h.reasoning ? `<div class="hint">implementer thinking:</div><pre class="small">${escapeHtml(h.reasoning.slice(0, 4000))}</pre>` : "") +
+      `<div class="hint">implementer output:</div><pre class="small">${escapeHtml((h.output || "").slice(0, 4000))}</pre>`
     ).join("");
     const rev = rd.review ? `<div class="hint">orchestrator review:</div><pre class="small">${escapeHtml((rd.review.notes || rd.review.status || ""))}</pre>` : "";
-    return `<div class="run-round"><h4>Round ${(rd.round || 0) + 1} — ${(rd.handoffs || []).length} implementer(s)</h4>${files}${rev}</div>`;
+    return `<div class="run-round"><h4>Round ${(rd.round || 0) + 1} — ${(rd.handoffs || []).length} implementer(s)</h4>${planThink}${files}${rev}</div>`;
   }).join("");
   modal("Run details", html);
 }
@@ -236,6 +245,10 @@ async function openRun(runId) {
 function updateCavemanLabel(on) {
   const b = document.querySelector('[data-act="caveman"]');
   if (b) b.textContent = "Caveman: " + (on ? "on" : "off");
+}
+function updateThinkingLabel(on) {
+  const b = document.querySelector('[data-act="thinking"]');
+  if (b) b.textContent = "Thinking: " + (on ? "on" : "off");
 }
 
 function addApprove() {
@@ -333,6 +346,28 @@ const actions = {
     bubble(r.text, "sys");
     updateCavemanLabel(next === "1");
     refreshStats();
+  },
+  async thinking() {
+    const cur = (await call("orch", { fn: "get_thinking" })).text.trim();
+    const next = cur === "1" ? "0" : "1";
+    const r = await call("orch", { fn: "set_thinking", arg: next });
+    bubble(r.text, "sys");
+    updateThinkingLabel(next === "1");
+  },
+  async contextFiles() {
+    let pinned = [];
+    try { pinned = JSON.parse((await call("orch", { fn: "list_context_files" })).text); } catch (e) {}
+    const body = (pinned.length
+      ? pinned.map((p) => `<div class="list-item" data-unpin="${p}"><span>${p}</span><span class="sub">tap to remove</span></div>`).join("")
+      : `<div class="hint">No files attached.</div>`) +
+      `<div class="hint">Add files from the Files screen (📌), so the model reads them as context.</div>`;
+    modal("Attached files", body);
+    $("#modalBody").querySelectorAll("[data-unpin]").forEach((el) => {
+      el.onclick = async () => {
+        await call("orch", { fn: "remove_context_file", arg: el.dataset.unpin });
+        closeSheet("#modal"); refreshStats();
+      };
+    });
   },
   newRepo() {
     modal("New GitHub repo",
@@ -440,7 +475,10 @@ async function filesModal(path) {
   const entries = [...[...dirs].sort(), ...files.sort()];
   const up = path ? `<div class="filerow dir" data-up="1">.. (up)</div>` : "";
   const body = up + (entries.length
-    ? entries.map((e) => `<div class="filerow ${e.endsWith("/") ? "dir" : ""}" data-e="${e}">${e}</div>`).join("")
+    ? entries.map((e) => {
+        const pin = e.endsWith("/") ? "" : `<b data-pin="${path + e}" title="Attach to context"> 📌</b>`;
+        return `<div class="filerow ${e.endsWith("/") ? "dir" : ""}"><span data-e="${e}">${e}</span>${pin}</div>`;
+      }).join("")
     : `<div class="hint">(empty)</div>`);
   modal("/" + path, body);
   $("#modalBody").querySelectorAll("[data-e]").forEach((el) => {
@@ -448,6 +486,14 @@ async function filesModal(path) {
       const e = el.dataset.e;
       if (e.endsWith("/")) filesModal(path + e);
       else showFile(path + e);
+    };
+  });
+  $("#modalBody").querySelectorAll("[data-pin]").forEach((el) => {
+    el.onclick = async (ev) => {
+      ev.stopPropagation();
+      const r = await call("orch", { fn: "add_context_file", arg: el.dataset.pin });
+      bubble(r.text, "sys");
+      refreshStats();
     };
   });
   const upEl = $("#modalBody").querySelector("[data-up]");
@@ -468,7 +514,7 @@ function escapeHtml(s) {
 
 // --- Wire up -------------------------------------------------------------
 $("#menuBtn").onclick = () => openSheet("#menu");
-$("#menu").querySelectorAll("[data-act]").forEach((b) => {
+document.querySelectorAll("[data-act]").forEach((b) => {
   b.onclick = () => { closeSheet("#menu"); (actions[b.dataset.act] || (() => {}))(); };
 });
 document.querySelectorAll("[data-close]").forEach((b) => {
@@ -496,5 +542,6 @@ document.querySelectorAll(".mode").forEach((b) => {
 (async function () {
   try { await refreshHeader(); await loadHistory(); } catch (e) {}
   try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
+  try { updateThinkingLabel((await call("orch", { fn: "get_thinking" })).text.trim() === "1"); } catch (e) {}
   bubble("Ready. Type or tap 🎤 to dictate a task.", "sys");
 })();

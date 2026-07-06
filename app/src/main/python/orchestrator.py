@@ -43,6 +43,24 @@ def _impl_model() -> str:
     w = (WORKER_MODEL or "").strip()
     return w if w else LEAD_MODEL
 
+
+# Reasoning captured from the most recent _call (read right after calling).
+_LAST_REASON = ""
+
+
+def _thinking_on() -> bool:
+    return os.environ.get("AGENT_THINKING", "0") == "1"
+
+
+def set_thinking(flag="1") -> str:
+    on = str(flag) in ("1", "true", "on")
+    os.environ["AGENT_THINKING"] = "1" if on else "0"
+    return "Thinking capture " + ("on" if on else "off")
+
+
+def get_thinking(_=None) -> str:
+    return "1" if _thinking_on() else "0"
+
 # Keys are injected by the Kotlin layer into the environment before we run.
 # (For a public app they come from the user's own settings, never hardcoded.)
 #   ANTHROPIC_API_KEY, DEEPSEEK_API_KEY
@@ -116,12 +134,22 @@ def _call(model: str, system: str, user: str, max_tokens: int = 4000) -> str:
     "deepseek/<model>" or any other "<provider>/<model>" that speaks the
     OpenAI-compatible chat/completions schema (DeepSeek does).
     """
+    global _LAST_REASON
+    _LAST_REASON = ""
     provider, _, model_name = model.partition("/")
     if not model_name:
         provider, model_name = "openai", model
 
     if provider == "anthropic":
         key = os.environ.get("ANTHROPIC_API_KEY", "")
+        payload = {
+            "model": model_name,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        if _thinking_on():
+            payload["thinking"] = {"type": "adaptive", "display": "summarized"}
         result = _http_post_json(
             "https://api.anthropic.com/v1/messages",
             {
@@ -129,14 +157,11 @@ def _call(model: str, system: str, user: str, max_tokens: int = 4000) -> str:
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
-            {
-                "model": model_name,
-                "max_tokens": max_tokens,
-                "system": system,
-                "messages": [{"role": "user", "content": user}],
-            },
+            payload,
         )
         parts = result.get("content", [])
+        _LAST_REASON = "".join(
+            p.get("thinking", "") for p in parts if p.get("type") == "thinking")
         return "".join(p.get("text", "") for p in parts if p.get("type") == "text")
 
     # OpenAI-compatible providers (DeepSeek, etc.)
@@ -159,7 +184,9 @@ def _call(model: str, system: str, user: str, max_tokens: int = 4000) -> str:
             ],
         },
     )
-    return result["choices"][0]["message"]["content"]
+    msg = result["choices"][0]["message"]
+    _LAST_REASON = msg.get("reasoning_content", "") or ""
+    return msg["content"]
 
 
 def _plan_with_lead(task: str, root: Path) -> dict:
@@ -197,7 +224,9 @@ def _plan_with_lead(task: str, root: Path) -> dict:
         if raw.startswith("json"):
             raw = raw[4:]
         raw = raw.strip("` \n")
-    return json.loads(raw)
+    plan = json.loads(raw)
+    plan["_reasoning"] = _LAST_REASON
+    return plan
 
 
 _SR_RE = None
@@ -268,6 +297,7 @@ def _edit_with_worker(edit: dict, root: Path) -> dict:
         f"INSTRUCTION:\n{instruction}"
     )
     output = _call(_impl_model(), system, user).strip()
+    reason = _LAST_REASON
 
     parsed = _apply_sr_blocks(current or "", output)
     if parsed is None:
@@ -284,6 +314,7 @@ def _edit_with_worker(edit: dict, root: Path) -> dict:
         "path": path,
         "instruction": instruction,
         "output": output,
+        "reasoning": reason,
         "status": status,
         "applied": applied,
         "total": total,
@@ -404,6 +435,18 @@ def _full_context(task_hint: str = "") -> str:
     outline = _outline_file(root)
     if outline.exists():
         parts.append("PROJECT OUTLINE:\n" + outline.read_text(encoding="utf-8"))
+    try:
+        pinned = json.loads(list_context_files())
+    except Exception:
+        pinned = []
+    att = []
+    for p in pinned:
+        c = _read_file(root, p)
+        if c:
+            att.append(f"### {p}\n{c[:6000]}")
+    if att:
+        parts.append("ATTACHED FILES (the user asked you to read these):\n" +
+                     "\n\n".join(att))
     disc = _read_discussion()[-12:]
     if disc:
         cave = _caveman_on()
@@ -473,6 +516,47 @@ def set_caveman(flag="1") -> str:
 
 def get_caveman(_=None) -> str:
     return "1" if _caveman_on() else "0"
+
+
+# --- Attached context files ("files for the model to look at") -----------
+
+def _ctx_files_path() -> Path:
+    return _agent_dir() / "context_files.json"
+
+
+def list_context_files(_=None) -> str:
+    fp = _ctx_files_path()
+    if fp.exists():
+        try:
+            return fp.read_text(encoding="utf-8")
+        except Exception:
+            pass
+    return "[]"
+
+
+def add_context_file(path="") -> str:
+    path = str(path).strip()
+    if not path:
+        return "no path"
+    try:
+        lst = json.loads(list_context_files())
+    except Exception:
+        lst = []
+    if path not in lst:
+        lst.append(path)
+        _ctx_files_path().write_text(json.dumps(lst), encoding="utf-8")
+        return f"Attached {path}"
+    return f"{path} already attached"
+
+
+def remove_context_file(path="") -> str:
+    try:
+        lst = json.loads(list_context_files())
+    except Exception:
+        lst = []
+    lst = [p for p in lst if p != str(path)]
+    _ctx_files_path().write_text(json.dumps(lst), encoding="utf-8")
+    return f"Removed {path}"
 
 
 def build_outline(_=None) -> str:
@@ -620,6 +704,8 @@ def _run_edits(task: str, plan: dict, root: Path, run_id: str) -> str:
                 res = {"path": e.get("path"), "instruction": e.get("instruction"),
                        "output": f"ERROR: {ex}", "status": "error", "applied": 0, "total": 0}
             handoffs.append(res)
+            if res.get("reasoning"):
+                _emit("impl_reason", round=r, path=res["path"], reason=res["reasoning"][:500])
             _emit("impl_done", round=r, path=res["path"], status=res["status"])
 
         review = {"status": "done", "notes": "", "edits": []}
@@ -629,6 +715,7 @@ def _run_edits(task: str, plan: dict, root: Path, run_id: str) -> str:
             _emit("review_done", round=r, status=review.get("status"), notes=review.get("notes", ""))
 
         rounds.append({"round": r, "plan_summary": plan.get("summary", ""),
+                       "plan_reasoning": plan.get("_reasoning", ""),
                        "handoffs": handoffs, "review": review})
 
         if interrupted or review.get("status") == "done" or not review.get("edits"):

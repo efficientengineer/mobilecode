@@ -87,6 +87,9 @@ pre.small { white-space: pre-wrap; word-wrap: break-word; background: var(--bg);
 .sheet-inner { width: 100%; max-height: 85vh; overflow-y: auto; background: var(--panel);
   border-top-left-radius: 18px; border-top-right-radius: 18px; padding: 16px; }
 .sheet-title { font-weight: 700; font-size: 17px; margin-bottom: 12px; }
+#quick { display: flex; gap: 2px; flex-shrink: 0; }
+.group-title { font-size: 12px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px; margin: 14px 2px 6px; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .grid button { background: var(--panel2); border-radius: 12px; padding: 14px 10px; font-weight: 600; }
 .grid button:active { background: var(--border); }

@@ -14,6 +14,11 @@
       <div id="subtitle">—</div>
       <div id="stats"></div>
     </div>
+    <div id="quick">
+      <button class="icon" data-act="files" title="Files">📁</button>
+      <button class="icon" data-act="commit" title="Commit">✔️</button>
+      <button class="icon" data-act="push" title="Push">⬆️</button>
+    </div>
   </header>
 
   <main id="chat"></main>
@@ -42,29 +47,46 @@
   <!-- Slide-up menu -->
   <div id="menu" class="sheet hidden">
     <div class="sheet-inner">
-      <div class="sheet-title">Actions</div>
+      <div class="sheet-title">Menu</div>
+
+      <div class="group-title">Project</div>
       <div class="grid">
+        <button data-act="sessions">Projects</button>
+        <button data-act="models">Models</button>
         <button data-act="files">Files</button>
+        <button data-act="contextFiles">Attach files</button>
+        <button data-act="buildOutline">Build outline</button>
         <button data-act="run">Run app</button>
+      </div>
+
+      <div class="group-title">Git</div>
+      <div class="grid">
         <button data-act="commit">Commit</button>
         <button data-act="push">Push</button>
         <button data-act="pull">Pull</button>
         <button data-act="newRepo">New repo</button>
         <button data-act="switchRepo">Switch repo</button>
-        <button data-act="sessions">Projects</button>
-        <button data-act="models">Project models</button>
-        <button data-act="buildOutline">Build outline</button>
-        <button data-act="caveman">Caveman: —</button>
-        <button data-act="viewContext">View context</button>
-        <button data-act="trimContext">Trim context</button>
-        <button data-act="clearContext">Clear context</button>
-        <button data-act="balance">Balance</button>
         <button data-act="cloudBuild">Build in cloud</button>
         <button data-act="buildStatus">Build status</button>
+      </div>
+
+      <div class="group-title">Context</div>
+      <div class="grid">
+        <button data-act="viewContext">View</button>
+        <button data-act="trimContext">Trim</button>
+        <button data-act="clearContext">Clear</button>
+        <button data-act="caveman">Caveman: —</button>
+        <button data-act="thinking">Thinking: —</button>
+      </div>
+
+      <div class="group-title">System</div>
+      <div class="grid">
+        <button data-act="balance">Balance</button>
         <button data-act="settings">Settings</button>
         <button data-act="updateAgent">Update agent</button>
         <button data-act="updateUI">Update UI</button>
       </div>
+
       <button class="close" data-close>Close</button>
     </div>
   </div>
