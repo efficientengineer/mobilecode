@@ -708,13 +708,23 @@ def set_guidelines(text="") -> str:
     return "Guidelines saved"
 
 
-def build_outline(_=None) -> str:
-    """Read the project folder and (re)generate .agent/outline.md.
+_OUTLINE_RULES = (
+    "The outline is a DENSE project map re-sent as context every turn, so every "
+    "word must earn its place. Rules:\n"
+    "- Terse fragments, not sentences. Be as short as the project warrants — a "
+    "tiny project gets a few lines; only grow it as the project genuinely does.\n"
+    "- One line: what the project IS (concrete, not 'a minimal template').\n"
+    "- 'Files:' then `path — role` per real file, one phrase each. Skip empty/boilerplate files.\n"
+    "- Note key functions/entry points ONLY if evident from the snippets.\n"
+    "- NO generic advice, NO invented TODOs, NO 'likely'/'to be added' filler, "
+    "NO restating structure that the file list already shows."
+)
 
-    The outline is sent as context on every turn, so it must be dense: no
-    boilerplate, no generic advice, no restating the obvious. Terse fragments,
-    real facts only.
-    """
+
+def build_outline(_=None) -> str:
+    """(Re)generate .agent/outline.md. When an outline already exists, ask the
+    model for a SEARCH/REPLACE diff against it (cheaper output — only changed
+    lines are emitted) and apply that; fall back to a full rewrite otherwise."""
     try:
         root = _workspace()
         files = _list_repo_files(root, max_files=120)
@@ -723,23 +733,45 @@ def build_outline(_=None) -> str:
             c = _read_file(root, f)
             if c and len(c) < 4000:
                 snippets.append(f"### {f}\n{c[:1500]}")
-        system = (
-            "You write a DENSE project map that is re-sent as context every turn, "
-            "so every word must earn its place. Rules:\n"
-            "- Max ~150 words total. Terse fragments, not sentences.\n"
-            "- One line: what the project IS (concrete, not 'a minimal template').\n"
-            "- 'Files:' then `path — role` per real file, one phrase each. Skip empty/boilerplate files.\n"
-            "- Note key functions/entry points ONLY if evident from the snippets.\n"
-            "- NO generic advice, NO invented TODOs, NO 'likely'/'to be added' filler, "
-            "NO restating structure that the file list already shows.\n"
-            "- If little is known, write little. Output markdown only, no fences."
-        )
-        user = "FILES:\n" + "\n".join(files) + "\n\nSNIPPETS:\n" + "\n\n".join(snippets)
-        md = _call(LEAD_MODEL, system, user, max_tokens=600).strip()
+        facts = "FILES:\n" + "\n".join(files) + "\n\nSNIPPETS:\n" + "\n\n".join(snippets)
+
+        prev = ""
+        of = _outline_file(root)
+        if of.exists():
+            try:
+                prev = of.read_text(encoding="utf-8")
+            except Exception:
+                prev = ""
+
+        if prev.strip():
+            # Diff-based update: emit only what changed.
+            system = (
+                "You maintain a project outline by editing it in place.\n" + _OUTLINE_RULES +
+                "\n\nReturn ONLY SEARCH/REPLACE blocks that update the CURRENT OUTLINE "
+                "to match reality. Each block:\n"
+                "<<<<<<< SEARCH\n<exact text to find>\n=======\n<replacement>\n>>>>>>> REPLACE\n"
+                "Use an empty SEARCH section to append new content. If nothing needs "
+                "changing, return exactly: NO CHANGES."
+            )
+            user = "CURRENT OUTLINE:\n" + prev + "\n\n" + facts
+            out = _call(LEAD_MODEL, system, user, max_tokens=5000)
+            if "NO CHANGES" in out.upper() and _apply_sr_blocks(prev, out) is None:
+                return "Outline already up to date"
+            res = _apply_sr_blocks(prev, out)
+            if res and res[1] > 0:
+                md = res[0].strip()
+                if _caveman_on():
+                    md = _caveman(md)
+                of.write_text(md, encoding="utf-8")
+                return f"Outline updated via diff ({res[1]}/{res[2]} edits, {len(md)} chars)"
+            # Diff failed to apply — fall through to full rewrite.
+
+        system = ("You write a project outline in markdown, no fences.\n" + _OUTLINE_RULES)
+        md = _call(LEAD_MODEL, system, facts, max_tokens=5000).strip()
         if _caveman_on():
             md = _caveman(md)
-        _outline_file(root).write_text(md, encoding="utf-8")
-        return f"Outline updated ({len(md)} chars)"
+        of.write_text(md, encoding="utf-8")
+        return f"Outline generated ({len(md)} chars)"
     except Exception:
         return "Outline failed:\n" + traceback.format_exc()
 
