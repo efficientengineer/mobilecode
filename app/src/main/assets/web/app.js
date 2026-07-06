@@ -179,19 +179,35 @@ async function runTask(task, mode) {
     }
   })();
 
+  let reply = "";
   try {
-    await call("agent.run", { task, mode });
+    reply = (await call("agent.run", { task, mode })).text || "";
   } catch (e) {
     lines.push("Error: " + e.message);
+    reply = "Error: " + e.message;
   }
   polling = false;
   live.remove();
   await loadHistory();
-  if (mode === "plan") addApprove();
+  if (mode === "plan") {
+    addApprove();
+    notifyUser("Plan ready — approve to build", firstLine(reply));
+  } else {
+    notifyUser("Agent replied", firstLine(reply));
+  }
   running = false;
   $("#runbar").classList.add("hidden");
   setStatus("");
   drainQueue();
+}
+
+function firstLine(s) {
+  const t = (s || "").trim().split("\n")[0];
+  return t.length > 140 ? t.slice(0, 140) + "…" : (t || "Done");
+}
+
+function notifyUser(title, body) {
+  try { call("notify", { title, body }); } catch (e) {}
 }
 
 function drainQueue() {
@@ -631,6 +647,7 @@ async function askEphemeral(q) {
   try {
     const r = await call("orch", { fn: "ask", arg: q });
     const a = bubble(r.text || "(no answer)", "agent"); a.classList.add("eph");
+    notifyUser("Answer ready", firstLine(r.text || ""));
   } catch (e) {
     bubble("Ask failed: " + e.message, "sys");
   }

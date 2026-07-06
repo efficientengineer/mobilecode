@@ -2,9 +2,16 @@ package com.voiceagent.app
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import androidx.core.app.NotificationCompat
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -45,6 +52,14 @@ class MainActivity : AppCompatActivity() {
     private val micPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    private val notifyPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    companion object {
+        private const val NOTIFY_CHANNEL = "agent_replies"
+        private const val NOTIFY_ID = 42
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,6 +75,12 @@ class MainActivity : AppCompatActivity() {
             != PackageManager.PERMISSION_GRANTED
         ) micPermission.launch(Manifest.permission.RECORD_AUDIO)
 
+        createNotifyChannel()
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+
         web = WebView(this)
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
@@ -68,6 +89,69 @@ class MainActivity : AppCompatActivity() {
         web.addJavascriptInterface(Bridge(), "Native")
         setContentView(web)
         loadUi()
+    }
+
+    private var isForeground = true
+    override fun onResume() { super.onResume(); isForeground = true }
+    override fun onPause() { super.onPause(); isForeground = false }
+
+    private fun createNotifyChannel() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            val ch = NotificationChannel(
+                NOTIFY_CHANNEL, "Agent replies", NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Fires when the agent replies or needs your input"
+                enableVibration(true)
+            }
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .createNotificationChannel(ch)
+        }
+    }
+
+    /** Vibrate always; post a heads-up notification only when backgrounded. */
+    private fun notifyUser(title: String, body: String) {
+        try {
+            val vib = if (Build.VERSION.SDK_INT >= 31) {
+                (getSystemService(VIBRATOR_MANAGER_SERVICE)
+                    as android.os.VibratorManager).defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
+            if (Build.VERSION.SDK_INT >= 26) {
+                vib.vibrate(VibrationEffect.createOneShot(220, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION") vib.vibrate(220)
+            }
+        } catch (_: Throwable) {}
+
+        if (isForeground) return
+        try {
+            val intent = Intent(this, MainActivity::class.java)
+                .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val pi = android.app.PendingIntent.getActivity(
+                this, 0, intent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                    android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+            val n = NotificationCompat.Builder(this, NOTIFY_CHANNEL)
+                .setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_SOUND)
+                .setAutoCancel(true)
+                .setContentIntent(pi)
+                .build()
+            if (Build.VERSION.SDK_INT < 33 ||
+                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED
+            ) {
+                (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                    .notify(NOTIFY_ID, n)
+            }
+        } catch (_: Throwable) {}
     }
 
     private fun loadUi() {
@@ -284,6 +368,12 @@ class MainActivity : AppCompatActivity() {
         }
         "speak" -> {
             tts?.speak(arg.optString("text"), TextToSpeech.QUEUE_FLUSH, null, "a")
+            JSONObject().put("ok", true)
+        }
+        "notify" -> {
+            withContext(Dispatchers.Main) {
+                notifyUser(arg.optString("title", "Voice Agent"), arg.optString("body", "Ready"))
+            }
             JSONObject().put("ok", true)
         }
         "listen" -> { withContext(Dispatchers.Main) { startListening() }; JSONObject().put("ok", true) }

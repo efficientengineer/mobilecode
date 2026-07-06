@@ -30,6 +30,9 @@ body { display: flex; flex-direction: column; height: 100vh; }
 button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 .icon { background: transparent; font-size: 20px; padding: 6px 8px; border-radius: 10px; }
 .icon:active { background: var(--panel2); }
+.txtbtn { background: var(--panel2); font-size: 13px; font-weight: 600;
+  padding: 7px 12px; border-radius: 12px; white-space: nowrap; }
+.txtbtn:active { background: var(--border); }
 .pill { background: var(--accent); color: #fff; border-radius: 20px; padding: 8px 16px; font-weight: 600; }
 .pill.ghost { background: var(--panel2); color: var(--text); }
 .pill:active { opacity: .8; }

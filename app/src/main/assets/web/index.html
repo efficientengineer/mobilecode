@@ -8,22 +8,22 @@
 </head>
 <body>
   <header id="topbar">
-    <button id="menuBtn" class="icon">☰</button>
+    <button id="menuBtn" class="txtbtn">Menu</button>
     <div id="titleWrap">
       <div id="title">Voice Agent</div>
       <div id="subtitle">—</div>
       <div id="stats"></div>
     </div>
     <div id="quick">
-      <button class="icon" data-act="files" title="Files">📁</button>
-      <button class="icon" data-act="commit" title="Commit">✔️</button>
-      <button class="icon" data-act="push" title="Push">⬆️</button>
+      <button class="txtbtn" data-act="files">Files</button>
+      <button class="txtbtn" data-act="commit">Commit</button>
+      <button class="txtbtn" data-act="push">Push</button>
     </div>
   </header>
 
   <div id="subbar">
-    <button id="modelChip" class="chip" data-act="modelSwitch" title="Switch model">🧠 <span id="modelName">…</span> ▾</button>
-    <button id="clearChip" class="chip" data-act="clearContext" title="Clear context">🧹 Clear</button>
+    <button id="modelChip" class="chip" data-act="modelSwitch" title="Switch model">Model: <span id="modelName">…</span> ▾</button>
+    <button id="clearChip" class="chip" data-act="clearContext">Clear</button>
     <div id="balance" class="balchip">—</div>
   </div>
 
@@ -34,7 +34,7 @@
   <div id="runbar" class="hidden">
     <span id="runlabel">Working…</span>
     <div id="queueChips"></div>
-    <button id="stopBtn" class="pill stop">⏹ Stop</button>
+    <button id="stopBtn" class="pill stop">Stop</button>
   </div>
 
   <div id="modes">
@@ -48,7 +48,7 @@
     <textarea id="input" rows="1" placeholder="Type or dictate a task…"></textarea>
     <button id="askBtn" class="icon" title="Ask (not saved to context)">❓</button>
     <button id="sendBtn" class="pill">Send</button>
-    <button id="micBtn" class="icon">🎤</button>
+    <button id="micBtn" class="txtbtn">Speak</button>
   </footer>
 
   <!-- Slide-up menu -->
