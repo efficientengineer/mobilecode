@@ -25,6 +25,11 @@ import { pickups } from './engine/control/pickups.js';
 import { hazards } from './engine/control/hazards.js';
 import { difficulty } from './engine/control/difficulty.js';
 import { steering } from './engine/control/steering.js';
+import { projectiles } from './engine/control/projectiles.js';
+import { patterns } from './engine/control/patterns.js';
+import { targeting } from './engine/control/targeting.js';
+import { statuses } from './engine/control/statuses.js';
+import { damage } from './engine/control/damage.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -467,6 +472,215 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
 
   check('steering bundle complete', ['seek','flee','arrive','pursue','evade','separation','wander','combine'].every(k => typeof steering[k] === 'function'));
 }
+}
+
+
+// ===== Round 2 components: projectiles / patterns / targeting / statuses / damage =====
+
+// ---- projectile motion controllers (pure) ----
+{
+  const mkB = (vx, vy, vz, x = 0, y = 0, z = 0) => ({ kind: 'bullet', pos: [x, y, z], vel: [vx, vy, vz] });
+  const near = (a, b, e = 1e-6) => Math.abs(a - b) < e;
+  const Lp = (v) => Math.hypot(v[0], v[2]);
+
+  // straight: constant velocity
+  { const b = mkB(5, 0, 0); projectiles.straight()(b, 0.1, {});
+    check('projectiles.straight keeps velocity', b.vel[0] === 5 && b.vel[2] === 0); }
+
+  // homing: turns toward target holding speed; straight & safe without one
+  { const ctx = { target: () => ({ pos: [10, 0, 0] }) };
+    const b = mkB(0, 0, 5); const h = projectiles.homing({ turn: 4 });
+    h(b, 0.1, ctx);
+    check('projectiles.homing keeps speed', near(Lp(b.vel), 5));
+    check('projectiles.homing steers toward target', b.vel[0] > 0);
+    const b2 = mkB(0, 0, 5); projectiles.homing({})(b2, 0.1, {});
+    check('projectiles.homing flies straight without a target', near(b2.vel[0], 0) && near(Lp(b2.vel), 5));
+    const b3 = mkB(0, 0, 5); projectiles.homing({ turn: 1 })(b3, 0.1, ctx);
+    check('projectiles.homing clamps to max turn rate', near(Math.atan2(b3.vel[0], b3.vel[2]), 0.1)); }
+
+  // boomerang: out to range, back to owner, dies home
+  { const b = mkB(6, 0, 0); const bm = projectiles.boomerang({ range: 8, speed: 6 });
+    bm(b, 0.1, {});
+    check('projectiles.boomerang starts outbound', b._m.phase === 'out' && b.vel[0] > 0);
+    b.pos[0] = 9; bm(b, 0.1, {});
+    check('projectiles.boomerang returns past range', b._m.phase === 'back' && b.vel[0] < 0);
+    b.pos[0] = 0.2; bm(b, 0.1, {});
+    check('projectiles.boomerang self-destructs when home', b.dead === true); }
+
+  // wave: weaves both sides, still advances, bounded by amp
+  { const b = mkB(0, 0, 4); const wv = projectiles.wave({ amp: 3, freq: 6 });
+    let minX = 0, maxX = 0;
+    for (let i = 0; i < 300; i++) { wv(b, 1 / 60, {}); b.pos[0] += b.vel[0] / 60; b.pos[2] += b.vel[2] / 60; minX = Math.min(minX, b.pos[0]); maxX = Math.max(maxX, b.pos[0]); }
+    check('projectiles.wave weaves both sides within amp', minX < -1 && maxX > 1 && maxX < 3.5 && minX > -3.5);
+    check('projectiles.wave still advances forward', b.pos[2] > 15); }
+
+  // arc: gravity on vel[1], horizontal untouched
+  { const b = mkB(5, 8, 0); projectiles.arc({ gravity: 30 })(b, 0.5, {});
+    check('projectiles.arc applies downward accel', near(b.vel[1], 8 - 15) && b.vel[0] === 5); }
+
+  // accelerate: ramps along heading, caps, decays without reversing
+  { const b = mkB(3, 0, 4); projectiles.accelerate({ accel: 50 })(b, 0.1, {});
+    check('projectiles.accelerate ramps speed along heading', near(Lp(b.vel), 10) && near(b.vel[0] / b.vel[2], 3 / 4));
+    const c = mkB(6, 0, 0); projectiles.accelerate({ accel: 50, max: 8 })(c, 1, {});
+    check('projectiles.accelerate caps at max', near(Lp(c.vel), 8));
+    const d = mkB(2, 0, 0); projectiles.accelerate({ accel: -100 })(d, 1, {});
+    check('projectiles.accelerate decays without reversing', d.vel[0] === 0); }
+
+  check('projectiles bundle complete', ['straight', 'homing', 'boomerang', 'wave', 'arc', 'accelerate'].every(k => typeof projectiles[k] === 'function'));
+}
+
+// ---- patterns (bullet-hell emitters) ----
+{ const unit = s => Math.abs(Math.hypot(s.dir[0], s.dir[1]) - 1) < 1e-9;
+  // ring: fires on first tick, symmetric full circle, then gated by cooldown
+  const r = patterns.ring({ count: 8, cooldown: 1 });
+  const rb = r(0.1, {});
+  check('patterns.ring fires count', rb.length === 8 && rb.every(unit));
+  const rsx = rb.reduce((s, x) => s + x.dir[0], 0), rsz = rb.reduce((s, x) => s + x.dir[1], 0);
+  check('patterns.ring symmetric', Math.abs(rsx) < 1e-9 && Math.abs(rsz) < 1e-9);
+  check('patterns.ring gated by cooldown', r(0.5, {}).length === 0);
+  // spiral: advances base angle by `turn` each fire, respects `rate`
+  const sp = patterns.spiral({ count: 1, turn: 0.5, rate: 0.1 });
+  const s1 = sp(0.1)[0].dir, s2 = sp(0.1)[0].dir;
+  const da = Math.atan2(s2[0], s2[1]) - Math.atan2(s1[0], s1[1]);
+  check('patterns.spiral advances by turn', Math.abs(da - 0.5) < 1e-9);
+  check('patterns.spiral respects rate', sp(0.05).length === 0);
+  // aimedSpread: center bullet aligns with aimDir
+  const as = patterns.aimedSpread({ count: 3, arcDeg: 60, cooldown: 0.5 })(0.5, { aimDir: [1, 0] });
+  check('patterns.aimedSpread count + centered on aim',
+    as.length === 3 && as.every(unit) && Math.abs(as[1].dir[0] - 1) < 1e-9 && Math.abs(as[1].dir[1]) < 1e-9);
+  // spinner: sweeps with real time (spin*dt) independent of fire cadence
+  const sn = patterns.spinner({ arms: 1, rate: 0.05, spin: 2 });
+  const n1 = sn(0.05)[0].dir, n2 = sn(0.05)[0].dir;
+  check('patterns.spinner sweeps with time',
+    Math.abs((Math.atan2(n2[0], n2[1]) - Math.atan2(n1[0], n1[1])) - 0.1) < 1e-6);
+  // pulse: salvo of `pulses` rings, then a long lull
+  const pl = patterns.pulse({ count: 4, every: 2, pulses: 3, gap: 0.1 });
+  let rings = 0; for (let i = 0; i < 5; i++) if (pl(0.1).length) rings++;
+  check('patterns.pulse fires a salvo then rests', rings === 3 && pl(0.1).length === 0); }
+
+// --- targeting.js ---
+{
+  const E = (x, z, hp) => ({ pos: [x, 0, z], hp });
+  const from = [0, 0, 0];
+  const c = [E(10, 0, 5), E(2, 0, 3), E(5, 0, 9)];
+  check('targeting.nearest', targeting.nearest()(from, c) === c[1]);
+  check('targeting.farthest', targeting.farthest()(from, c) === c[0]);
+  check('targeting.lowestHp', targeting.lowestHp()(from, c) === c[1]);
+  check('targeting.highestHp', targeting.highestHp()(from, c) === c[2]);
+  check('targeting.empty-array', targeting.nearest()(from, []) === null);
+  check('targeting.empty-null', targeting.nearest()(from, null) === null);
+  check('targeting.all-dead', targeting.nearest()(from, [{ pos: [1, 0, 1], dead: true }]) === null);
+  const reg = { each(fn) { c.forEach(fn); } };
+  check('targeting.registry-each', targeting.nearest()(from, reg) === c[1]);
+  let seq = [0.9, 0.1, 0.9], i = 0;
+  const rng = { next: () => seq[i++ % seq.length] };
+  check('targeting.random-in-set', c.includes(targeting.random({ rng })(from, c)));
+  check('targeting.random-no-rng', targeting.random()(from, c) === c[0]);
+  const coneSet = [E(0, 10, 1), E(0, -10, 1), E(50, 1, 1)];
+  check('targeting.inCone-ahead', targeting.inCone({ dir: [0, 1], arcDeg: 90, range: 100 })(from, coneSet) === coneSet[0]);
+  check('targeting.inCone-range', targeting.inCone({ dir: [0, 1], arcDeg: 90, range: 5 })(from, coneSet) === null);
+  check('targeting.inCone-aimDir', targeting.inCone({ dir: [0, 1], arcDeg: 90 })(from, coneSet, { aimDir: [0, -1] }) === coneSet[1]);
+  const cluster = [E(20, 20, 1), E(21, 20, 1), E(20, 21, 1), E(-50, -50, 1)];
+  check('targeting.mostClustered', [cluster[0], cluster[1], cluster[2]].includes(targeting.mostClustered({ radius: 3 })(from, cluster)));
+  const a = E(1, 0, 1), b = E(2, 0, 1), lr = targeting.leastRecent();
+  check('targeting.leastRecent-1', lr(from, [a, b]) === a);
+  check('targeting.leastRecent-2', lr(from, [a, b]) === b);
+  check('targeting.leastRecent-reset', lr(from, [a, b]) === a);
+  check('targeting.leastRecent-empty', targeting.leastRecent()(from, []) === null);
+}
+
+// --- statuses (control/statuses.js) ---
+{
+  // burn: dt-scaled DoT that expires after its duration
+  const e = {};
+  statuses.attach(e, statuses.burn({ dps: 10, duration: 1 }));
+  check('statuses.burn dot', Math.abs(statuses.step(e, 0.5).damage - 5) < 1e-9);
+  statuses.step(e, 0.6); // crosses 1.0s -> expired
+  check('statuses.burn expires', e._status.length === 0);
+
+  // slow stacks multiplicatively into speedMul
+  const s = {};
+  statuses.attach(s, statuses.slow({ mult: 0.5, duration: 5 }));
+  statuses.attach(s, statuses.slow({ mult: 0.5, duration: 5 }));
+  check('statuses.slow stack', Math.abs(statuses.step(s, 0.1).speedMul - 0.25) < 1e-9);
+
+  // freeze = speedMul 0 + stunned
+  const f = {};
+  statuses.attach(f, statuses.freeze({ duration: 1 }));
+  const fv = statuses.step(f, 0.1);
+  check('statuses.freeze locks', fv.speedMul === 0 && fv.stunned === true);
+
+  // poison gains a stack on re-apply (base 1 -> attach +1 -> apply +1 = 3)
+  const p = {};
+  const venom = statuses.poison({ dps: 4, duration: 5, stacks: 1 });
+  statuses.attach(p, venom);
+  venom.apply(p);
+  check('statuses.poison stacks', Math.abs(statuses.step(p, 1).damage - 12) < 1e-9);
+
+  // stun is a lockout without a speed change
+  const st = {};
+  statuses.attach(st, statuses.stun({ duration: 0.5 }));
+  const sv = statuses.step(st, 0.1);
+  check('statuses.stun', sv.stunned === true && sv.speedMul === 1);
+
+  // haste and slow cancel toward 1
+  const h = {};
+  statuses.attach(h, statuses.haste({ mult: 2, duration: 5 }));
+  statuses.attach(h, statuses.slow({ mult: 0.5, duration: 5 }));
+  check('statuses.haste cancels slow', Math.abs(statuses.step(h, 0.1).speedMul - 1) < 1e-9);
+
+  // weaken softens outgoing damage via dmgMul
+  const w = {};
+  statuses.attach(w, statuses.weaken({ mult: 0.5, duration: 3 }));
+  check('statuses.weaken dmgMul', Math.abs(statuses.step(w, 0.1).dmgMul - 0.5) < 1e-9);
+
+  // empty entity yields the neutral verdict; expiry compacts survivors
+  const z = {};
+  const zr = statuses.step(z, 0.1);
+  check('statuses.step neutral', zr.damage === 0 && zr.speedMul === 1 && zr.dmgMul === 1 && !zr.stunned);
+  const m = {};
+  statuses.attach(m, statuses.burn({ dps: 1, duration: 0.05 }));
+  statuses.attach(m, statuses.slow({ mult: 0.5, duration: 10 }));
+  statuses.step(m, 0.1);
+  check('statuses.step compacts', m._status.length === 1 && m._status[0].kind === 'slow');
+}
+
+// ---- damage resolution (compose modifiers over raw hp math) ----
+{
+  const rng0 = { next: () => 0 }, rng9 = { next: () => 0.99 };
+  // base passthrough
+  { const r = damage.resolve(10, null, {});
+    check('damage base passthrough', r.amount === 10 && r.crit === false && r.knockback === null && r.pierce === 1 && r.heal === 0); }
+  // crit: rng-gated multiplier, no-op without rng
+  { const r = damage.resolve(10, damage.crit({ chance: 0.15, mult: 2 }), { rng: rng0 });
+    check('damage crit hits on low roll', r.amount === 20 && r.crit === true && r.tags.includes('crit'));
+    check('damage crit misses on high roll', damage.resolve(10, damage.crit({ chance: 0.15 }), { rng: rng9 }).amount === 10);
+    check('damage crit no-op without rng', damage.resolve(10, damage.crit(), {}).crit === false); }
+  // armor: flat then resist, floored at 0
+  { check('damage armor flat+resist', Math.abs(damage.resolve(10, damage.armor({ flat: 2, resist: 0.5 }), {}).amount - 4) < 1e-9);
+    check('damage armor floors at 0', damage.resolve(3, damage.armor({ flat: 99 }), {}).amount === 0); }
+  // knockback: unit push attacker->target, null when degenerate/missing
+  { const r = damage.resolve(5, damage.knockback({ force: 6 }), { from: [0, 0, 0], to: [10, 0, 0] });
+    check('damage knockback pushes toward target', Math.abs(r.knockback[0] - 6) < 1e-9 && Math.abs(r.knockback[1]) < 1e-9);
+    check('damage knockback reads entity pos', Math.abs(damage.resolve(5, damage.knockback({ force: 2 }), { attacker: { pos: [0, 0, 0] }, target: { pos: [0, 0, 5] } }).knockback[1] - 2) < 1e-9);
+    check('damage knockback null when stacked', damage.resolve(5, damage.knockback(), { from: [0, 0, 0], to: [0, 0, 0] }).knockback === null);
+    check('damage knockback null without positions', damage.resolve(5, damage.knockback(), {}).knockback === null); }
+  // falloff: full inside near, min at far, no-op without positions
+  { check('damage falloff full inside near', damage.resolve(10, damage.falloff({ near: 2, far: 12 }), { from: [0, 0, 0], to: [1, 0, 0] }).amount === 10);
+    check('damage falloff zero at far', damage.resolve(10, damage.falloff({ near: 2, far: 12, min: 0 }), { from: [0, 0, 0], to: [12, 0, 0] }).amount === 0);
+    check('damage falloff halves at midpoint', Math.abs(damage.resolve(10, damage.falloff({ near: 0, far: 10, min: 0 }), { from: [0, 0, 0], to: [5, 0, 0] }).amount - 5) < 1e-9);
+    check('damage falloff no-op without positions', damage.resolve(10, damage.falloff({ far: 5 }), {}).amount === 10); }
+  // lifesteal reports heal; pierce declares carry-through
+  { check('damage lifesteal reports heal', Math.abs(damage.resolve(20, damage.lifesteal({ frac: 0.25 }), {}).heal - 5) < 1e-9);
+    check('damage pierce count', damage.resolve(5, damage.pierce({ count: 3 }), {}).pierce === 3);
+    check('damage pierce 1 untagged', !damage.resolve(5, damage.pierce({ count: 1 }), {}).tags.includes('pierce')); }
+  // compose: folds left-to-right (crit *2 -> armor *0.5 -> lifesteal reads final), flattens + skips falsy
+  { const policy = damage.compose(damage.crit({ chance: 1, mult: 2 }), damage.armor({ resist: 0.5 }), damage.lifesteal({ frac: 0.5 }));
+    const r = damage.resolve(10, policy, { rng: rng0 });
+    check('damage compose order crit->armor->lifesteal', r.amount === 10 && r.crit === true && Math.abs(r.heal - 5) < 1e-9);
+    check('damage compose flattens + skips falsy', damage.resolve(10, damage.compose([damage.armor({ flat: 1 })], false, damage.armor({ flat: 1 })), {}).amount === 8);
+    check('damage resolve accepts a raw mod array', damage.resolve(10, [damage.armor({ flat: 3 })], {}).amount === 7); }
+  check('damage bundle complete', ['resolve', 'compose', 'crit', 'armor', 'knockback', 'falloff', 'lifesteal', 'pierce'].every(k => typeof damage[k] === 'function'));
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
