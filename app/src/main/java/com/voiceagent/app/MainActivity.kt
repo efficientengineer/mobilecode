@@ -626,6 +626,10 @@ class MainActivity : AppCompatActivity() {
             probe.postDelayed({ if (!done.isCompleted) done.complete(Unit) }, 7000L)
             done.await()
             try { root.removeView(probe); probe.destroy() } catch (_: Throwable) {}
+            // Free the port when the check is done — don't leave 8765 bound
+            // between steps (localrun.start still recovers if it's held, but a
+            // tidy stop keeps the next Run on the preferred port).
+            withContext(Dispatchers.IO) { try { py("localrun").callAttr("stop") } catch (_: Throwable) {} }
             JSONObject().put("url", url).put("errors", JSONArray(errors.toList()))
         }
     }
