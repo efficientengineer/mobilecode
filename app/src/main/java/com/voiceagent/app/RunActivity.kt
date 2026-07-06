@@ -2,6 +2,7 @@ package com.voiceagent.app
 
 import android.annotation.SuppressLint
 import android.os.Bundle
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.TextView
@@ -39,6 +40,10 @@ class RunActivity : AppCompatActivity() {
         val web = findViewById<WebView>(R.id.webView)
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
+        // Development preview: never serve stale content. Always hit the local
+        // server and wipe any existing cache so edits show up immediately.
+        web.settings.cacheMode = WebSettings.LOAD_NO_CACHE
+        web.clearCache(true)
         web.webViewClient = WebViewClient()
 
         urlText.text = "Starting server…"

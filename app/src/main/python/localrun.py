@@ -46,6 +46,14 @@ def _load_wsgi_app(root: Path):
     return None
 
 
+# Development preview: forbid caching so every reload reflects the latest edit.
+_NO_CACHE_HEADERS = [
+    ("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"),
+    ("Pragma", "no-cache"),
+    ("Expires", "0"),
+]
+
+
 def _static_app(root: Path):
     """A tiny WSGI static-file server rooted at the workspace."""
     import mimetypes
@@ -61,10 +69,10 @@ def _static_app(root: Path):
                 f'<li><a href="/{p.relative_to(root)}">{p.relative_to(root)}</a></li>'
                 for p in sorted(root.rglob("*")) if p.is_file() and ".git" not in p.parts
             ) + "</ul>"
-            start_response("200 OK", [("Content-Type", "text/html")])
+            start_response("200 OK", [("Content-Type", "text/html")] + _NO_CACHE_HEADERS)
             return [listing.encode()]
         ctype = mimetypes.guess_type(str(fp))[0] or "application/octet-stream"
-        start_response("200 OK", [("Content-Type", ctype)])
+        start_response("200 OK", [("Content-Type", ctype)] + _NO_CACHE_HEADERS)
         return [fp.read_bytes()]
 
     return app
