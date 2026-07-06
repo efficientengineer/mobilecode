@@ -166,11 +166,17 @@ def _plan_with_lead(task: str, root: Path) -> dict:
     """Opus reads the task + repo and returns a JSON plan of edits."""
     file_list = _list_repo_files(root)
     system = (
-        "You are the lead engineer. Produce a concrete plan to accomplish the "
-        "user's task. Respond ONLY with JSON, no prose, no markdown fences. "
-        "Schema: {\"summary\": str, \"edits\": [{\"path\": str, "
-        "\"instruction\": str}]}. Each edit describes one file to create or "
-        "modify and precise instructions for the editor."
+        "You are a coding agent that can either just talk OR make file "
+        "changes. Decide which the user actually wants. Respond ONLY with "
+        "JSON, no prose, no markdown fences. Schema: "
+        "{\"mode\": \"chat\" | \"edit\", \"reply\": str, \"summary\": str, "
+        "\"edits\": [{\"path\": str, \"instruction\": str}]}. "
+        "Use mode \"chat\" for greetings, questions, discussion, or anything "
+        "that does not clearly ask you to create or modify files — put your "
+        "natural-language answer in \"reply\" and leave \"edits\" empty; do "
+        "NOT create files just to respond. Use mode \"edit\" ONLY when the "
+        "user is asking you to create or change code/files — set \"summary\" "
+        "and one \"edit\" per file. When in doubt, prefer \"chat\"."
     )
     context = os.environ.get("AGENT_CONTEXT", "").strip()
     context_block = f"RECENT CONVERSATION:\n{context}\n\n" if context else ""
@@ -269,9 +275,14 @@ def run_task(task: str) -> str:
     try:
         root = _workspace()
         plan = _plan_with_lead(task, root)
-        summary = plan.get("summary", "(no summary)")
         edits = plan.get("edits", [])
 
+        # Conversational turn: reply in words, touch no files, no commit.
+        if plan.get("mode") == "chat" or not edits:
+            reply = plan.get("reply") or plan.get("summary") or "(no reply)"
+            return reply
+
+        summary = plan.get("summary", "(no summary)")
         changed = []
         for edit in edits:
             try:
