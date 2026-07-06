@@ -297,15 +297,21 @@ _PLAN_SYSTEM = (
 )
 
 _DELEGATE_GUIDANCE = (
-    "\n\nDELEGATION: a cheap implementer model ({worker}) is available via the "
-    "delegate_edit tool. You are the ORCHESTRATOR — prefer delegating file "
-    "creation and mechanical edits to it: one delegate_edit per file, with a "
-    "precise, self-contained instruction (name functions, describe behavior, "
-    "spell out anything it cannot infer). Reserve your own write_file/"
-    "str_replace for small surgical tweaks, fixes to the implementer's output, "
-    "and files where exact contents matter more than cost. ALWAYS verify "
-    "delegated work afterwards (read_file / check_python) — the implementer "
-    "is fast, not reliable."
+    "\n\nDELEGATION (IMPORTANT — this is how you must work): a cheap implementer "
+    "model ({worker}) is available via the delegate_edit tool, and you are the "
+    "ORCHESTRATOR. Delegating is your DEFAULT, not an option:\n"
+    "- Create EVERY new file with delegate_edit — one call per file — giving a "
+    "precise, self-contained spec: exact path, what the file must contain, the "
+    "function/class names and signatures, the behavior, and anything it cannot "
+    "infer from context.\n"
+    "- Make SUBSTANTIAL edits to an existing file with delegate_edit too "
+    "(describe the change precisely).\n"
+    "- Use write_file / str_replace YOURSELF only for small surgical changes "
+    "(roughly < 10 lines) or to FIX the worker's output.\n"
+    "- After each delegate_edit, verify the result (read_file / check_python / "
+    "check_web) and correct it if wrong — the worker is fast, not reliable.\n"
+    "Do NOT hand-write whole files yourself; that wastes the expensive lead on "
+    "typing. Plan → delegate → verify → integrate."
 )
 
 _PROPOSE_PLAN_TOOL = {
@@ -356,7 +362,11 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
         tools = agent_tools.toolset(write=write)
         system = _AGENT_SYSTEM
         worker = (os.environ.get("WORKER_MODEL") or "").strip()
-        if write and worker:
+        # Only push delegation when there's a genuinely CHEAPER worker (a distinct
+        # model) and the user hasn't turned it off — delegating to the same model
+        # just adds round-trips.
+        if (write and worker and worker != active
+                and os.environ.get("AGENT_DELEGATE", "").strip().lower() != "off"):
             system += _DELEGATE_GUIDANCE.format(worker=worker)
     if extra_system:
         system += "\n\n" + extra_system

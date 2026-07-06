@@ -1,116 +1,176 @@
 """
-best_practices.py — a curated, extensible playbook the agent follows by default.
+best_practices.py — a curated, tag-matched playbook the agent follows by default.
 
 The problem it solves: left alone the model makes plausible-but-bad mobile
 choices — fixed d-pad buttons instead of a floating joystick, text too small to
 read, a canvas that ignores the notch, audio that autoplays and gets blocked.
-This injects terse, opinionated best practices into the agent's context *when
-they're relevant*, grouped so it gets the right ones:
 
-  - Controls & game loop  → game projects only
-  - UI & text             → any mobile web project (games and apps)
-  - Performance & limits   → any mobile web project
+Rather than dump the whole playbook into every payload, each practice carries
+trigger TAGS (word stems). Only practices whose tags appear in the request are
+injected — mention "moving" or "rotating" and you get the movement/rotation
+rules; mention "text" or "keyboard" and you get the typography/input rules. A
+generic request on a mobile project falls back to a small CORE set so essentials
+are never missed; a non-mobile project gets nothing.
 
-Two layers: BUILT-IN practices shipped here (OTA-updatable) and the USER's own
-global best_practices.md that persists across every project and OVERRIDES the
-built-ins. Kept terse so it rides the cached context prefix — after the first
-turn it's a cache hit and costs ~nothing per step.
+The block is computed once per run from the (fixed) request, so it stays inside
+the cached context prefix — no per-step cache thrash.
 
-Injection is NOT limited to input/movement requests: once a project is a game
-(or any web project), the relevant practices ride along on EVERY request.
+Two layers: BUILT-IN practices here (OTA-updatable) and the USER's own global
+best_practices.md that persists across every project and OVERRIDES the built-ins.
 """
 
 import os
+import re
 from pathlib import Path
 
-# --- built-in playbook ------------------------------------------------------
-# Controls & game loop — game projects. Floating joystick first: fixed d-pad
-# buttons are the single most common bad default.
-MOBILE_GAME = [
-    "Movement: use a FLOATING JOYSTICK, not fixed d-pad/arrow buttons. It "
-    "appears where the thumb first touches the left half of the screen, the "
-    "stick follows within a max radius, and it resets on release. Action buttons "
-    "(jump/fire) go on the right half, reachable by the right thumb.",
-    "Multi-touch: handle input with Pointer Events keyed by pointerId, so moving "
-    "with the left thumb and firing with the right at the same time both "
-    "register. Never assume a single active touch.",
-    "Loop: advance by delta time from requestAnimationFrame (or a fixed timestep "
-    "with an accumulator) so speed is identical on 60Hz and 120Hz devices. Never "
-    "move a constant amount per frame.",
-    "Auto-pause and mute when the game isn't visible: listen for visibilitychange "
-    "and window blur, stop the loop and audio, resume on return.",
-    "Unlock audio on the first user gesture (mobile blocks autoplay): start/resume "
-    "the AudioContext from a tap, behind a tap-to-start overlay.",
-    "Haptics: navigator.vibrate on impactful events (hit, pickup, death) where "
-    "supported — short, sparing pulses make mobile feel responsive.",
-    "Canvas fills the viewport, is redrawn on resize, and scales its backing "
-    "store by devicePixelRatio so it's crisp on high-DPI phones.",
+# Each practice: scope ("game" = game projects only, "web" = any mobile web
+# project incl. games), core (part of the fallback set), tags (word STEMS matched
+# as a prefix against request words, so "mov" hits move/moving/movement), text.
+PRACTICES = [
+    # --- controls / input (game) ---
+    {"scope": "game", "core": True,
+     "tags": ["joystick", "mov", "control", "input", "walk", "run", "steer",
+              "dpad", "wasd", "arrow", "thumb", "drag", "analog", "stick",
+              "navigat", "strafe", "left", "right", "up", "down"],
+     "text": "Movement: use a FLOATING JOYSTICK, not fixed d-pad/arrow buttons — "
+             "it appears where the left thumb first touches, follows within a max "
+             "radius, and resets on release. Action buttons go on the right, in "
+             "thumb reach."},
+    {"scope": "game", "core": False,
+     "tags": ["rotat", "turn", "spin", "aim", "look", "orient", "angle",
+              "direction", "facing", "twist", "steer"],
+     "text": "Rotation/aim: drive it from a drag delta or a right-thumb "
+             "twin-stick (map the angle to the drag vector), never tiny +/- or "
+             "left/right rotate buttons."},
+    {"scope": "game", "core": False,
+     "tags": ["touch", "multitouch", "pointer", "gesture", "tap", "fire",
+              "shoot", "button", "simultaneous", "combo", "hold"],
+     "text": "Multi-touch: track pointers by pointerId (Pointer Events) so moving "
+             "with one thumb and firing with the other at the same time both "
+             "register. Never assume a single active touch."},
+    # --- game loop (game) ---
+    {"scope": "game", "core": True,
+     "tags": ["loop", "updat", "speed", "fast", "slow", "fps", "framerate",
+              "frame", "tick", "animat", "physics", "gravity", "jump", "mov",
+              "delta", "timestep", "velocity"],
+     "text": "Loop: advance by delta time from requestAnimationFrame (or a fixed "
+             "timestep with an accumulator) so speed is identical on 60Hz and "
+             "120Hz screens. Never move a constant amount per frame."},
+    {"scope": "game", "core": False,
+     "tags": ["pause", "background", "hidden", "blur", "resume", "focus", "tab",
+              "minimiz", "inactiv", "away"],
+     "text": "Auto-pause and mute when not visible: on visibilitychange/blur stop "
+             "the loop and audio, resume on return — backgrounding must not keep "
+             "running or blast sound."},
+    {"scope": "game", "core": False,
+     "tags": ["audio", "sound", "music", "sfx", "autoplay", "mute", "volume",
+              "noise", "play"],
+     "text": "Unlock audio on the first tap (mobile blocks autoplay): resume the "
+             "AudioContext from a user gesture, behind a tap-to-start overlay."},
+    {"scope": "game", "core": False,
+     "tags": ["haptic", "vibrat", "feedback", "rumble", "buzz"],
+     "text": "Haptics: navigator.vibrate on impactful events (hit, pickup, death) "
+             "where supported — short, sparing pulses make mobile feel responsive."},
+    {"scope": "game", "core": True,
+     "tags": ["canvas", "render", "resiz", "resolution", "blurry", "crisp",
+              "pixel", "dpr", "retina", "draw", "scale", "sharp"],
+     "text": "Canvas fills the viewport, is redrawn on resize, and scales its "
+             "backing store by devicePixelRatio so it stays crisp on high-DPI "
+             "phones."},
+    # --- UI & text (any mobile web project) ---
+    {"scope": "web", "core": True,
+     "tags": ["text", "font", "size", "label", "read", "legib", "typograph",
+              "caption", "title", "head", "word", "copy", "paragraph"],
+     "text": "Body text >= 16px (also stops iOS zooming when an input is focused); "
+             "size with clamp()/rem and respect the OS font-size setting — never "
+             "tiny fixed px."},
+    {"scope": "web", "core": False,
+     "tags": ["contrast", "color", "colour", "dark", "light", "background",
+              "overlay", "visib", "theme", "scrim", "legib"],
+     "text": "High contrast (WCAG AA, >= 4.5:1); don't rely on color alone; put a "
+             "scrim behind text over images/video so it stays legible."},
+    {"scope": "web", "core": True,
+     "tags": ["button", "tap", "target", "touch", "thumb", "reach", "hit",
+              "click", "press", "icon", "menu", "link", "control", "toolbar"],
+     "text": "Touch targets >= 48px with >= 8px gaps; put primary actions in the "
+             "bottom thumb zone, not top corners (hard to reach one-handed)."},
+    {"scope": "web", "core": True,
+     "tags": ["safe", "notch", "inset", "status", "home", "edge", "cutout",
+              "fullscreen", "bezel", "island", "corner"],
+     "text": "Respect safe areas: viewport-fit=cover + env(safe-area-inset-*) "
+             "padding so a notch, rounded corner, or home indicator never covers "
+             "UI."},
+    {"scope": "web", "core": False,
+     "tags": ["hover", "feedback", "press", "active", "tap", "tooltip",
+              "highlight", "state", "ripple", "touch"],
+     "text": "Give instant feedback on every tap (pressed state, haptic where it "
+             "matters); never rely on hover — touch has none, so no hover-only "
+             "menus or tooltips."},
+    {"scope": "web", "core": False,
+     "tags": ["height", "viewport", "fullscreen", "scroll", "resiz", "vh",
+              "address", "bar", "overflow", "sticky", "fixed"],
+     "text": "Use dynamic viewport units (100dvh/svh), not 100vh — the mobile URL "
+             "bar shows/hides and 100vh gets clipped or leaves gaps."},
+    {"scope": "web", "core": False,
+     "tags": ["keyboard", "input", "form", "field", "type", "email", "number",
+              "focus", "entry", "textbox", "search", "login", "signup"],
+     "text": "Handle the on-screen keyboard: scroll the focused field into view, "
+             "and set inputmode/enterkeyhint/type (email/number/tel) so the right "
+             "keyboard appears."},
+    {"scope": "web", "core": False,
+     "tags": ["layout", "grid", "column", "responsiv", "screen", "page",
+              "arrang", "spacing", "dense", "design", "position", "align", "flex"],
+     "text": "Design single-column with generous spacing and large hit areas; "
+             "don't shrink a dense desktop layout onto a phone."},
+    {"scope": "web", "core": False,
+     "tags": ["scroll", "zoom", "gesture", "select", "drag", "refresh", "swipe",
+              "pan", "pinch"],
+     "text": "On interactive surfaces disable stray gestures (touch-action, "
+             "user-select:none, block double-tap zoom / pull-to-refresh) — but "
+             "keep normal content scrollable."},
+    {"scope": "web", "core": False,
+     "tags": ["load", "fetch", "async", "network", "api", "request", "spinner",
+              "error", "empty", "offline", "wait", "save", "submit", "sync"],
+     "text": "Show loading / empty / error states for every async action; mobile "
+             "networks are slow and flaky, so never leave a dead-looking screen."},
+    # --- performance & constraints (any mobile web project) ---
+    {"scope": "web", "core": False,
+     "tags": ["performanc", "perf", "batter", "fps", "frame", "lag", "slow",
+              "jank", "stutter", "optim", "smooth", "heat", "drain", "efficien"],
+     "text": "Do less work: pause rendering/logic when hidden or offscreen and "
+             "cap the frame rate to what's needed — a busy loop drains the battery "
+             "and heats the phone."},
+    {"scope": "web", "core": False,
+     "tags": ["performanc", "perf", "slow", "lag", "jank", "image", "asset",
+              "shadow", "blur", "filter", "optim", "heavy", "big", "compress"],
+     "text": "Stay light: avoid big blurs/shadows/filters and oversized images "
+             "(serve sized & compressed), avoid layout thrash, and reuse objects "
+             "to avoid GC stutter."},
+    {"scope": "web", "core": False,
+     "tags": ["memory", "leak", "dispose", "cleanup", "unload", "crash", "ram",
+              "asset", "destroy", "remov", "teardown"],
+     "text": "Free assets and remove listeners on scene/route change — mobile RAM "
+             "is tight and leaks eventually crash the tab."},
+    {"scope": "web", "core": False,
+     "tags": ["network", "offline", "load", "fetch", "api", "connection",
+              "cache", "request", "download", "data", "sync"],
+     "text": "Assume a slow, flaky connection: keep the initial payload small, "
+             "lazy-load, cache, and degrade gracefully offline."},
+    {"scope": "web", "core": False,
+     "tags": ["test", "device", "phone", "real", "orient", "landscape",
+              "portrait", "rotat"],
+     "text": "Verify on a real mid-range phone in both orientations with a notch "
+             "— the desktop preview misrepresents size, touch, and speed."},
 ]
-
-# UI & text — any mobile web project.
-MOBILE_UI = [
-    "Text >= 16px for body (also stops iOS from zooming when an input is "
-    "focused); size with clamp()/rem and respect the OS font-size setting; never "
-    "tiny fixed px.",
-    "High contrast (WCAG AA, >= 4.5:1); don't encode meaning in color alone; put "
-    "a scrim/backdrop behind text laid over images or video so it stays legible.",
-    "Touch targets >= 48px with >= 8px gaps. Put primary actions in the bottom "
-    "thumb zone; keep destructive/rare ones away from it. Top corners are hard to "
-    "reach one-handed.",
-    "Respect safe areas: viewport-fit=cover plus env(safe-area-inset-*) padding so "
-    "a notch, rounded corner, or home indicator never covers UI.",
-    "Every tap gives instant feedback (pressed state, and haptic where it "
-    "matters). Never rely on hover — touch devices have none; no hover-only menus "
-    "or tooltips.",
-    "Use dynamic viewport units (100dvh / svh), NOT 100vh — the mobile URL bar "
-    "shows/hides and 100vh gets clipped or leaves gaps.",
-    "Handle the on-screen keyboard: scroll the focused field into view so the "
-    "keyboard doesn't cover it, and set inputmode / enterkeyhint / type "
-    "(email, number, tel) so the right keyboard appears.",
-    "Design single-column with generous spacing and large hit areas; don't shrink "
-    "a dense desktop layout onto a phone. Prefer big tap zones over precise ones.",
-    "On interactive surfaces disable stray gestures (touch-action, "
-    "user-select:none, block double-tap zoom / pull-to-refresh) — but keep normal "
-    "content scrollable.",
-    "Show loading / empty / error states for every async action; mobile networks "
-    "are slow and flaky, so never leave a dead-looking screen.",
-]
-
-# Performance & mobile constraints — any mobile web project.
-MOBILE_PERF = [
-    "Do less work: pause rendering/logic when hidden or offscreen and cap the "
-    "frame rate to what's needed — a busy loop drains the battery and heats the "
-    "phone.",
-    "Stay light: avoid big blurs/shadows/filters, oversized images (serve sized & "
-    "compressed), and layout thrash; reuse objects instead of allocating each "
-    "frame to avoid GC stutter.",
-    "Free assets and remove listeners on scene/route change — mobile RAM is tight "
-    "and leaks eventually crash the tab.",
-    "Assume a slow, flaky connection: keep the initial payload small, lazy-load, "
-    "cache, and degrade gracefully offline.",
-    "Verify on a real mid-range phone in BOTH orientations with a notch — the "
-    "desktop preview misrepresents size, touch, and speed.",
-]
-
-CATEGORIES = {
-    "mobile-game": MOBILE_GAME,
-    "mobile-ui": MOBILE_UI,
-    "mobile-perf": MOBILE_PERF,
-}
-_CATEGORY_LABEL = {
-    "mobile-game": "Controls & game loop",
-    "mobile-ui": "UI & text",
-    "mobile-perf": "Performance & mobile constraints",
-}
 
 _GAME_FILE_SIGNALS = ("babylon", "phaser", "three", "pixi", "kaboom", "<canvas",
                       "requestanimationframe", "playcanvas", "matter.js", "howler")
-_GAME_TASK_WORDS = ("game", "joystick", "control", "player", "move", "sprite",
-                    "canvas", "level", "score", "enemy", "shoot", "jump", "3d",
-                    "2d", "multiplayer", "physics", "collision")
+_GAME_TASK_WORDS = ("game", "joystick", "player", "sprite", "canvas", "level",
+                    "enemy", "shoot", "jump", "3d", "2d", "multiplayer",
+                    "physics", "collision", "score")
 _WEB_TASK_WORDS = ("app", "ui", "screen", "page", "button", "form", "menu",
                    "layout", "web", "site", "mobile", "text", "font", "input",
-                   "keyboard", "modal", "nav", "scroll", "theme")
+                   "keyboard", "modal", "nav", "scroll", "theme", "css")
 
 
 def _workspace() -> Path:
@@ -152,17 +212,38 @@ def _task_is_webby(task: str) -> bool:
     return any(w in t for w in _WEB_TASK_WORDS)
 
 
-def categories_for(task: str = "", root: Path = None) -> list:
-    """Which practice categories apply. Games get all three; any other web
-    project gets UI + performance; a pure backend gets none."""
+def _tokens(task: str) -> set:
+    return set(re.findall(r"[a-z0-9]+", (task or "").lower()))
+
+
+def _matches(practice: dict, words: set, text: str) -> bool:
+    for tag in practice["tags"]:
+        if tag.isalpha():
+            for w in words:
+                if w.startswith(tag):   # stem/prefix match: "mov" hits "moving"
+                    return True
+        elif tag in text:               # hyphenated / numeric tag → substring
+            return True
+    return False
+
+
+def _pool(is_game: bool) -> list:
+    return [p for p in PRACTICES if p["scope"] == "web" or
+            (p["scope"] == "game" and is_game)]
+
+
+def select(task: str = "", root: Path = None) -> list:
+    """The practices to inject for this request: those whose tags appear in the
+    message, or a small CORE set if none match. Empty for non-mobile projects."""
     root = root or _workspace()
-    game = _looks_like_game(root) or _task_is_gamey(task)
-    web = game or _has_web(root) or _task_is_webby(task)
-    if game:
-        return ["mobile-game", "mobile-ui", "mobile-perf"]
-    if web:
-        return ["mobile-ui", "mobile-perf"]
-    return []
+    is_game = _looks_like_game(root) or _task_is_gamey(task)
+    is_web = is_game or _has_web(root) or _task_is_webby(task)
+    if not is_web:
+        return []
+    pool = _pool(is_game)
+    words, text = _tokens(task), (task or "").lower()
+    matched = [p for p in pool if _matches(p, words, text)]
+    return matched or [p for p in pool if p.get("core")]
 
 
 # --- user's global practices (persist across every project) -----------------
@@ -201,23 +282,15 @@ def add_user(text="") -> str:
 
 # --- rendering into context -------------------------------------------------
 
-def builtin_block(task: str = "", root: Path = None) -> str:
-    root = root or _workspace()
-    cats = categories_for(task, root)
-    if not cats:
-        return ""
-    groups = [_CATEGORY_LABEL[c] + ":\n- " + "\n- ".join(CATEGORIES[c]) for c in cats]
-    return "Mobile best practices — apply these by default:\n\n" + "\n\n".join(groups)
-
-
 def render(task: str = "", root: Path = None) -> str:
-    """The full best-practices block for context, or '' if nothing applies.
+    """The best-practices block for THIS request, or '' if nothing applies.
     User practices come last so they can override a built-in."""
     root = root or _workspace()
     parts = []
-    b = builtin_block(task, root)
-    if b:
-        parts.append(b)
+    picked = select(task, root)
+    if picked:
+        parts.append("Best practices for this request (apply them):\n- " +
+                     "\n- ".join(p["text"] for p in picked))
     u = get_user()
     if u:
         parts.append("Your own best practices (these take priority):\n" + u)
@@ -225,5 +298,16 @@ def render(task: str = "", root: Path = None) -> str:
 
 
 def preview(task="") -> str:
-    """What would be injected for the current project (for the app to show)."""
-    return render(task, _workspace()) or "(no best practices apply to this project yet)"
+    """The full playbook applicable to this project (for the app to show) — not
+    tag-filtered, so the user sees everything that could apply."""
+    root = _workspace()
+    is_game = _looks_like_game(root) or _task_is_gamey(task)
+    is_web = is_game or _has_web(root) or _task_is_webby(task)
+    parts = []
+    if is_web:
+        parts.append("Applies to this project (injected per request by relevance):"
+                     "\n- " + "\n- ".join(p["text"] for p in _pool(is_game)))
+    u = get_user()
+    if u:
+        parts.append("Your own best practices (always applied):\n" + u)
+    return "\n\n".join(parts) or "(no best practices apply to this project yet)"
