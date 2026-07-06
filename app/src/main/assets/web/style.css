@@ -209,3 +209,7 @@ pre.filebody.diff { font-size: 12px; }
 #todos-body { display: none; padding: 0 12px 10px; max-height: 32vh; overflow-y: auto;
   border-top: 1px solid var(--border); }
 #todos.open #todos-body { display: block; }
+
+/* Usage / cache chip */
+.usagechip { font-variant-numeric: tabular-nums; }
+.usagechip.hidden { display: none; }

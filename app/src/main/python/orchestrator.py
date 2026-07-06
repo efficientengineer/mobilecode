@@ -1020,8 +1020,10 @@ def _finish_run(task: str, res: dict, run_id: str) -> str:
             lines.append("Not committed — review the diff, then Commit or Discard.")
 
     u = res.get("usage") or {}
-    if u.get("input") or u.get("output"):
-        lines.append(f"[tokens: {u.get('input', 0)} in / {u.get('output', 0)} out, "
+    inp, cr, out = u.get("input", 0), u.get("cache_read", 0), u.get("output", 0)
+    if inp or out:
+        pct = round(100 * cr / inp) if inp else 0
+        lines.append(f"[tokens: {inp} in ({pct}% cached) / {out} out · "
                      f"{res.get('steps', 0)} steps]")
 
     try:

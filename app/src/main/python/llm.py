@@ -256,7 +256,7 @@ def _call_anthropic(model, system, cached_context, messages, tools,
     cur_tool = None
     cur_think = None
     stop = ""
-    usage_in = usage_out = usage_cached = 0
+    usage_in = usage_out = usage_cached = usage_create = 0
     with resp:
         for data in _sse_lines(resp):
             if data == "[DONE]":
@@ -268,8 +268,9 @@ def _call_anthropic(model, system, cached_context, messages, tools,
             t = ev.get("type")
             if t == "message_start":
                 u = (ev.get("message") or {}).get("usage") or {}
-                usage_in = u.get("input_tokens", 0)
+                usage_in = u.get("input_tokens", 0) or 0
                 usage_cached = u.get("cache_read_input_tokens", 0) or 0
+                usage_create = u.get("cache_creation_input_tokens", 0) or 0
             elif t == "content_block_start":
                 cb = ev.get("content_block") or {}
                 if cb.get("type") == "tool_use":
@@ -308,11 +309,12 @@ def _call_anthropic(model, system, cached_context, messages, tools,
                 stop = (ev.get("delta") or {}).get("stop_reason") or stop
                 u = ev.get("usage") or {}
                 usage_out = u.get("output_tokens", usage_out)
-    _account(usage_in, usage_out, usage_cached)
+    in_total = usage_in + usage_cached + usage_create
+    _account(in_total, usage_out, usage_cached)
     return {"text": "".join(text), "reasoning": "".join(reasoning),
             "tool_calls": tool_calls, "thinking_blocks": thinking_blocks,
             "stop": stop or "end_turn",
-            "usage": {"input": usage_in, "output": usage_out,
+            "usage": {"input": in_total, "output": usage_out,
                       "cache_read": usage_cached}}
 
 
@@ -329,12 +331,16 @@ def _parse_anthropic(result):
                        and (p.get("signature") or p.get("type") == "redacted_thinking")]
     u = result.get("usage") or {}
     cached = u.get("cache_read_input_tokens", 0) or 0
-    _account(u.get("input_tokens", 0), u.get("output_tokens", 0), cached)
+    create = u.get("cache_creation_input_tokens", 0) or 0
+    # Anthropic reports input_tokens as the UNCACHED portion; make `input` the
+    # TOTAL (uncached + cache reads + cache writes) so `cache_read / input` is a
+    # correct hit ratio, matching DeepSeek's total-prompt-tokens semantics.
+    in_total = (u.get("input_tokens", 0) or 0) + cached + create
+    _account(in_total, u.get("output_tokens", 0), cached)
     return {"text": text, "reasoning": reasoning, "tool_calls": tool_calls,
             "thinking_blocks": thinking_blocks,
             "stop": result.get("stop_reason") or "end_turn",
-            "usage": {"input": u.get("input_tokens", 0),
-                      "output": u.get("output_tokens", 0),
+            "usage": {"input": in_total, "output": u.get("output_tokens", 0),
                       "cache_read": cached}}
 
 

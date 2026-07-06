@@ -107,6 +107,42 @@ async function loadHistory() {
 
 // --- Context + balance stats -------------------------------------------
 let _balStart = null;
+
+function fmtK(n) {
+  n = n || 0;
+  return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" : String(n);
+}
+
+// Show the last run's token usage with the CACHE HIT % up front — a high %
+// means the prompt cache is doing its job (repeated context billed cheaply).
+let _lastUsage = null;
+async function refreshUsage() {
+  const el = $("#usage");
+  if (!el) return;
+  try {
+    const u = JSON.parse((await call("orch", { fn: "get_usage" })).text);
+    _lastUsage = u;
+    const inp = u.input || 0, cr = u.cache_read || 0, out = u.output || 0;
+    if (!inp && !out) { el.classList.add("hidden"); return; }
+    const pct = inp ? Math.round((100 * cr) / inp) : 0;
+    el.classList.remove("hidden");
+    el.textContent = `⚡${pct}% cached · ${fmtK(inp)}↓ ${fmtK(out)}↑`;
+    el.title = `${inp} input tokens (${cr} cached, ${inp - cr} new) · ${out} output · ${u.calls || 0} model calls`;
+  } catch (e) {}
+}
+function showUsageDetail() {
+  const u = _lastUsage;
+  if (!u) return;
+  const inp = u.input || 0, cr = u.cache_read || 0, out = u.output || 0;
+  const pct = inp ? Math.round((100 * cr) / inp) : 0;
+  modal("Tokens this run",
+    `<div class="list-item"><span>Input total</span><b>${inp}</b></div>
+     <div class="list-item"><span>&nbsp;&nbsp;· cached (cheap)</span><b>${cr} · ${pct}%</b></div>
+     <div class="list-item"><span>&nbsp;&nbsp;· new (full price)</span><b>${inp - cr}</b></div>
+     <div class="list-item"><span>Output</span><b>${out}</b></div>
+     <div class="list-item"><span>Model calls</span><b>${u.calls || 0}</b></div>
+     <div class="hint">A high <b>cached %</b> means repeated context is being billed at a fraction of the price — the prompt cache is working. Actual dollars spent show in the balance chip.</div>`);
+}
 async function refreshStats() {
   try {
     const c = JSON.parse((await call("orch", { fn: "context_counts" })).text);
@@ -122,6 +158,7 @@ async function refreshStats() {
     $("#stats").textContent = s;
   } catch (e) {}
   refreshBalance();
+  refreshUsage();
   refreshAttachBar();
 }
 
@@ -457,7 +494,7 @@ async function openRun(runId) {
       think +
       `<div class="hint">${(rec.touched || []).length} file(s) touched, ${rec.steps || 0} steps:</div>${files}` +
       (rec.commit ? `<div class="hint">committed ${escapeHtml(rec.commit)}: ${escapeHtml(rec.message || "")}</div>` : "") +
-      `<div class="hint">tokens: ${u.input || 0} in / ${u.output || 0} out (${u.calls || 0} calls)</div>`);
+      `<div class="hint">tokens: ${u.input || 0} in (${u.input ? Math.round((100 * (u.cache_read || 0)) / u.input) : 0}% cached) / ${u.output || 0} out · ${u.calls || 0} calls</div>`);
     return;
   }
   const rounds = rec.rounds || [];
@@ -1097,6 +1134,8 @@ $("#input").addEventListener("input", (e) => {
   e.target.style.height = "auto";
   e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
 });
+const _usageChip = $("#usage");
+if (_usageChip) _usageChip.onclick = showUsageDetail;
 const _todosHead = $("#todos-head");
 if (_todosHead) _todosHead.onclick = () => {
   const open = $("#todos").classList.toggle("open");
