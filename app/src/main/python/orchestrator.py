@@ -30,7 +30,7 @@ from dulwich.repo import Repo
 
 # Model strings carry a "<provider>/<model>" prefix so _call can route to the
 # right API. Adjust if provider names change.
-LEAD_MODEL = os.environ.get("LEAD_MODEL", "anthropic/claude-opus-4-20250514")
+LEAD_MODEL = os.environ.get("LEAD_MODEL", "anthropic/claude-opus-4-8")
 WORKER_MODEL = os.environ.get("WORKER_MODEL", "deepseek/deepseek-chat")
 
 # Keys are injected by the Kotlin layer into the environment before we run.

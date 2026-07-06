@@ -81,7 +81,7 @@ Files live in the app's private storage under a `workspace/` git repo.
   intentionally out of scope for this first version). Model calls + file edits +
   git cover most workflows.
 - **Model strings may need updating.** `orchestrator.py` uses
-  `anthropic/claude-opus-4-20250514` and `deepseek/deepseek-chat`. If a call
+  `anthropic/claude-opus-4-8` and `deepseek/deepseek-chat`. If a call
   errors on an unknown model, update those constants (or set `LEAD_MODEL` /
   `WORKER_MODEL` env vars) to the current provider model names.
 - **Background limits.** A foreground-service scaffold (`AgentService`) is
