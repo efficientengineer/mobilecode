@@ -55,11 +55,6 @@ class MainActivity : AppCompatActivity() {
     private val notifyPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    companion object {
-        private const val NOTIFY_CHANNEL = "agent_replies"
-        private const val NOTIFY_ID = 42
-    }
-
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -498,5 +493,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REPO = "efficientengineer/mobilecode"
+        private const val NOTIFY_CHANNEL = "agent_replies"
+        private const val NOTIFY_ID = 42
     }
 }
