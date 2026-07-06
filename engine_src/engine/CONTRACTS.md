@@ -35,11 +35,16 @@ Raised by systems: `game-started` · `game-over` · `player-fired` · `enemy-hit
 Set `ctx.camera` in bootstrap to pick a view; all are swappable without touching game logic:
 `cameras.topDown({height,back})` · `cameras.sideScroller({distance,height,ahead})` · `cameras.thirdPerson({distance,height})` · `cameras.orbit({radius,height,speed})` · `cameras.fixed({eye,target})` · `cameras.flat2D({height,size})` (true 2D, orthographic top-down) · `cameras.sideScroller2D({distance,size})` (2D platformer). Each is a pure `(focus, entity, dt) → {eye,target,up?,projection?,orthoSize?}`; add your own the same way.
 
-## To make a NEW game
-1. In `game/contracts.js` declare the signals + registries it needs.
-2. In `game/entities.js` describe what things are (mesh, color, size, stats) — pure data.
-3. In `game/config.js` set the numbers (speeds, rates).
-4. In `game/bootstrap.js` list the systems to run (add/remove one line each) and start the loop.
-5. Only write a NEW system file if the game needs behavior none of the above provides — one small file, imports only core, reacts to events/signals.
+## Movement (reusable component — engine/control/movements.js)
+Set `ctx.movement` in bootstrap: `movements.twinStick({speed})` (top-down) · `movements.eightWay({speed})` · `movements.tank({speed,turn})` · `movements.platformer({speed,jump,gravity})` (side view, gravity+jump) · `movements.autoRun({speed,jump})` (endless runner). Each is `update(entity, input, dt)` where `input = {move:[x,z], aim:[x,z], jump}`. Default is twinStick.
 
-You should not need to open `engine/core`, `engine/render`, or the existing `engine/systems`.
+## Building a game from a description (the app's core job)
+The app's purpose is making games. Given a description, DON'T write an engine — pick components and glue:
+1. **View + movement** from the description: top-down shooter → `cameras.topDown` + `movements.twinStick`; platformer → `cameras.sideScroller` + `movements.platformer`; runner → `cameras.sideScroller` + `movements.autoRun`; true 2D → `cameras.flat2D`.
+2. **Systems** in `game/bootstrap.js`: keep the ones the game needs (movement, ai, collision, health, score, hud, audio, render, gamestate are almost always in; add `fire`/`spawn` for shooters, drop them for a pure platformer).
+3. **Entities** (`game/entities.js`): mesh (box/sphere/cylinder/plane), color, size, stats — pure data. **Config** (`game/config.js`): the numbers.
+4. **Signals/registries** (`game/contracts.js`): add any the game needs.
+5. Ask the user AT MOST 1–2 questions only for genuinely ambiguous core choices (e.g. "waves or endless? health or one-hit?"). Otherwise pick sensible defaults and build.
+6. Only write a NEW system for behavior no component provides — one small file, imports only core, reacts to events/signals.
+
+You should not need to open `engine/core`, `engine/render`, `engine/control`, or the existing `engine/systems`.

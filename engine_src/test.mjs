@@ -16,6 +16,7 @@ import { initHealth } from './engine/systems/health.js';
 import { initScore } from './engine/systems/score.js';
 import { initCleanup } from './engine/systems/cleanup.js';
 import { cameras, topDown, sideScroller, flat2D, thirdPerson } from './engine/render/cameras.js';
+import { movements, twinStick, platformer, autoRun } from './engine/control/movements.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -42,6 +43,21 @@ const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); pro
 { const c = thirdPerson({ distance: 10, height: 5 })([0, 0, 0], { rot: 0 });
   check('thirdPerson sits behind by facing', Math.abs(c.eye[2] - (-10)) < 1e-9 && c.eye[1] === 5); }
 { check('camera library exposes the variants', ['topDown', 'sideScroller', 'thirdPerson', 'orbit', 'fixed', 'flat2D', 'sideScroller2D'].every(k => typeof cameras[k] === 'function')); }
+
+// ---- movement controllers (pure) ----
+{ const e = { pos: [0, 0, 0], vel: [0, 0, 0], rot: 0 }; twinStick({ speed: 8 })(e, { move: [1, 0], aim: [0, 0], jump: false }, 1 / 60);
+  check('twinStick drives xz from the stick', e.vel[0] === 8 && e.vel[2] === 0 && e.vel[1] === 0); }
+{ const e = { pos: [0, 5, 0], vel: [0, 0, 0], rot: 0 }; platformer({ speed: 8, gravity: 40 })(e, { move: [1, 0], jump: false }, 0.1);
+  check('platformer: horizontal move + gravity while airborne', e.vel[0] === 8 && e.vel[1] < 0); }
+{ const e = { pos: [0, 0, 0], vel: [0, 0, 0], rot: 0 }; const p = platformer({ jump: 15, gravity: 40 });
+  p(e, { move: [0, 0], jump: true }, 0.016);
+  check('platformer jumps on a fresh press from the ground', e.vel[1] === 15);
+  e.vel[1] = 0; e.pos[1] = 0;
+  p(e, { move: [0, 0], jump: true }, 0.016);
+  check('platformer jump is edge-triggered (no bunny-hop while held)', e.vel[1] === 0); }
+{ const e = { pos: [0, 0, 0], vel: [0, 0, 0], rot: 0 }; autoRun({ speed: 10 })(e, { move: [0, 0], jump: false }, 0.016);
+  check('autoRun runs forward constantly', e.vel[0] === 10); }
+{ check('movement library exposes the variants', ['twinStick', 'eightWay', 'tank', 'platformer', 'autoRun'].every(k => typeof movements[k] === 'function')); }
 
 // ---- gameplay sim ----
 const ENT = { player: { mesh: 'cylinder', color: [0, 0, 1], scale: 1, radius: 0.6 },

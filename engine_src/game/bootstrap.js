@@ -8,6 +8,7 @@ import { entities } from './entities.js';
 import { config } from './config.js';
 import { makeLoop } from '../engine/core/loop.js';
 import { cameras } from '../engine/render/cameras.js';
+import { movements } from '../engine/control/movements.js';
 
 import { initInput } from '../engine/systems/input.js';
 import { initMovement } from '../engine/systems/movement.js';
@@ -29,10 +30,11 @@ export function start(canvas) {
   ctx.config = config;
   ctx.canvas = canvas;
 
-  // Pick a camera (a swappable component). Try cameras.flat2D() for a true
-  // top-down 2D look, cameras.thirdPerson() to sit behind the player, or
-  // cameras.sideScroller() for a platformer view.
+  // Pick a camera and a movement style (swappable components). For a platformer
+  // you'd pair cameras.sideScroller() with movements.platformer(); for a runner,
+  // movements.autoRun(); for a top-down twin-stick shooter, the defaults below.
   ctx.camera = cameras.topDown({ height: config.camHeight, back: config.camBack });
+  ctx.movement = movements.twinStick({ speed: config.playerSpeed });
 
   // The systems that make up this game. Add or remove a line to change it;
   // events keep them decoupled, so order only matters within the same phase.
