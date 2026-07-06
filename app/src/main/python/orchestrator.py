@@ -721,19 +721,30 @@ _OUTLINE_RULES = (
 )
 
 
+def _outline_manifest_path(root: Path = None) -> Path:
+    return _agent_dir(root) / "outline_manifest.json"
+
+
+def _file_hashes(root: Path, files: list) -> dict:
+    """sha1 of each readable file's content, keyed by path."""
+    import hashlib
+    out = {}
+    for f in files:
+        c = _read_file(root, f)
+        if c is not None:
+            out[f] = hashlib.sha1(c.encode("utf-8", "replace")).hexdigest()
+    return out
+
+
 def build_outline(_=None) -> str:
-    """(Re)generate .agent/outline.md. When an outline already exists, ask the
-    model for a SEARCH/REPLACE diff against it (cheaper output — only changed
-    lines are emitted) and apply that; fall back to a full rewrite otherwise."""
+    """(Re)generate .agent/outline.md efficiently:
+      - diff mode (SEARCH/REPLACE) against the existing outline → cheap output,
+      - only CHANGED files' snippets are sent → cheap input,
+      - skips the model entirely when nothing changed since the last build."""
     try:
         root = _workspace()
         files = _list_repo_files(root, max_files=120)
-        snippets = []
-        for f in files[:40]:
-            c = _read_file(root, f)
-            if c and len(c) < 4000:
-                snippets.append(f"### {f}\n{c[:1500]}")
-        facts = "FILES:\n" + "\n".join(files) + "\n\nSNIPPETS:\n" + "\n\n".join(snippets)
+        hashes = _file_hashes(root, files)
 
         prev = ""
         of = _outline_file(root)
@@ -743,34 +754,68 @@ def build_outline(_=None) -> str:
             except Exception:
                 prev = ""
 
-        if prev.strip():
-            # Diff-based update: emit only what changed.
+        manifest = {}
+        mp = _outline_manifest_path(root)
+        if mp.exists():
+            try:
+                manifest = json.loads(mp.read_text(encoding="utf-8"))
+            except Exception:
+                manifest = {}
+
+        changed = [f for f in files if hashes.get(f) != manifest.get(f)]
+        deleted = [f for f in manifest if f not in hashes]
+
+        def snippets_for(paths):
+            out = []
+            for f in paths[:40]:
+                c = _read_file(root, f)
+                if c and len(c) < 4000:
+                    out.append(f"### {f}\n{c[:1500]}")
+            return "\n\n".join(out)
+
+        diff_mode = bool(prev.strip() and manifest)
+
+        if diff_mode and not changed and not deleted:
+            return "Outline already up to date (no file changes)"
+
+        if diff_mode:
+            # Only send what moved; the outline already covers the rest.
+            facts = "ALL FILES:\n" + "\n".join(files)
+            if changed:
+                facts += "\n\nCHANGED / NEW FILE SNIPPETS:\n" + snippets_for(changed)
+            if deleted:
+                facts += "\n\nDELETED FILES (remove from outline):\n" + "\n".join(deleted)
             system = (
                 "You maintain a project outline by editing it in place.\n" + _OUTLINE_RULES +
-                "\n\nReturn ONLY SEARCH/REPLACE blocks that update the CURRENT OUTLINE "
-                "to match reality. Each block:\n"
+                "\n\nOnly the files that changed are shown; assume everything else is "
+                "unchanged and already correctly described. Return ONLY SEARCH/REPLACE "
+                "blocks that update the CURRENT OUTLINE. Each block:\n"
                 "<<<<<<< SEARCH\n<exact text to find>\n=======\n<replacement>\n>>>>>>> REPLACE\n"
                 "Use an empty SEARCH section to append new content. If nothing needs "
                 "changing, return exactly: NO CHANGES."
             )
             user = "CURRENT OUTLINE:\n" + prev + "\n\n" + facts
             out = _call(LEAD_MODEL, system, user, max_tokens=5000)
-            if "NO CHANGES" in out.upper() and _apply_sr_blocks(prev, out) is None:
-                return "Outline already up to date"
             res = _apply_sr_blocks(prev, out)
+            if res is None and "NO CHANGES" in out.upper():
+                mp.write_text(json.dumps(hashes), encoding="utf-8")
+                return "Outline already up to date"
             if res and res[1] > 0:
                 md = res[0].strip()
                 if _caveman_on():
                     md = _caveman(md)
                 of.write_text(md, encoding="utf-8")
+                mp.write_text(json.dumps(hashes), encoding="utf-8")
                 return f"Outline updated via diff ({res[1]}/{res[2]} edits, {len(md)} chars)"
-            # Diff failed to apply — fall through to full rewrite.
+            # Diff failed to apply — fall through to a full rewrite.
 
+        facts = "FILES:\n" + "\n".join(files) + "\n\nSNIPPETS:\n" + snippets_for(files)
         system = ("You write a project outline in markdown, no fences.\n" + _OUTLINE_RULES)
         md = _call(LEAD_MODEL, system, facts, max_tokens=5000).strip()
         if _caveman_on():
             md = _caveman(md)
         of.write_text(md, encoding="utf-8")
+        mp.write_text(json.dumps(hashes), encoding="utf-8")
         return f"Outline generated ({len(md)} chars)"
     except Exception:
         return "Outline failed:\n" + traceback.format_exc()
