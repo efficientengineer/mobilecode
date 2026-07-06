@@ -8,20 +8,28 @@ Supported entry points (first match wins), served on 127.0.0.1:<port>:
 
 The server runs on a daemon background thread so the Kotlin WebView can load
 http://127.0.0.1:<port>/. Only one server runs at a time.
+
+Ports never hard-fail: start() always releases the previous server first, and if
+the preferred port is somehow still held (a wedged shutdown, a stale server left
+by the headless web-check, module state reset by an OTA reload), it falls back to
+an OS-assigned free port instead of raising "address already in use". url()
+always reports the port actually in use, and an atexit hook frees it on teardown.
 """
 
 import os
 import sys
 import time
+import atexit
 import threading
 import traceback
 import importlib.util
 from pathlib import Path
 from wsgiref.simple_server import make_server, WSGIRequestHandler
 
-_PORT = 8765
+_PREFERRED_PORT = 8765
 _server = None
 _thread = None
+_bound_port = None          # the port the live server is actually bound to
 # Serialize start/stop so overlapping calls (e.g. an auto web-check racing the
 # Run button) can't both try to bind the port.
 _LOCK = threading.RLock()
@@ -87,59 +95,83 @@ class _QuietHandler(WSGIRequestHandler):
         pass
 
 
+def _bind(app, port):
+    # WSGIServer/HTTPServer sets SO_REUSEADDR before binding (allow_reuse_address),
+    # so a socket in TIME_WAIT won't block us. A LISTEN socket still held by a
+    # zombie server will, which is what the ephemeral fallback in _make_server
+    # exists to survive.
+    return make_server("127.0.0.1", port, app, handler_class=_QuietHandler)
+
+
 def _make_server(app):
-    """Bind the server, retrying briefly if the port is still being released
-    (the socket can linger for a moment after the previous server closes)."""
-    last = None
-    for _ in range(4):
+    """Bind the server without ever hard-failing on a busy port.
+
+    Try the preferred port (briefly retrying in case the previous socket is
+    mid-release), then fall back to an OS-assigned free port (0) so a stuck or
+    orphaned server on the preferred port can't stop a new run."""
+    for _ in range(3):
         try:
-            # WSGIServer/HTTPServer already sets SO_REUSEADDR before binding.
-            return make_server("127.0.0.1", _PORT, app, handler_class=_QuietHandler)
-        except OSError as e:
-            last = e
-            time.sleep(0.25)
-    raise last
+            return _bind(app, _PREFERRED_PORT)
+        except OSError:
+            time.sleep(0.2)
+    # Preferred port is still held — let the OS pick any free port instead.
+    return _bind(app, 0)
+
+
+def _quiet(fn):
+    try:
+        fn()
+    except Exception:
+        pass
 
 
 def start() -> str:
     """(Re)start the server for the active workspace. Returns a status string."""
-    global _server, _thread
+    global _server, _thread, _bound_port
     with _LOCK:
         try:
             stop()
             root = _workspace()
             app = _load_wsgi_app(root) or _static_app(root)
             _server = _make_server(app)
+            _bound_port = _server.server_address[1]   # the port actually bound
             _thread = threading.Thread(target=_server.serve_forever, daemon=True)
             _thread.start()
             kind = "app" if (root / "app.py").exists() or (root / "wsgi.py").exists() else "static files"
-            return f"http://127.0.0.1:{_PORT}/  ({kind})"
+            return f"http://127.0.0.1:{_bound_port}/  ({kind})"
         except Exception:
             return "Local run failed:\n" + traceback.format_exc()
 
 
 def stop() -> str:
-    global _server, _thread
+    """Release the running server and free its port. Cannot hang: shutdown() is
+    given a bounded window (a wedged request handler can't block a new run), and
+    the listening socket is closed regardless so the port is freed."""
+    global _server, _thread, _bound_port
     with _LOCK:
-        try:
-            if _server is not None:
-                # shutdown() ends the serve_forever loop; server_close() releases
-                # the listening socket so the port is free for the next start()
-                # (without it you get "address already in use" on the next run).
-                try:
-                    _server.shutdown()
-                except Exception:
-                    pass
-                try:
-                    _server.server_close()
-                except Exception:
-                    pass
-                _server = None
-            _thread = None
-            return "stopped"
-        except Exception:
-            return "stop failed"
+        srv, th = _server, _thread
+        _server = None
+        _thread = None
+        _bound_port = None
+        if srv is not None:
+            # shutdown() stops serve_forever; run it on a watchdog thread and only
+            # wait briefly, so a slow in-flight request can't stall us.
+            w = threading.Thread(target=lambda: _quiet(srv.shutdown), daemon=True)
+            w.start()
+            w.join(1.5)
+            # server_close() releases the listening socket — the part that
+            # actually frees the port for the next start().
+            _quiet(srv.server_close)
+        if th is not None and th.is_alive():
+            th.join(1.0)
+        return "stopped"
+
+
+# Free the port on interpreter/process teardown too, so a clean exit never leaves
+# it bound. (A hard kill / force-close is handled by the OS reclaiming the port.)
+atexit.register(stop)
 
 
 def url() -> str:
-    return f"http://127.0.0.1:{_PORT}/"
+    port = _bound_port or _PREFERRED_PORT
+    return f"http://127.0.0.1:{port}/"
