@@ -387,6 +387,13 @@ def _call_openai(provider, model, system, cached_context, messages, tools,
     }
     if tools:
         payload["tools"] = _openai_tools(tools)
+    # DeepSeek V4 (flash/pro) is a hybrid Thinking/Non-Thinking model. Send the
+    # explicit switch so "thinking off" actually STOPS it generating (and
+    # billing for) reasoning tokens — not merely hides them. Only for V4 ids;
+    # deepseek-chat never reasons and deepseek-reasoner always does, so the
+    # param is moot (and possibly rejected) there.
+    if provider == "deepseek" and "v4" in model.lower():
+        payload["thinking"] = {"type": "enabled" if _thinking_on() else "disabled"}
     headers = {"Authorization": f"Bearer {key}", "content-type": "application/json"}
     url = f"{base}/v1/chat/completions"
 

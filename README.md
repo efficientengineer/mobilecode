@@ -90,12 +90,15 @@ Files live in the app's private storage under a `workspace/` git repo.
 - **Turn-taking is one-shot.** Speak → wait → hear result (enable
   **Speak replies** to have answers read aloud). You can Stop a running task
   from the run bar, but not by voice.
-- **Models.** Defaults are `anthropic/claude-opus-4-8` and
-  `deepseek/deepseek-chat`; pick any listed model per session from the model
-  switcher (or set `LEAD_MODEL` / `WORKER_MODEL`). Set a **Fallback model** in
-  Settings and a run that hits an overloaded/failed provider fails over to it
-  (e.g. Claude → DeepSeek) instead of dying. See `PARITY.md` for the full
-  feature-parity audit against claude.ai/code and the roadmap.
+- **Models.** Pick any listed model per session from the model switcher (or set
+  `LEAD_MODEL` / `WORKER_MODEL`). DeepSeek **V4 Flash/Pro** (`deepseek-v4-flash`,
+  `deepseek-v4-pro`) are hybrid Thinking/Non-Thinking models: the **Thinking**
+  toggle sends `thinking:{type:enabled|disabled}` so turning it off actually
+  stops reasoning generation and its token cost — not just the display.
+  (`deepseek-reasoner` always reasons; `deepseek-chat` never does, so the toggle
+  is moot for those.) Set a **Fallback model** in Settings and a run that hits an
+  overloaded/failed provider fails over to it (e.g. Claude → DeepSeek) instead of
+  dying. See `PARITY.md` for the full feature-parity audit and roadmap.
 
 ## Verifying the Python core locally (optional)
 
