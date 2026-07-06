@@ -673,11 +673,48 @@ def read_todos() -> list:
     return []
 
 
+def _newly_completed(prev, clean) -> list:
+    """Steps that flipped to completed in this update (matched by content)."""
+    was = {t.get("content"): t.get("status") for t in prev}
+    return [t["content"] for t in clean
+            if t["status"] == "completed" and was.get(t["content"]) != "completed"]
+
+
+def _step_verify() -> str:
+    """Fast, forward-reference-SAFE self-check for a just-completed step: does the
+    code you just wrote actually parse / is it structurally complete?
+
+    Deliberately NOT the missing-reference or full-test checks — mid-plan the
+    entry file may point at a feature file you create in a later step, and tests
+    may not pass until a later step lands, so those run at end of the run instead.
+    This only flags what is broken regardless of build order (syntax errors,
+    truncated writes, unbalanced brackets), so issues don't compound.
+    """
+    problems = []
+    try:
+        errs = check_python_files()
+        if errs:
+            problems.append("Python doesn't compile:\n" + errs)
+    except Exception:
+        pass
+    try:
+        _hard, soft = check_web_files()
+        if soft:
+            problems.append("HTML/JS looks malformed or truncated:\n" + soft)
+    except Exception:
+        pass
+    if problems:
+        return ("\n\n⚠️ You marked a step complete, but the code you just wrote is "
+                "broken — fix it NOW before the next step:\n" + "\n\n".join(problems))
+    return ""
+
+
 def t_todo_write(todos=None, **_):
     """Replace the task checklist. `todos` is a list of {content, status} where
     status is pending | in_progress | completed. Overwrites the whole list."""
     if not isinstance(todos, list):
         return "(todos must be a list of {content, status})"
+    prev = read_todos()
     clean = []
     for t in todos:
         if isinstance(t, str):
@@ -701,7 +738,12 @@ def t_todo_write(todos=None, **_):
     done = sum(1 for t in clean if t["status"] == "completed")
     doing = next((t["content"] for t in clean if t["status"] == "in_progress"), "")
     tail = f"; now: {doing}" if doing else ""
-    return f"todos updated ({done}/{len(clean)} done{tail})"
+    # When a step is newly completed, self-check the code right away so the agent
+    # verifies each step instead of building the whole app and checking at the end.
+    note = ""
+    if os.environ.get("AGENT_STEP_VERIFY", "1") != "0" and _newly_completed(prev, clean):
+        note = _step_verify()
+    return f"todos updated ({done}/{len(clean)} done{tail})" + note
 
 
 # --- registry ----------------------------------------------------------------
@@ -794,7 +836,10 @@ WRITE_TOOLS = [
      "description": "Maintain a task checklist the user watches live. Call it "
                     "at the start of a multi-step task with all steps, then "
                     "again after each step to update statuses. Replaces the "
-                    "whole list each call. Keep exactly one item in_progress.",
+                    "whole list each call. Keep exactly one item in_progress. "
+                    "Marking a step completed auto-runs a quick self-check on the "
+                    "code you touched; if it reports breakage, fix it before the "
+                    "next step.",
      "input_schema": _schema({
          "todos": {"type": "array", "items": {
              "type": "object",
