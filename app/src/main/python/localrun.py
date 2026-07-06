@@ -12,6 +12,7 @@ http://127.0.0.1:<port>/. Only one server runs at a time.
 
 import os
 import sys
+import time
 import threading
 import traceback
 import importlib.util
@@ -21,6 +22,9 @@ from wsgiref.simple_server import make_server, WSGIRequestHandler
 _PORT = 8765
 _server = None
 _thread = None
+# Serialize start/stop so overlapping calls (e.g. an auto web-check racing the
+# Run button) can't both try to bind the port.
+_LOCK = threading.RLock()
 
 
 def _workspace() -> Path:
@@ -83,31 +87,58 @@ class _QuietHandler(WSGIRequestHandler):
         pass
 
 
+def _make_server(app):
+    """Bind the server, retrying briefly if the port is still being released
+    (the socket can linger for a moment after the previous server closes)."""
+    last = None
+    for _ in range(4):
+        try:
+            # WSGIServer/HTTPServer already sets SO_REUSEADDR before binding.
+            return make_server("127.0.0.1", _PORT, app, handler_class=_QuietHandler)
+        except OSError as e:
+            last = e
+            time.sleep(0.25)
+    raise last
+
+
 def start() -> str:
     """(Re)start the server for the active workspace. Returns a status string."""
     global _server, _thread
-    try:
-        stop()
-        root = _workspace()
-        app = _load_wsgi_app(root) or _static_app(root)
-        _server = make_server("127.0.0.1", _PORT, app, handler_class=_QuietHandler)
-        _thread = threading.Thread(target=_server.serve_forever, daemon=True)
-        _thread.start()
-        kind = "app" if (root / "app.py").exists() or (root / "wsgi.py").exists() else "static files"
-        return f"http://127.0.0.1:{_PORT}/  ({kind})"
-    except Exception:
-        return "Local run failed:\n" + traceback.format_exc()
+    with _LOCK:
+        try:
+            stop()
+            root = _workspace()
+            app = _load_wsgi_app(root) or _static_app(root)
+            _server = _make_server(app)
+            _thread = threading.Thread(target=_server.serve_forever, daemon=True)
+            _thread.start()
+            kind = "app" if (root / "app.py").exists() or (root / "wsgi.py").exists() else "static files"
+            return f"http://127.0.0.1:{_PORT}/  ({kind})"
+        except Exception:
+            return "Local run failed:\n" + traceback.format_exc()
 
 
 def stop() -> str:
     global _server, _thread
-    try:
-        if _server is not None:
-            _server.shutdown()
-            _server = None
-        return "stopped"
-    except Exception:
-        return "stop failed"
+    with _LOCK:
+        try:
+            if _server is not None:
+                # shutdown() ends the serve_forever loop; server_close() releases
+                # the listening socket so the port is free for the next start()
+                # (without it you get "address already in use" on the next run).
+                try:
+                    _server.shutdown()
+                except Exception:
+                    pass
+                try:
+                    _server.server_close()
+                except Exception:
+                    pass
+                _server = None
+            _thread = None
+            return "stopped"
+        except Exception:
+            return "stop failed"
 
 
 def url() -> str:
