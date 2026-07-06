@@ -53,10 +53,14 @@ const $ = (s) => document.querySelector(s);
 const chat = $("#chat");
 function setStatus(t) { $("#status").textContent = t || ""; }
 
-function bubble(text, kind) {
+function bubble(text, kind, runId) {
   const d = document.createElement("div");
   d.className = "bubble " + kind;
   d.textContent = text;
+  if (runId) {
+    d.classList.add("tappable");
+    d.onclick = () => openRun(runId);
+  }
   chat.appendChild(d);
   chat.scrollTop = chat.scrollHeight;
   return d;
@@ -73,7 +77,8 @@ async function loadHistory() {
   chat.innerHTML = "";
   try {
     const r = JSON.parse((await call("orch", { fn: "get_discussion" })).text);
-    (r.turns || []).forEach((t) => bubble(t.text, t.role === "user" ? "user" : "agent"));
+    (r.turns || []).forEach((t) =>
+      bubble(t.text, t.role === "user" ? "user" : "agent", t.run_id || null));
   } catch (e) {}
   refreshStats();
 }
@@ -97,20 +102,135 @@ async function refreshStats() {
   } catch (e) {}
 }
 
-// --- Submit (typed or spoken) -------------------------------------------
-async function submit(task) {
-  bubble(task, "user");
-  setStatus(currentMode === "plan" ? "Planning…" : "Thinking…");
-  try {
-    const r = await call("agent.run", { task, mode: currentMode });
-    bubble(r.text || "(no output)", "agent");
-    call("speak", { text: (r.text || "").split("\n")[0] });
-    if (currentMode === "plan") addApprove();
-  } catch (e) {
-    bubble("Error: " + e.message, "agent");
+// --- Run state machine (queue + live progress + interrupt) --------------
+let running = false;
+const queue = [];
+
+function renderQueue() {
+  const c = $("#queueChips");
+  c.innerHTML = queue.map((q, i) =>
+    `<span class="qchip">${q.mode}: ${escapeHtml(q.task).slice(0, 24)}<b data-q="${i}"> ✕</b></span>`
+  ).join("");
+  c.querySelectorAll("[data-q]").forEach((el) => {
+    el.onclick = () => { queue.splice(+el.dataset.q, 1); renderQueue(); };
+  });
+}
+
+function submit(task) {
+  if (running) {
+    queue.push({ task, mode: currentMode });
+    bubble(task, "user");
+    renderQueue();
+    return;
   }
+  runTask(task, currentMode);
+}
+
+async function runTask(task, mode) {
+  running = true;
+  bubble(task, "user");
+  $("#runbar").classList.remove("hidden");
+  $("#runlabel").textContent = mode === "plan" ? "Planning…" : "Working…";
+  const live = document.createElement("div");
+  live.className = "live";
+  live.textContent = "Starting…";
+  chat.appendChild(live);
+  const lines = [];
+  let cursor = 0, polling = true;
+
+  (async function poll() {
+    while (polling) {
+      try {
+        const r = JSON.parse((await call("orch", { fn: "get_events", arg: String(cursor) })).text);
+        cursor = r.cursor;
+        (r.events || []).forEach((e) => { lines.push(fmtEvent(e)); });
+        if (lines.length) { live.textContent = lines.slice(-12).join("\n"); chat.scrollTop = chat.scrollHeight; }
+      } catch (e) {}
+      await new Promise((r) => setTimeout(r, 700));
+    }
+  })();
+
+  try {
+    await call("agent.run", { task, mode });
+  } catch (e) {
+    lines.push("Error: " + e.message);
+  }
+  polling = false;
+  live.remove();
+  await loadHistory();
+  if (mode === "plan") addApprove();
+  running = false;
+  $("#runbar").classList.add("hidden");
   setStatus("");
-  refreshStats();
+  drainQueue();
+}
+
+function drainQueue() {
+  if (running || !queue.length) return;
+  const next = queue.shift();
+  renderQueue();
+  currentMode = next.mode;
+  document.querySelectorAll(".mode").forEach((x) =>
+    x.classList.toggle("active", x.dataset.mode === next.mode));
+  runTask(next.task, next.mode);
+}
+
+// Live progress for an arbitrary agent call (e.g. plan approval).
+async function driveLive(label, promiseFactory) {
+  running = true;
+  $("#runbar").classList.remove("hidden");
+  $("#runlabel").textContent = label;
+  const live = document.createElement("div");
+  live.className = "live"; live.textContent = "Starting…";
+  chat.appendChild(live);
+  const lines = []; let cursor = 0, polling = true;
+  (async function poll() {
+    while (polling) {
+      try {
+        const r = JSON.parse((await call("orch", { fn: "get_events", arg: String(cursor) })).text);
+        cursor = r.cursor;
+        (r.events || []).forEach((e) => lines.push(fmtEvent(e)));
+        if (lines.length) { live.textContent = lines.slice(-12).join("\n"); chat.scrollTop = chat.scrollHeight; }
+      } catch (e) {}
+      await new Promise((r) => setTimeout(r, 700));
+    }
+  })();
+  try { await promiseFactory(); } catch (e) {}
+  polling = false; live.remove(); await loadHistory();
+  running = false; $("#runbar").classList.add("hidden"); drainQueue();
+}
+
+function fmtEvent(e) {
+  switch (e.kind) {
+    case "plan_start": return "🧠 Orchestrator planning…";
+    case "plan_done": return "📋 Plan: " + (e.summary || "") + " (" + (e.files || []).length + " files)";
+    case "round_start": return "── Round " + (e.round + 1) + ": " + (e.files || []).join(", ");
+    case "impl_start": return "⚙️ implementer → " + e.path + "\n    " + (e.instruction || "").slice(0, 120);
+    case "impl_done": return "   ✓ " + e.path + " [" + e.status + "]";
+    case "review_start": return "🔎 Orchestrator reviewing…";
+    case "review_done": return "   review: " + e.status + (e.notes ? " — " + e.notes.slice(0, 120) : "");
+    case "commit_start": return "💾 Committing…";
+    case "done": return "✅ Committed " + (e.commit || "");
+    case "interrupt": return "⏹ Interrupting…";
+    default: return e.kind;
+  }
+}
+
+async function openRun(runId) {
+  let rec = {};
+  try { rec = JSON.parse((await call("orch", { fn: "get_run", arg: String(runId) })).text); } catch (e) {}
+  const rounds = rec.rounds || [];
+  if (!rounds.length) { modal("Run details", `<div class="hint">No details recorded.</div>`); return; }
+  const html = rounds.map((rd) => {
+    const files = (rd.handoffs || []).map((h) =>
+      `<div class="run-file">${h.path} [${h.status}]</div>
+       <div class="hint">prompt to implementer:</div><pre class="small">${escapeHtml(h.instruction || "")}</pre>
+       <div class="hint">implementer output:</div><pre class="small">${escapeHtml((h.output || "").slice(0, 4000))}</pre>`
+    ).join("");
+    const rev = rd.review ? `<div class="hint">orchestrator review:</div><pre class="small">${escapeHtml((rd.review.notes || rd.review.status || ""))}</pre>` : "";
+    return `<div class="run-round"><h4>Round ${(rd.round || 0) + 1} — ${(rd.handoffs || []).length} implementer(s)</h4>${files}${rev}</div>`;
+  }).join("");
+  modal("Run details", html);
 }
 
 function updateCavemanLabel(on) {
@@ -122,16 +242,9 @@ function addApprove() {
   const btn = document.createElement("button");
   btn.className = "approve";
   btn.textContent = "✓ Approve & build";
-  btn.onclick = async () => {
-    btn.disabled = true;
-    bubble("Building the plan…", "sys");
-    try {
-      const r = await call("plan.approve");
-      bubble(r.text || "done", "agent");
-    } catch (e) {
-      bubble("Approve failed: " + e.message, "sys");
-    }
+  btn.onclick = () => {
     btn.remove();
+    driveLive("Building plan…", () => call("plan.approve"));
   };
   chat.appendChild(btn);
   chat.scrollTop = chat.scrollHeight;
@@ -370,6 +483,7 @@ $("#input").addEventListener("input", (e) => {
   e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
 });
 $("#micBtn").onclick = () => { _dictBase = $("#input").value.trim(); setStatus("Listening…"); call("listen"); };
+$("#stopBtn").onclick = () => { $("#runlabel").textContent = "Stopping…"; call("orch", { fn: "interrupt" }); };
 document.querySelectorAll(".mode").forEach((b) => {
   b.onclick = () => {
     document.querySelectorAll(".mode").forEach((x) => x.classList.remove("active"));

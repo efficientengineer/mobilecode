@@ -200,33 +200,94 @@ def _plan_with_lead(task: str, root: Path) -> dict:
     return json.loads(raw)
 
 
-def _edit_with_worker(edit: dict, root: Path) -> str:
-    """DeepSeek writes the actual new content for one file."""
+_SR_RE = None
+
+
+def _sr_pattern():
+    global _SR_RE
+    if _SR_RE is None:
+        import re as _r
+        _SR_RE = _r.compile(
+            r"<{5,}\s*SEARCH\s*\n(.*?)\n?={5,}\s*\n(.*?)\n?>{5,}\s*REPLACE",
+            _r.S)
+    return _SR_RE
+
+
+def _strip_fence(text: str) -> str:
+    t = text.strip()
+    if t.startswith("```"):
+        lines = t.split("\n")
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        t = "\n".join(lines)
+    return t
+
+
+def _apply_sr_blocks(current: str, text: str):
+    """Apply SEARCH/REPLACE blocks. Returns (new_text, applied, total) or None."""
+    blocks = _sr_pattern().findall(text)
+    if not blocks:
+        return None
+    new = current
+    applied = 0
+    for search, replace in blocks:
+        if search.strip() == "":
+            new = (new + ("\n" if new and not new.endswith("\n") else "")) + replace
+            applied += 1
+        elif search in new:
+            new = new.replace(search, replace, 1)
+            applied += 1
+    return new, applied, len(blocks)
+
+
+def _edit_with_worker(edit: dict, root: Path) -> dict:
+    """Implementer edits one file via SEARCH/REPLACE diff blocks.
+
+    Returns a structured handoff record for the review loop and insight UI.
+    """
     path = edit["path"]
     instruction = edit["instruction"]
     current = _read_file(root, path)
+    is_new = not current
     system = (
-        "You are the editor. Output ONLY the complete new contents of the "
-        "file — no explanations, no markdown fences. If modifying, return the "
-        "whole file with changes applied."
+        "You are the implementer. Make the requested change to ONE file using "
+        "SEARCH/REPLACE blocks, so only changed regions are emitted. Format each "
+        "block EXACTLY as:\n"
+        "<<<<<<< SEARCH\n<exact existing lines>\n=======\n<replacement lines>\n"
+        ">>>>>>> REPLACE\n"
+        "The SEARCH text must match the current file exactly. Use multiple "
+        "blocks for multiple regions. For a NEW file or a full rewrite, use one "
+        "block with an EMPTY search section (the replace section is the whole "
+        "file). Output ONLY blocks, no prose, no fences."
     )
     user = (
         f"FILE: {path}\n\n"
         f"CURRENT CONTENTS:\n{current if current else '(new file)'}\n\n"
         f"INSTRUCTION:\n{instruction}"
     )
-    new_content = _call(_impl_model(), system, user)
-    new_content = new_content.strip()
-    if new_content.startswith("```"):
-        # drop first fence line and trailing fence
-        lines = new_content.split("\n")
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        new_content = "\n".join(lines)
-    _write_file(root, path, new_content + "\n")
-    return path
+    output = _call(_impl_model(), system, user).strip()
+
+    parsed = _apply_sr_blocks(current or "", output)
+    if parsed is None:
+        # No blocks — treat the whole response as the file body (fallback).
+        new = _strip_fence(output)
+        _write_file(root, path, new + ("" if new.endswith("\n") else "\n"))
+        status = "rewrite"
+        applied, total = 1, 1
+    else:
+        new, applied, total = parsed
+        _write_file(root, path, new)
+        status = "new" if is_new else ("ok" if applied == total else "partial")
+    return {
+        "path": path,
+        "instruction": instruction,
+        "output": output,
+        "status": status,
+        "applied": applied,
+        "total": total,
+    }
 
 
 def _commit_message(summary: str, changed: list) -> str:
@@ -312,8 +373,10 @@ def _caveman(text: str) -> str:
     return "\n".join(strip_line(l) for l in text.splitlines())
 
 
-def _append_discussion(role: str, text: str) -> None:
-    rec = {"role": role, "text": text, "cave": _caveman(text)}
+def _append_discussion(role: str, text: str, run_id: str = "") -> None:
+    idx = len(_read_discussion())
+    rec = {"id": idx, "role": role, "text": text, "cave": _caveman(text),
+           "run_id": run_id}
     with open(_discussion_file(), "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
 
@@ -352,8 +415,10 @@ def _full_context(task_hint: str = "") -> str:
 # --- op targets (called from the web via agent_loader.op) ----------------
 
 def get_discussion(_=None) -> str:
-    """JSON {turns:[{role,text}]} of the original (display) messages."""
-    turns = [{"role": d["role"], "text": d.get("text", "")} for d in _read_discussion()]
+    """JSON {turns:[{id,role,text,run_id}]} of the original (display) messages."""
+    turns = [{"id": d.get("id", i), "role": d["role"], "text": d.get("text", ""),
+              "run_id": d.get("run_id", "")}
+             for i, d in enumerate(_read_discussion())]
     return json.dumps({"turns": turns})
 
 
@@ -431,6 +496,172 @@ def build_outline(_=None) -> str:
         return "Outline failed:\n" + traceback.format_exc()
 
 
+# --- Execution: events, interrupt, review loop, run records --------------
+
+MAX_ROUNDS = 2
+
+
+def _events_file() -> Path:
+    return _agent_dir() / "run_events.jsonl"
+
+
+def _emit(kind: str, **data) -> None:
+    try:
+        rec = {"kind": kind}
+        rec.update(data)
+        with open(_events_file(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+
+
+def _clear_events() -> None:
+    try:
+        f = _events_file()
+        if f.exists():
+            f.unlink()
+    except Exception:
+        pass
+
+
+def get_events(cursor="0") -> str:
+    """Return events with index > cursor (for live progress polling)."""
+    try:
+        c = int(str(cursor))
+    except Exception:
+        c = 0
+    f = _events_file()
+    lines = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
+    out = []
+    for i in range(c, len(lines)):
+        try:
+            out.append(json.loads(lines[i]))
+        except Exception:
+            pass
+    return json.dumps({"cursor": len(lines), "events": out})
+
+
+def interrupt(_=None) -> str:
+    os.environ["AGENT_INTERRUPT"] = "1"
+    _emit("interrupt")
+    return "Interrupting after the current step…"
+
+
+def _interrupted() -> bool:
+    return os.environ.get("AGENT_INTERRUPT", "0") == "1"
+
+
+def _new_run_id() -> str:
+    import time
+    return str(int(time.time() * 1000))
+
+
+def _begin_run() -> None:
+    """Reset per-run state so events/interrupt start clean."""
+    _clear_events()
+    os.environ["AGENT_INTERRUPT"] = "0"
+
+
+def _runs_dir() -> Path:
+    d = _agent_dir() / "runs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def get_run(run_id: str) -> str:
+    """Return a stored run record (plan + handoffs + reviews) as JSON."""
+    fp = _runs_dir() / f"{run_id}.json"
+    return fp.read_text(encoding="utf-8") if fp.exists() else "{}"
+
+
+def _review_with_lead(task: str, handoffs: list, root: Path) -> dict:
+    """Orchestrator reviews what the implementers did and decides next step."""
+    summaries = []
+    for h in handoffs:
+        summaries.append(
+            f"FILE {h['path']} [{h['status']}]\nIMPLEMENTER OUTPUT:\n{h['output'][:2000]}")
+    system = (
+        "You are the orchestrator reviewing the implementers' work. Decide if "
+        "the task is complete or needs another round. Respond ONLY with JSON: "
+        "{\"status\": \"done\" | \"continue\", \"notes\": str, "
+        "\"edits\": [{\"path\": str, \"instruction\": str}]}. Use \"done\" with "
+        "empty edits when the task is satisfied; use \"continue\" with edits to "
+        "fix or extend. Be strict but do not loop unnecessarily."
+    )
+    user = (f"TASK:\n{task}\n\nWHAT THE IMPLEMENTERS DID:\n" +
+            "\n\n".join(summaries))
+    try:
+        raw = _strip_fence(_call(LEAD_MODEL, system, user, max_tokens=1500))
+        return json.loads(raw)
+    except Exception:
+        return {"status": "done", "notes": "(review unavailable)", "edits": []}
+
+
+def _run_edits(task: str, plan: dict, root: Path, run_id: str) -> str:
+    """The orchestrator↔implementer feedback loop with live events."""
+    rounds = []
+    round_edits = plan.get("edits", [])
+    interrupted = False
+
+    for r in range(MAX_ROUNDS):
+        if _interrupted():
+            interrupted = True
+            break
+        _emit("round_start", round=r, files=[e.get("path") for e in round_edits])
+        handoffs = []
+        for e in round_edits:
+            if _interrupted():
+                interrupted = True
+                break
+            _emit("impl_start", round=r, path=e.get("path"), instruction=e.get("instruction"))
+            try:
+                res = _edit_with_worker(e, root)
+            except Exception as ex:
+                res = {"path": e.get("path"), "instruction": e.get("instruction"),
+                       "output": f"ERROR: {ex}", "status": "error", "applied": 0, "total": 0}
+            handoffs.append(res)
+            _emit("impl_done", round=r, path=res["path"], status=res["status"])
+
+        review = {"status": "done", "notes": "", "edits": []}
+        if handoffs and not interrupted and r < MAX_ROUNDS - 1:
+            _emit("review_start", round=r)
+            review = _review_with_lead(task, handoffs, root)
+            _emit("review_done", round=r, status=review.get("status"), notes=review.get("notes", ""))
+
+        rounds.append({"round": r, "plan_summary": plan.get("summary", ""),
+                       "handoffs": handoffs, "review": review})
+
+        if interrupted or review.get("status") == "done" or not review.get("edits"):
+            break
+        round_edits = review["edits"]
+
+    # Commit whatever was written.
+    all_changed = [h["path"] for rd in rounds for h in rd["handoffs"]]
+    summary = plan.get("summary", "(no summary)")
+    _emit("commit_start")
+    message = _commit_message(summary, all_changed)
+    commit_id = _commit(root, message)[:8]
+    _emit("done", commit=commit_id)
+
+    # Persist the run record for the insight UI.
+    try:
+        (_runs_dir() / f"{run_id}.json").write_text(
+            json.dumps({"task": task, "rounds": rounds, "commit": commit_id,
+                        "message": message}), encoding="utf-8")
+    except Exception:
+        pass
+
+    lines = []
+    if interrupted:
+        lines.append("Interrupted.")
+    lines.append(f"Done: {summary}")
+    files = sorted(set(all_changed))
+    lines.append(f"Files changed: {len(files)}")
+    lines += [f"  - {c}" for c in files]
+    lines.append(f"Committed {commit_id}: {message}")
+    return "\n".join(lines)
+
+
 # --- Modes ---------------------------------------------------------------
 
 def _chat_reply(task: str) -> str:
@@ -488,6 +719,7 @@ def run_task(task: str) -> str:
     try:
         root = _workspace()
         mode = os.environ.get("AGENT_MODE", "auto").strip().lower()
+        _begin_run()
         _append_discussion("user", task)
 
         if mode == "chat":
@@ -495,26 +727,39 @@ def run_task(task: str) -> str:
             _append_discussion("agent", reply)
             return reply
 
+        _emit("plan_start")
         plan = _plan_with_lead(task, root)
         edits = plan.get("edits", [])
+        _emit("plan_done", summary=plan.get("summary", ""),
+              files=[e.get("path") for e in edits])
 
         if mode == "plan":
             if not edits:
                 result = plan.get("reply") or _chat_reply(task)
+                _append_discussion("agent", result)
             else:
                 try:
+                    plan["task"] = task
                     _plan_path().write_text(json.dumps(plan))
                 except Exception:
                     pass
                 result = _format_plan(plan)
-        elif mode != "code" and (plan.get("mode") == "chat" or not edits):
-            result = plan.get("reply") or plan.get("summary") or "(no reply)"
-        elif not edits:
-            result = plan.get("reply") or "(nothing to change)"
-        else:
-            result = _execute_edits(plan, root)
+                _append_discussion("agent", result)
+            return result
 
-        _append_discussion("agent", result)
+        if mode != "code" and (plan.get("mode") == "chat" or not edits):
+            result = plan.get("reply") or plan.get("summary") or "(no reply)"
+            _append_discussion("agent", result)
+            return result
+
+        if not edits:
+            result = plan.get("reply") or "(nothing to change)"
+            _append_discussion("agent", result)
+            return result
+
+        run_id = _new_run_id()
+        result = _run_edits(task, plan, root, run_id)
+        _append_discussion("agent", result, run_id=run_id)
         return result
 
     except Exception:
@@ -528,12 +773,14 @@ def execute_plan() -> str:
         if not p.exists():
             return "No pending plan to approve."
         plan = json.loads(p.read_text())
-        result = _execute_edits(plan, _workspace())
+        _begin_run()
+        run_id = _new_run_id()
+        result = _run_edits(plan.get("task", ""), plan, _workspace(), run_id)
         try:
             p.unlink()
         except Exception:
             pass
-        _append_discussion("agent", result)
+        _append_discussion("agent", result, run_id=run_id)
         return result
     except Exception:
         return "Approve failed:\n" + traceback.format_exc()
