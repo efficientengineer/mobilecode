@@ -46,6 +46,10 @@ def _interrupted() -> bool:
     return os.environ.get("AGENT_INTERRUPT", "0") == "1"
 
 
+def _thinking_on() -> bool:
+    return os.environ.get("AGENT_THINKING", "0") == "1"
+
+
 def _drain_steer() -> list:
     """Read + clear any mid-run guidance the user queued (orchestrator.steer)."""
     fp = _agent_dir() / "steer.jsonl"
@@ -156,6 +160,14 @@ _AGENT_SYSTEM = (
     "list_files) BEFORE editing. Never guess at file contents.\n"
     "- Prefer str_replace for targeted changes; write_file for new files or "
     "full rewrites.\n"
+    "- Large files can hit the model's output limit and get truncated. For a "
+    "big file (more than ~300 lines, e.g. a whole game in one index.html), "
+    "write a small skeleton first with write_file, then GROW it with "
+    "successive str_replace edits (append one section per call) so each call "
+    "stays small and reliable. After writing, verify the file actually ends "
+    "where it should — grep for the expected final token (a closing "
+    "</script>, </html>, or last function). If the tail is missing the write "
+    "was truncated; continue it with str_replace rather than rewriting.\n"
     "- After editing Python, run check_python; if the project has tests, run "
     "run_tests. Fix what fails.\n"
     "- Keep the project self-contained and runnable on the device: plain "
@@ -307,7 +319,10 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                 final_text = f"Model call failed after retries: {e}"
                 break
         buf.flush()
-        if r.get("reasoning"):
+        # "Thinking off" hides reasoning from EVERY provider — not just
+        # Anthropic. DeepSeek's reasoner returns reasoning_content natively, so
+        # gating the display here is the only way to honor the toggle for it.
+        if r.get("reasoning") and _thinking_on():
             reasoning_last = r["reasoning"]
             _emit("reason", text=_clip(r["reasoning"], 400))
 
