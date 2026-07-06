@@ -47,6 +47,11 @@ def _impl_model() -> str:
 # Reasoning captured from the most recent _call (read right after calling).
 _LAST_REASON = ""
 
+# Compact context form of the most recent edit run (read right after _run_edits).
+# The chat shows the full "Done / files / committed" text, but context only needs
+# the essence, so we carry this leaner version into DISCUSSION SO FAR.
+_LAST_EDIT_CTX = ""
+
 
 def _thinking_on() -> bool:
     return os.environ.get("AGENT_THINKING", "0") == "1"
@@ -410,10 +415,33 @@ def _caveman(text: str) -> str:
     return "\n".join(strip_line(l) for l in text.splitlines())
 
 
-def _append_discussion(role: str, text: str, run_id: str = "") -> None:
+def _compact_agent_text(text: str) -> str:
+    """Reduce a full edit-run reply to just its outcome for context use:
+    'Done: <commit message>' (no file list, no commit id). Returns the input
+    unchanged when it isn't a committed edit reply."""
+    if not text or "Committed " not in text:
+        return text
+    msg = ""
+    for line in text.splitlines():
+        st = line.strip()
+        if st.startswith("Committed "):
+            # 'Committed <id>: <message>' → keep only <message>
+            after = st[len("Committed "):]
+            msg = after.split(":", 1)[1].strip() if ":" in after else after.strip()
+    if not msg:
+        return text
+    prefix = "Interrupted. " if text.lstrip().startswith("Interrupted") else ""
+    return f"{prefix}Done: {msg}"
+
+
+def _append_discussion(role: str, text: str, run_id: str = "", ctx: str = None) -> None:
+    """Record a turn. `text` is the full message shown in chat; `ctx` (optional)
+    is a leaner form used only when assembling context — pass it to strip
+    redundancy the model doesn't need to re-read."""
     idx = len(_read_discussion())
-    rec = {"id": idx, "role": role, "text": text, "cave": _caveman(text),
-           "run_id": run_id}
+    ctx_text = text if ctx is None else ctx
+    rec = {"id": idx, "role": role, "text": text, "ctx": ctx_text,
+           "cave": _caveman(ctx_text), "run_id": run_id}
     with open(_discussion_file(), "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
 
@@ -518,7 +546,11 @@ def _compact_discussion(mode: str = "") -> list:
     # 3) per-turn truncation + 4) total char budget (drop oldest first)
     rendered, used = [], 0
     for d in reversed(deduped):  # newest first for budgeting
-        body = _clip_turn(d.get("cave" if cave else "text", ""), s["perTurn"])
+        # Prefer the stored compact form; for older turns saved before that
+        # existed, derive it from the full text so history compacts too.
+        raw = d.get("ctx") or _compact_agent_text(d.get("text", ""))
+        base = _caveman(raw) if cave else raw
+        body = _clip_turn(base or "", s["perTurn"])
         line = f"{d['role']}: {body}"
         if s["charBudget"] and used + len(line) > s["charBudget"] and rendered:
             break
@@ -987,7 +1019,14 @@ def _run_edits(task: str, plan: dict, root: Path, run_id: str) -> str:
     lines.append(f"Files changed: {len(files)}")
     lines += [f"  - {c}" for c in files]
     lines.append(f"Committed {commit_id}: {message}")
-    return "\n".join(lines)
+    full = "\n".join(lines)
+    # Context only needs the outcome: the commit message (which is the summary
+    # of what changed). Drop the file list and commit id. If nothing committed,
+    # fall back to the full text.
+    global _LAST_EDIT_CTX
+    _LAST_EDIT_CTX = (("Interrupted. " if interrupted else "") +
+                      f"Done: {message}") if commit_id else full
+    return full
 
 
 # --- Modes ---------------------------------------------------------------
@@ -1105,7 +1144,7 @@ def run_task(task: str) -> str:
 
         run_id = _new_run_id()
         result = _run_edits(task, plan, root, run_id)
-        _append_discussion("agent", result, run_id=run_id)
+        _append_discussion("agent", result, run_id=run_id, ctx=_LAST_EDIT_CTX)
         return result
 
     except Exception:
@@ -1126,7 +1165,7 @@ def execute_plan() -> str:
             p.unlink()
         except Exception:
             pass
-        _append_discussion("agent", result, run_id=run_id)
+        _append_discussion("agent", result, run_id=run_id, ctx=_LAST_EDIT_CTX)
         return result
     except Exception:
         return "Approve failed:\n" + traceback.format_exc()
