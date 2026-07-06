@@ -70,6 +70,36 @@
             android:completionThreshold="0"
             android:autofillHints="" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/github_token_label"
+            android:paddingTop="16dp"
+            android:paddingBottom="4dp" />
+
+        <EditText
+            android:id="@+id/githubToken"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="ghp_..."
+            android:inputType="textVisiblePassword"
+            android:autofillHints="" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/agent_branch_label"
+            android:paddingTop="16dp"
+            android:paddingBottom="4dp" />
+
+        <EditText
+            android:id="@+id/agentBranch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/agent_branch_default"
+            android:inputType="text"
+            android:autofillHints="" />
+
     </LinearLayout>
 
 </ScrollView>
