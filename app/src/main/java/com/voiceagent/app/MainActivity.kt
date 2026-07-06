@@ -381,7 +381,11 @@ class MainActivity : AppCompatActivity() {
             }
             JSONObject().put("ok", true)
         }
-        "listen" -> { withContext(Dispatchers.Main) { startListening() }; JSONObject().put("ok", true) }
+        "listen" -> {
+            val on = arg.optBoolean("on", true)
+            withContext(Dispatchers.Main) { if (on) startListening() else stopDictation() }
+            JSONObject().put("ok", true)
+        }
         "run.active" -> JSONObject().put("active", activeRuns > 0)
         "pr.watch" -> {
             val watch = getSharedPreferences(PrWatchWorker.PREFS, MODE_PRIVATE)
@@ -536,43 +540,93 @@ class MainActivity : AppCompatActivity() {
     }
 
     // --- Speech -----------------------------------------------------------
+    // Continuous dictation: the recognizer is auto-restarted after each pause so
+    // a short silence never ends the session (Android often ignores the silence
+    // extras below, so restarting is the reliable path). Mic is a start/stop
+    // toggle driven from the web layer via the "listen" action {on: bool}.
+
+    private var dictating = false
+    private var speechIntent: Intent? = null
+    private val speechHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private fun buildSpeechIntent(): Intent =
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            // Ask for ~7s of trailing silence before ending (honored on some
+            // devices; auto-restart covers the rest).
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, SPEECH_SILENCE_MS)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, SPEECH_SILENCE_MS)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500)
+        }
 
     private fun startListening() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             event("status", "Speech unavailable")
             return
         }
-        speech?.destroy()
-        speech = SpeechRecognizer.createSpeechRecognizer(this).apply {
-            setRecognitionListener(object : RecognitionListener {
-                override fun onResults(results: Bundle?) {
-                    val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull()?.trim().orEmpty()
-                    event("speech-final", t)
-                }
-                override fun onError(error: Int) { event("status", "") }
-                override fun onReadyForSpeech(params: Bundle?) { event("status", "Listening…") }
-                override fun onEndOfSpeech() { event("status", "") }
-                override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onPartialResults(partialResults: Bundle?) {
-                    val t = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull()?.trim().orEmpty()
-                    if (t.isNotEmpty()) event("speech-partial", t)
-                }
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
+        dictating = true
+        if (speech == null) {
+            speech = SpeechRecognizer.createSpeechRecognizer(this).apply {
+                setRecognitionListener(object : RecognitionListener {
+                    override fun onResults(results: Bundle?) {
+                        val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                            ?.firstOrNull()?.trim().orEmpty()
+                        if (t.isNotEmpty()) event("speech-final", t)
+                        restartListening()   // keep going through the pause
+                    }
+                    override fun onError(error: Int) {
+                        // A pause shows up as NO_MATCH / SPEECH_TIMEOUT / BUSY —
+                        // just restart. Stop only on a real (e.g. permission) error.
+                        if (dictating && error in intArrayOf(
+                                SpeechRecognizer.ERROR_NO_MATCH,
+                                SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+                                SpeechRecognizer.ERROR_RECOGNIZER_BUSY)) {
+                            restartListening()
+                        } else if (!dictating) {
+                            event("status", "")
+                        } else {
+                            dictating = false
+                            event("status", "")
+                            event("dictation", "off")   // tell the UI to reset the mic
+                        }
+                    }
+                    override fun onReadyForSpeech(params: Bundle?) { event("status", "Listening…") }
+                    override fun onEndOfSpeech() {}
+                    override fun onBeginningOfSpeech() {}
+                    override fun onRmsChanged(rmsdB: Float) {}
+                    override fun onBufferReceived(buffer: ByteArray?) {}
+                    override fun onPartialResults(partialResults: Bundle?) {
+                        val t = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                            ?.firstOrNull()?.trim().orEmpty()
+                        if (t.isNotEmpty()) event("speech-partial", t)
+                    }
+                    override fun onEvent(eventType: Int, params: Bundle?) {}
+                })
+            }
         }
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        }
-        speech?.startListening(intent)
+        speechIntent = buildSpeechIntent()
+        try { speech?.startListening(speechIntent) } catch (_: Throwable) {}
+    }
+
+    private fun restartListening() {
+        if (!dictating) return
+        speechHandler.postDelayed({
+            if (dictating) try { speech?.startListening(speechIntent ?: buildSpeechIntent()) } catch (_: Throwable) {}
+        }, 250)
+    }
+
+    private fun stopDictation() {
+        dictating = false
+        speechHandler.removeCallbacksAndMessages(null)
+        try { speech?.cancel() } catch (_: Throwable) {}
+        event("status", "")
     }
 
     override fun onDestroy() {
+        dictating = false
+        speechHandler.removeCallbacksAndMessages(null)
         speech?.destroy()
         tts?.shutdown()
         super.onDestroy()
@@ -582,6 +636,10 @@ class MainActivity : AppCompatActivity() {
         private const val REPO = "efficientengineer/mobilecode"
         private const val NOTIFY_CHANNEL = "agent_replies"
         private const val NOTIFY_ID = 42
+
+        // Trailing silence (ms) before the recognizer may end. ~7s so natural
+        // pauses don't cut you off (also backed by auto-restart).
+        private const val SPEECH_SILENCE_MS = 7000
 
         // Number of agent runs in flight; survives Activity recreation.
         @Volatile private var activeRuns = 0

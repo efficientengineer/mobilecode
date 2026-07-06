@@ -27,6 +27,14 @@ window.nativeReject = (id, msg) => {
   p.reject(new Error(msg || "error"));
 };
 let _dictBase = "";
+let _dictating = false;
+function stopDictation() {
+  if (!_dictating) return;
+  _dictating = false;
+  const b = $("#micBtn"); if (b) b.textContent = "Speak";
+  setStatus("");
+  try { call("listen", { on: false }); } catch (e) {}
+}
 window.nativeEvent = (type, payload) => {
   const box = $("#input");
   if (type === "speech-partial") {
@@ -40,6 +48,11 @@ window.nativeEvent = (type, payload) => {
       box.dispatchEvent(new Event("input"));
       box.focus();
     }
+    if (!_dictating) setStatus("");
+  } else if (type === "dictation" && payload === "off") {
+    // The recognizer stopped on its own (e.g. an error) — reset the toggle.
+    _dictating = false;
+    const b = $("#micBtn"); if (b) b.textContent = "Speak";
     setStatus("");
   } else if (type === "status") {
     setStatus(payload);
@@ -1121,6 +1134,7 @@ document.querySelectorAll("[data-close]").forEach((b) => {
   b.onclick = (e) => e.target.closest(".sheet").classList.add("hidden");
 });
 $("#sendBtn").onclick = () => {
+  stopDictation();
   const t = $("#input").value.trim();
   if (t) { $("#input").value = ""; submit(t); }
 };
@@ -1141,7 +1155,18 @@ if (_todosHead) _todosHead.onclick = () => {
   const open = $("#todos").classList.toggle("open");
   $("#todos-chev").textContent = open ? "▾" : "▸";
 };
-$("#micBtn").onclick = () => { _dictBase = $("#input").value.trim(); setStatus("Listening…"); call("listen"); };
+$("#micBtn").onclick = () => {
+  _dictating = !_dictating;
+  $("#micBtn").textContent = _dictating ? "◼ Stop" : "Speak";
+  if (_dictating) {
+    _dictBase = $("#input").value.trim();
+    setStatus("Listening… (tap ◼ to stop)");
+    call("listen", { on: true });
+  } else {
+    setStatus("");
+    call("listen", { on: false });
+  }
+};
 $("#stopBtn").onclick = () => { $("#runlabel").textContent = "Stopping…"; call("orch", { fn: "interrupt" }); };
 document.querySelectorAll(".mode").forEach((b) => {
   b.onclick = () => {
