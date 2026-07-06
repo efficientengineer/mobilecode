@@ -57,7 +57,7 @@ function estTokens(s) {
   return Math.max(1, Math.round((s || "").length / 4));
 }
 
-function bubble(text, kind, runId) {
+function bubble(text, kind, runId, ctxText) {
   const d = document.createElement("div");
   d.className = "bubble " + kind;
   d.textContent = text;
@@ -66,11 +66,12 @@ function bubble(text, kind, runId) {
     d.onclick = () => openRun(runId);
   }
   chat.appendChild(d);
-  // Per-message token estimate (UI only — never sent as context).
-  if (kind === "user" || kind === "agent") {
+  // Per-message token estimate = what this turn costs in CONTEXT (the compact
+  // form), not the full displayed text. UI only — never itself sent.
+  if ((kind === "user" || kind === "agent") && ctxText !== false) {
     const t = document.createElement("div");
     t.className = "tok " + kind;
-    t.textContent = "~" + estTokens(text) + " tokens";
+    t.textContent = "~" + estTokens(ctxText != null ? ctxText : text) + " ctx tokens";
     chat.appendChild(t);
   }
   chat.scrollTop = chat.scrollHeight;
@@ -96,7 +97,7 @@ async function loadHistory() {
   try {
     const r = JSON.parse((await call("orch", { fn: "get_discussion" })).text);
     (r.turns || []).forEach((t) =>
-      bubble(t.text, t.role === "user" ? "user" : "agent", t.run_id || null));
+      bubble(t.text, t.role === "user" ? "user" : "agent", t.run_id || null, t.ctx));
   } catch (e) {}
   refreshStats();
 }
@@ -694,11 +695,11 @@ async function askEphemeral(q) {
   wrap.className = "eph-tag";
   wrap.textContent = "— side question (not saved) —";
   chat.appendChild(wrap);
-  const u = bubble(q, "user"); u.classList.add("eph");
+  const u = bubble(q, "user", null, false); u.classList.add("eph");
   setStatus("Thinking…");
   try {
     const r = await call("orch", { fn: "ask", arg: q });
-    const a = bubble(r.text || "(no answer)", "agent"); a.classList.add("eph");
+    const a = bubble(r.text || "(no answer)", "agent", null, false); a.classList.add("eph");
     notifyUser("Answer ready", firstLine(r.text || ""));
   } catch (e) {
     bubble("Ask failed: " + e.message, "sys");

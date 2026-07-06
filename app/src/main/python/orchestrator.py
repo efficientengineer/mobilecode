@@ -608,10 +608,17 @@ def _full_context(task_hint: str = "", mode: str = "") -> str:
 # --- op targets (called from the web via agent_loader.op) ----------------
 
 def get_discussion(_=None) -> str:
-    """JSON {turns:[{id,role,text,run_id}]} of the original (display) messages."""
-    turns = [{"id": d.get("id", i), "role": d["role"], "text": d.get("text", ""),
-              "run_id": d.get("run_id", "")}
-             for i, d in enumerate(_read_discussion())]
+    """JSON {turns:[{id,role,text,ctx,run_id}]}. `text` is the full display
+    message; `ctx` is the leaner form that actually goes into context (used by
+    the UI to show per-message context cost)."""
+    cave = _caveman_on()
+    turns = []
+    for i, d in enumerate(_read_discussion()):
+        text = d.get("text", "")
+        raw = d.get("ctx") or _compact_agent_text(text)
+        ctx = _caveman(raw) if cave else raw
+        turns.append({"id": d.get("id", i), "role": d["role"], "text": text,
+                      "ctx": ctx, "run_id": d.get("run_id", "")})
     return json.dumps({"turns": turns})
 
 
