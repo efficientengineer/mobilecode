@@ -172,7 +172,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun globalWorker(): String =
-        getSharedPreferences("keys", MODE_PRIVATE).getString("WORKER_MODEL", "").orEmpty()
+        getSharedPreferences("keys", MODE_PRIVATE).getString("WORKER_MODEL", null)
+            ?.takeIf { it.isNotBlank() } ?: getString(R.string.worker_model_default)
 
     private fun effectiveModels(): Pair<String, String> {
         val m = sessions.readMeta(sessions.activeId())
@@ -353,7 +354,7 @@ class MainActivity : AppCompatActivity() {
                 .put("deepseekKey", p.getString("DEEPSEEK_API_KEY", ""))
                 .put("githubToken", p.getString("GITHUB_TOKEN", ""))
                 .put("leadModel", p.getString("LEAD_MODEL", "")?.ifBlank { getString(R.string.lead_model_default) })
-                .put("workerModel", p.getString("WORKER_MODEL", ""))
+                .put("workerModel", p.getString("WORKER_MODEL", "")?.ifBlank { getString(R.string.worker_model_default) })
                 .put("fallbackModel", p.getString("AGENT_FALLBACK_MODEL", ""))
                 .put("branch", p.getString("AGENT_BRANCH", "")?.ifBlank { getString(R.string.agent_branch_default) })
         }

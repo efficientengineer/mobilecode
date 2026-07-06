@@ -36,8 +36,8 @@ import agentloop
 # LEAD_MODEL is the orchestrator/planner. WORKER_MODEL is the implementer/editor
 # and is OPTIONAL: if it's blank, the orchestrator does the edits itself
 # (single-agent mode). The (cheap) implementer also writes commit messages.
-LEAD_MODEL = os.environ.get("LEAD_MODEL", "anthropic/claude-opus-4-8")
-WORKER_MODEL = os.environ.get("WORKER_MODEL", "deepseek/deepseek-chat")
+LEAD_MODEL = os.environ.get("LEAD_MODEL", "deepseek/deepseek-v4-pro")
+WORKER_MODEL = os.environ.get("WORKER_MODEL", "deepseek/deepseek-v4-flash")
 
 
 def _impl_model() -> str:

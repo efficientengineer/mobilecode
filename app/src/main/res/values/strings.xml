@@ -6,12 +6,12 @@
     <string name="thinking">Thinking…</string>
     <string name="ready">Ready</string>
     <string name="settings">Settings</string>
-    <string name="anthropic_key_label">Anthropic API key (for Opus, the lead)</string>
-    <string name="deepseek_key_label">DeepSeek API key (for the worker)</string>
+    <string name="anthropic_key_label">Anthropic API key (optional — for Claude models)</string>
+    <string name="deepseek_key_label">DeepSeek API key (V4 lead + worker)</string>
     <string name="lead_model_label">Lead model (planner)</string>
     <string name="worker_model_label">Worker model (editor)</string>
-    <string name="lead_model_default">anthropic/claude-opus-4-8</string>
-    <string name="worker_model_default">deepseek/deepseek-chat</string>
+    <string name="lead_model_default">deepseek/deepseek-v4-pro</string>
+    <string name="worker_model_default">deepseek/deepseek-v4-flash</string>
     <string name="github_token_label">GitHub token (to push / create repos)</string>
     <string name="agent_branch_label">Agent branch</string>
     <string name="agent_branch_default">claude/feature-parity-audit-5h9gqx</string>
