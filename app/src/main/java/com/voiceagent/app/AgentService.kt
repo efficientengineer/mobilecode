@@ -7,13 +7,18 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 
 /**
- * Foreground-service scaffold for keeping long agent runs alive with the
- * screen off. Not yet wired into the task loop (see README limitations) —
- * it exists so the manifest entry and notification channel are in place.
+ * Foreground service that keeps long agent runs alive with the screen off or
+ * the app backgrounded. MainActivity starts it when a run begins and stops it
+ * when the run ends. A partial wake lock keeps the CPU (and thus the model's
+ * HTTP streaming) running through Doze; without it, long calls stall and die
+ * a few minutes after the screen turns off.
  */
 class AgentService : Service() {
+
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -22,7 +27,23 @@ class AgentService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification())
+        if (wakeLock == null) {
+            try {
+                wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
+                    .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "voiceagent:run")
+                    .apply {
+                        setReferenceCounted(false)
+                        acquire(60 * 60 * 1000L) // 1h safety cap per run
+                    }
+            } catch (_: Throwable) {}
+        }
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        try { wakeLock?.release() } catch (_: Throwable) {}
+        wakeLock = null
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

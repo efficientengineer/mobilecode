@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Lets the user exempt the app from battery optimization (Menu →
+         Battery), so long runs aren't killed in the background. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
@@ -18,9 +21,13 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.VoiceAgent">
 
+        <!-- configChanges: rotating (or fold/theme changes) must NOT recreate
+             the Activity — the WebView holds the whole UI state (live run
+             progress, pending results, queue), and recreation wipes it. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|density|uiMode"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -30,7 +37,8 @@
 
         <activity
             android:name=".RunActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize|density|uiMode" />
 
         <service
             android:name=".AgentService"

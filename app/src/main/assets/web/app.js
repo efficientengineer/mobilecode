@@ -324,6 +324,31 @@ function fmtEvent(e) {
   }
 }
 
+// Reattach to a run that is still executing natively after the WebView was
+// reloaded or the Activity recreated (backgrounding, OTA UI update). The
+// original result promise is gone, so we watch events + run.active instead.
+async function reattachLive() {
+  running = true;
+  $("#runbar").classList.remove("hidden");
+  $("#runlabel").textContent = "Reattached to running task…";
+  bubble("A task is still running — reattached to its progress.", "sys");
+  const live = document.createElement("div");
+  live.className = "live"; live.textContent = "Reattaching…";
+  chat.appendChild(live);
+  const poller = makeLivePoller(live);
+  while (true) {
+    try {
+      const r = await call("run.active");
+      if (!r.active) break;
+    } catch (e) {}
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  poller.stop(); live.remove(); await loadHistory();
+  if (poller.pendingCommit()) addCommitReview();
+  notifyUser("Task finished", "The reattached run has completed.");
+  running = false; $("#runbar").classList.add("hidden"); drainQueue();
+}
+
 // Review bar shown after a run when autocommit is off and changes are pending.
 function addCommitReview() {
   const bar = document.createElement("div");
@@ -481,6 +506,15 @@ const actions = {
   },
   fixBuild() {
     driveLive("Fixing CI build…", () => call("orch", { fn: "fix_build" }));
+  },
+  async battery() {
+    try {
+      const r = await call("battery.exempt");
+      bubble(r.exempt
+        ? "Already exempt from battery optimization — background runs won't be killed by Doze."
+        : "Requested exemption — allow it in the system dialog so long background runs survive.",
+        "sys");
+    } catch (e) { bubble("Battery request failed: " + e.message, "sys"); }
   },
   async autocommit() {
     const cur = (await call("orch", { fn: "get_autocommit" })).text.trim();
@@ -859,6 +893,9 @@ document.querySelectorAll(".mode").forEach((b) => {
 // Boot
 (async function () {
   try { await refreshHeader(); await loadHistory(); } catch (e) {}
+  // If a run outlived the previous UI (backgrounded, rotated on an old build,
+  // OTA reload), pick its progress back up instead of looking dead.
+  try { if ((await call("run.active")).active) reattachLive(); } catch (e) {}
   try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
   try { updateThinkingLabel((await call("orch", { fn: "get_thinking" })).text.trim() === "1"); } catch (e) {}
   try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}

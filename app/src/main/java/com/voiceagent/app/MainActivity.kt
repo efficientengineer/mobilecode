@@ -383,6 +383,21 @@ class MainActivity : AppCompatActivity() {
             JSONObject().put("ok", true)
         }
         "listen" -> { withContext(Dispatchers.Main) { startListening() }; JSONObject().put("ok", true) }
+        "run.active" -> JSONObject().put("active", activeRuns > 0)
+        "battery.exempt" -> {
+            // Ask Android to exclude the app from battery optimization so
+            // long background runs aren't killed by Doze.
+            val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+            val already = pm.isIgnoringBatteryOptimizations(packageName)
+            if (!already) {
+                try {
+                    startActivity(Intent(
+                        android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:$packageName")))
+                } catch (_: Throwable) {}
+            }
+            JSONObject().put("exempt", already)
+        }
         "run" -> { withContext(Dispatchers.Main) { startActivity(Intent(this@MainActivity, RunActivity::class.java)) }; JSONObject().put("ok", true) }
         "updateAgent" -> withContext(Dispatchers.IO) { text(updateAgent()) }
         "updateUI" -> withContext(Dispatchers.IO) { text(updateUI()) }
@@ -392,24 +407,28 @@ class MainActivity : AppCompatActivity() {
     // --- OTA updates ------------------------------------------------------
 
     // --- Foreground service around long agent runs ------------------------
-
-    private var serviceRuns = 0
+    // The counter lives in the companion so it survives Activity recreation:
+    // a freshly-created UI can ask "is a run still going?" (run.active) and
+    // reattach its live view instead of looking dead. Service intents use the
+    // application context for the same reason — the launching Activity may be
+    // gone by the time the run finishes.
 
     private fun <T> withAgentService(body: () -> T): T {
-        synchronized(this) {
-            if (serviceRuns++ == 0) {
+        val app = applicationContext
+        synchronized(MainActivity) {
+            if (activeRuns++ == 0) {
                 try {
                     ContextCompat.startForegroundService(
-                        this, Intent(this, AgentService::class.java))
+                        app, Intent(app, AgentService::class.java))
                 } catch (_: Throwable) {}
             }
         }
         try {
             return body()
         } finally {
-            synchronized(this) {
-                if (--serviceRuns == 0) {
-                    try { stopService(Intent(this, AgentService::class.java)) }
+            synchronized(MainActivity) {
+                if (--activeRuns == 0) {
+                    try { app.stopService(Intent(app, AgentService::class.java)) }
                     catch (_: Throwable) {}
                 }
             }
@@ -534,5 +553,8 @@ class MainActivity : AppCompatActivity() {
         private const val REPO = "efficientengineer/mobilecode"
         private const val NOTIFY_CHANNEL = "agent_replies"
         private const val NOTIFY_ID = 42
+
+        // Number of agent runs in flight; survives Activity recreation.
+        @Volatile private var activeRuns = 0
     }
 }
