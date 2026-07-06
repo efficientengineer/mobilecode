@@ -191,9 +191,12 @@ def _call(model: str, system: str, user: str, max_tokens: int = 4000) -> str:
             ],
         },
     )
-    msg = result["choices"][0]["message"]
+    choices = result.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"{provider} returned no choices: {json.dumps(result)[:400]}")
+    msg = choices[0].get("message", {})
     _LAST_REASON = msg.get("reasoning_content", "") or ""
-    return msg["content"]
+    return msg.get("content") or ""
 
 
 def _plan_with_lead(task: str, root: Path) -> dict:
@@ -225,15 +228,35 @@ def _plan_with_lead(task: str, root: Path) -> dict:
         f"TASK:\n{task}\n\n"
         f"EXISTING FILES ({len(file_list)}):\n" + "\n".join(file_list)
     )
-    raw = _call(LEAD_MODEL, system, user)
-    raw = raw.strip()
+    raw = (_call(LEAD_MODEL, system, user) or "").strip()
     # Strip accidental fences if the model added them.
     if raw.startswith("```"):
         raw = raw.split("```", 2)[1]
         if raw.startswith("json"):
             raw = raw[4:]
         raw = raw.strip("` \n")
-    plan = json.loads(raw)
+    # Some models (e.g. DeepSeek) don't always honor "JSON only". Rather than
+    # fail silently, fall back to treating the reply as a plain chat answer so
+    # the user always sees SOMETHING.
+    try:
+        plan = json.loads(raw)
+        if not isinstance(plan, dict):
+            raise ValueError("plan is not an object")
+    except Exception:
+        # Try to salvage an embedded JSON object; else treat as chat.
+        obj = None
+        i, j = raw.find("{"), raw.rfind("}")
+        if 0 <= i < j:
+            try:
+                obj = json.loads(raw[i:j + 1])
+            except Exception:
+                obj = None
+        if isinstance(obj, dict):
+            plan = obj
+        else:
+            plan = {"mode": "chat",
+                    "reply": raw or "(the model returned an empty response)",
+                    "summary": "", "edits": []}
     plan["_reasoning"] = _LAST_REASON
     return plan
 
@@ -1172,7 +1195,14 @@ def run_task(task: str) -> str:
         return result
 
     except Exception:
-        return "Error during task:\n" + traceback.format_exc()
+        err = "⚠️ Error during task:\n" + traceback.format_exc()
+        # Record it so the chat actually SHOWS the failure instead of returning
+        # a blank turn. Keep it out of future context (short ctx marker).
+        try:
+            _append_discussion("agent", err, ctx="(previous attempt errored)")
+        except Exception:
+            pass
+        return err
 
 
 def execute_plan() -> str:
