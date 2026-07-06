@@ -183,12 +183,23 @@ PRACTICES = [
              "they never reach into each other to mutate state directly."},
     {"scope": "web", "core": True,
      "tags": ["engine", "game", "system", "glue", "spawn", "entity", "level",
-              "gameplay", "mechanic", "player", "enemy", "weapon", "wire"],
-     "text": "If the project has an engine/ folder with a CONTRACTS.md, GLUE — "
-             "don't rewrite. Read engine/CONTRACTS.md and edit only game/ "
-             "(contracts, entities, config, bootstrap); reuse the existing "
-             "systems, and add a new one only for behavior none provides. Never "
-             "re-implement the engine or add a 3D library."},
+              "gameplay", "mechanic", "player", "enemy", "weapon", "wire",
+              "make", "build", "create", "platformer", "shooter", "runner",
+              "camera", "view", "2d", "3d"],
+     "text": "Building a game is the app's core job. If the project has an "
+             "engine/ folder with a CONTRACTS.md, GLUE — don't rewrite. Read "
+             "engine/CONTRACTS.md, then from the user's description pick a VIEW "
+             "and a MOVEMENT component (top-down shooter -> cameras.topDown + "
+             "movements.twinStick; platformer -> cameras.sideScroller + "
+             "movements.platformer; endless runner -> movements.autoRun; true 2D "
+             "-> cameras.flat2D) and set them in game/bootstrap.js. Edit only "
+             "game/ (contracts, entities, config, bootstrap) — tune the systems "
+             "list, entities (mesh/color/stats), and numbers. Add a NEW system "
+             "only for behavior no component provides (one small file, imports "
+             "only core). Ask AT MOST 1-2 questions for genuinely ambiguous core "
+             "choices (waves or endless? health or one-hit?), otherwise pick "
+             "sensible defaults and build. Never re-implement the engine or add a "
+             "3D library."},
 ]
 
 _GAME_FILE_SIGNALS = ("babylon", "phaser", "three", "pixi", "kaboom", "<canvas",

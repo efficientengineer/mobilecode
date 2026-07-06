@@ -122,12 +122,31 @@ async function refreshHeader() {
 
 async function loadHistory() {
   chat.innerHTML = "";
+  let turns = [];
   try {
     const r = JSON.parse((await call("orch", { fn: "get_discussion" })).text);
-    (r.turns || []).forEach((t) =>
+    turns = r.turns || [];
+    turns.forEach((t) =>
       bubble(t.text, t.role === "user" ? "user" : "agent", t.run_id || null, t.ctx));
   } catch (e) {}
+  if (!turns.length) showHome();
   refreshStats();
+}
+
+// The home screen for an empty session: game-making leads, generic coding is one
+// tap away. This is the app's stated default — you make games here.
+function showHome() {
+  const hero = document.createElement("div");
+  hero.className = "home-hero";
+  hero.innerHTML =
+    `<div class="home-emoji">🎮</div>
+     <div class="home-title">Make a game</div>
+     <div class="home-sub">Describe a game and the AI builds it on our engine — top-down shooter, platformer, runner, and more. No framework to pick.</div>
+     <button class="pill home-cta" id="homeMake">🎮 Make a game</button>
+     <button class="pill ghost home-alt" id="homeCode">Blank coding project</button>`;
+  chat.appendChild(hero);
+  $("#homeMake").onclick = () => actions.makeGame();
+  $("#homeCode").onclick = () => actions.newProject();
 }
 
 // --- Context + balance stats -------------------------------------------
@@ -920,6 +939,37 @@ const actions = {
       repos.map((f) => `<div class="list-item" data-repo="${f}"><span>${f}</span></div>`).join(""));
     $("#modalBody").querySelectorAll("[data-repo]").forEach((el) => {
       el.onclick = () => { closeSheet("#modal"); confirmClone(el.dataset.repo); };
+    });
+  },
+  // The app's headline action: describe a game, we spin up a fresh project on
+  // OUR engine and hand your description to the agent, which picks a view +
+  // movement from the CONTRACTS recipe and glues game/ together (asking at most
+  // a follow-up or two). No framework to choose — game-making is the default.
+  async makeGame() {
+    const examples = [
+      "A top-down twin-stick shooter where I dodge waves of enemies",
+      "A side-scrolling platformer where I jump between platforms and stomp enemies",
+      "An endless runner where I auto-run and tap to jump over gaps",
+      "A tank battle where I rotate and drive around an arena",
+    ];
+    const chips = examples.map((e) =>
+      `<button type="button" class="pill ghost gm-ex" style="text-align:left;white-space:normal;margin:4px 0;width:100%">${escapeHtml(e)}</button>`).join("");
+    modal("🎮 Make a game",
+      `<label>Describe the game you want</label>
+       <textarea id="gmdesc" class="field" rows="3" placeholder="e.g. a top-down shooter where I survive waves of enemies"></textarea>
+       <div class="hint" style="margin-top:10px">Not sure? Tap one to start:</div>${chips}
+       <div class="hint" style="margin-top:10px">We build it on our own low-poly 3D engine. The AI may ask a quick question, then builds it — you keep tweaking in chat.</div>`,
+      async () => {
+        const desc = $("#gmdesc").value.trim();
+        if (!desc) { $("#gmdesc").focus(); return true; }
+        const name = desc.split(/\s+/).slice(0, 4).join("-").toLowerCase().replace(/[^a-z0-9-]/g, "") || "my-game";
+        await call("session.create", { name });
+        bubble((await call("orch", { fn: "apply_template", arg: "engine-3d" })).text, "sys");
+        await refreshHeader(); await loadHistory(); refreshStats();
+        submit("Make this game on the existing engine (glue game/ against engine/CONTRACTS.md, don't rewrite the engine): " + desc);
+      });
+    $("#modalBody").querySelectorAll(".gm-ex").forEach((el) => {
+      el.onclick = () => { $("#gmdesc").value = el.textContent; $("#gmdesc").focus(); };
     });
   },
   async newProject() {

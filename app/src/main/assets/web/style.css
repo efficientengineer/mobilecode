@@ -217,3 +217,14 @@ pre.filebody.diff { font-size: 12px; }
 /* Settings checkbox row */
 .checkrow { display: flex; align-items: center; gap: 8px; }
 .checkrow input { width: auto; }
+
+/* Home hero — the empty-session default: game-making leads. */
+.home-hero { margin: auto; max-width: 340px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 24px 16px; }
+.home-emoji { font-size: 52px; line-height: 1; }
+.home-title { font-size: 22px; font-weight: 700; }
+.home-sub { font-size: 14px; color: var(--muted); line-height: 1.5; }
+.home-cta { font-size: 16px; padding: 12px 22px; margin-top: 6px; }
+.home-alt { font-size: 14px; padding: 9px 16px; }
+.gm-ex:active { opacity: .8; }
