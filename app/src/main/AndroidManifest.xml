@@ -28,10 +28,6 @@
         </activity>
 
         <activity
-            android:name=".FilesActivity"
-            android:exported="false" />
-
-        <activity
             android:name=".RunActivity"
             android:exported="false" />
 

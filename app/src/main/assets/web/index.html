@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <link rel="stylesheet" href="style.css" />
+  <title>Voice Agent</title>
+</head>
+<body>
+  <header id="topbar">
+    <button id="menuBtn" class="icon">☰</button>
+    <div id="titleWrap">
+      <div id="title">Voice Agent</div>
+      <div id="subtitle">—</div>
+    </div>
+  </header>
+
+  <main id="chat"></main>
+
+  <div id="status"></div>
+
+  <footer id="composer">
+    <textarea id="input" rows="1" placeholder="Type a task…"></textarea>
+    <button id="sendBtn" class="pill">Send</button>
+    <button id="micBtn" class="icon">🎤</button>
+  </footer>
+
+  <!-- Slide-up menu -->
+  <div id="menu" class="sheet hidden">
+    <div class="sheet-inner">
+      <div class="sheet-title">Actions</div>
+      <div class="grid">
+        <button data-act="files">Files</button>
+        <button data-act="run">Run app</button>
+        <button data-act="commit">Commit</button>
+        <button data-act="push">Push</button>
+        <button data-act="pull">Pull</button>
+        <button data-act="newRepo">New repo</button>
+        <button data-act="switchRepo">Switch repo</button>
+        <button data-act="sessions">Sessions</button>
+        <button data-act="models">Session models</button>
+        <button data-act="balance">Balance</button>
+        <button data-act="cloudBuild">Build in cloud</button>
+        <button data-act="buildStatus">Build status</button>
+        <button data-act="settings">Settings</button>
+        <button data-act="updateAgent">Update agent</button>
+        <button data-act="updateUI">Update UI</button>
+      </div>
+      <button class="close" data-close>Close</button>
+    </div>
+  </div>
+
+  <!-- Generic modal -->
+  <div id="modal" class="sheet hidden">
+    <div class="sheet-inner">
+      <div class="sheet-title" id="modalTitle"></div>
+      <div id="modalBody"></div>
+      <div class="modal-actions">
+        <button class="pill ghost" data-close>Close</button>
+        <button class="pill" id="modalOk" style="display:none">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

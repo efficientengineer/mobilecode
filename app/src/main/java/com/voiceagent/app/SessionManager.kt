@@ -18,7 +18,14 @@ class SessionManager(private val ctx: Context) {
     private val root = File(ctx.filesDir, "sessions").apply { mkdirs() }
     private val prefs = ctx.getSharedPreferences("session", Context.MODE_PRIVATE)
 
-    data class Session(val id: String, val name: String, val activeRepo: String)
+    data class Session(
+        val id: String,
+        val name: String,
+        val activeRepo: String,
+        val orchestratorModel: String = "",
+        val implementerModel: String = "",
+        val modelsConfigured: Boolean = false,
+    )
 
     fun activeId(): String {
         val id = prefs.getString("active", null)
@@ -43,8 +50,8 @@ class SessionManager(private val ctx: Context) {
 
     fun create(name: String): String {
         val id = "s_" + System.currentTimeMillis().toString()
-        val dir = File(root, id).apply { mkdirs() }
-        writeMeta(dir, name.ifBlank { id }, "")
+        File(root, id).mkdirs()
+        write(Session(id, name.ifBlank { id }, ""))
         return id
     }
 
@@ -58,21 +65,41 @@ class SessionManager(private val ctx: Context) {
         val f = File(dir, "meta.json")
         return if (f.exists()) {
             val o = JSONObject(f.readText())
-            Session(id, o.optString("name", id), o.optString("activeRepo", ""))
+            Session(
+                id,
+                o.optString("name", id),
+                o.optString("activeRepo", ""),
+                o.optString("orchestratorModel", ""),
+                o.optString("implementerModel", ""),
+                o.optBoolean("modelsConfigured", false),
+            )
         } else {
             Session(id, id, "")
         }
     }
 
     fun setActiveRepo(id: String, repo: String) {
-        val m = readMeta(id)
-        writeMeta(File(root, id), m.name, repo)
+        write(readMeta(id).copy(activeRepo = repo))
     }
 
-    private fun writeMeta(dir: File, name: String, activeRepo: String) {
-        dir.mkdirs()
-        File(dir, "meta.json").writeText(
-            JSONObject().put("name", name).put("activeRepo", activeRepo).toString()
+    fun setModels(id: String, orchestrator: String, implementer: String) {
+        write(readMeta(id).copy(
+            orchestratorModel = orchestrator,
+            implementerModel = implementer,
+            modelsConfigured = true,
+        ))
+    }
+
+    private fun write(s: Session) {
+        File(root, s.id).mkdirs()
+        File(File(root, s.id), "meta.json").writeText(
+            JSONObject()
+                .put("name", s.name)
+                .put("activeRepo", s.activeRepo)
+                .put("orchestratorModel", s.orchestratorModel)
+                .put("implementerModel", s.implementerModel)
+                .put("modelsConfigured", s.modelsConfigured)
+                .toString()
         )
     }
 
