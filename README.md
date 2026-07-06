@@ -8,24 +8,31 @@ on-device via an embedded Python interpreter.
 ## Architecture
 
 ```
-Native Android (Kotlin)          Embedded Python (Chaquopy)        Remote
-┌──────────────────────┐         ┌────────────────────────┐       ┌──────────┐
-│ SpeechRecognizer ────┼────────▶│ orchestrator.run_task  │──────▶│ Opus     │  (lead / architect)
-│ (voice in)           │         │   ├ plan (Opus)        │       └──────────┘
-│ TextToSpeech         │◀────────┤   ├ edit files (worker)│──────▶┌──────────┐
-│ (voice out)          │         │   ├ write under HOME   │       │ DeepSeek │  (worker / editor)
-│ Chat UI              │         │   └ commit (dulwich)   │       └──────────┘
-└──────────────────────┘         └────────────────────────┘
+Native Android (Kotlin)          Embedded Python (Chaquopy)         Remote
+┌──────────────────────┐         ┌─────────────────────────┐       ┌──────────┐
+│ WebView chat UI      │         │ agentloop.run           │──────▶│ Claude   │
+│ SpeechRecognizer     ├────────▶│  read/grep/edit tools   │  or   ├──────────┤
+│ TextToSpeech         │◀────────┤  verify → repair        │──────▶│ DeepSeek │
+│ Foreground service   │         │  diff → commit (dulwich)│       └──────────┘
+└──────────────────────┘         │ git_ops: branch/PR/CI   │──────▶ GitHub API
+                                 └─────────────────────────┘
 ```
 
-- **Opus** is the lead: it reads your task and the repo, returns a JSON edit plan.
-- **DeepSeek V4** is the worker: it writes each file, cheaply.
-- **dulwich** does git with no binary (verified working).
-- Model calls go out over plain **HTTPS via the Python stdlib** (`urllib`).
-  litellm was the original plan but can't be bundled on Android (it pulls
-  native/Rust deps like `fastuuid` and `tiktoken` that have no Android
-  wheels), so `orchestrator.py` calls the Anthropic and DeepSeek HTTP APIs
-  directly — no third-party HTTP dependency required.
+- **The lead model drives an agentic tool loop** (`agentloop.py`): it reads
+  the repo with tools (`read_file`, `grep`, `list_files`), edits with
+  `str_replace`/`write_file`, syntax-checks and runs tests, and repairs its
+  own failures — until the task is done. Either **Claude** (native tool use)
+  or **DeepSeek** (OpenAI-style function calling) can be the lead; both speak
+  through one provider layer (`llm.py`).
+- **An optional cheap implementer** (WORKER_MODEL, e.g. `deepseek/deepseek-chat`)
+  is exposed to the lead as a `delegate_edit` tool for mechanical edits.
+- **llm.py** handles both wire formats plus streaming, retries with backoff,
+  Anthropic prompt caching, and real token accounting — stdlib `urllib` only
+  (litellm can't be bundled on Android: it pulls native/Rust deps like
+  `fastuuid` and `tiktoken` with no Android wheels).
+- **dulwich** does git with no binary; **git_ops.py** adds GitHub: clone,
+  work branches, non-force push, pull requests, Actions builds, and fetching
+  CI failure logs so the agent can fix its own broken builds.
 
 ## Build it — no Android Studio required (cloud build)
 
@@ -70,31 +77,29 @@ Files live in the app's private storage under a `workspace/` git repo.
   ship any API keys in the app — the current design correctly asks the *user*
   for their own keys, which is the right model for a public app.
 - **Dependency ceiling.** Only pure-Python packages that Chaquopy can bundle are
-  usable. `dulwich` is verified; model calls use the stdlib `urllib` instead
-  of `litellm` (which needs native wheels Android lacks). Heavier frameworks (CrewAI,
-  Aider) may pull C-extension dependencies that lack Android wheels — that's why
-  this uses a hand-rolled orchestrator instead.
-- **Turn-taking is one-shot.** Speak → wait → hear result. No interrupting a
-  running task by voice (Android speech recognizer limitation).
-- **No arbitrary shell execution.** The agent edits and commits files. It does
-  NOT run tests or shell commands on-device (that needs an embedded proot layer,
-  intentionally out of scope for this first version). Model calls + file edits +
-  git cover most workflows.
-- **Model strings may need updating.** `orchestrator.py` uses
-  `anthropic/claude-opus-4-8` and `deepseek/deepseek-chat`. If a call
-  errors on an unknown model, update those constants (or set `LEAD_MODEL` /
-  `WORKER_MODEL` env vars) to the current provider model names.
-- **Background limits.** A foreground-service scaffold (`AgentService`) is
-  included for long runs but not yet wired to the task loop.
+  usable. `dulwich` is verified; model calls use the stdlib `urllib`. Projects
+  the agent builds face the same ceiling: pure-Python (stdlib/WSGI) or static
+  web apps preview on-device; anything needing native wheels won't.
+- **No arbitrary shell execution.** The agent edits files, syntax-checks
+  Python, runs pure-Python unittests in-process, and previews web apps in a
+  WebView — but there is no real shell (that needs an embedded proot layer).
+  The escape hatch is the cloud: push and let GitHub Actions build, then use
+  **Fix CI build** to feed failure logs back to the agent.
+- **Turn-taking is one-shot.** Speak → wait → hear result. You can Stop a
+  running task from the run bar, but not by voice.
+- **Model strings may need updating.** Defaults are `anthropic/claude-opus-4-8`
+  and `deepseek/deepseek-chat`; pick any listed model per session from the
+  model switcher (or set `LEAD_MODEL` / `WORKER_MODEL`).
 
 ## Verifying the Python core locally (optional)
 
-The orchestrator's logic can be exercised without a phone:
+The agent loop can be exercised without a phone or API keys:
 ```bash
 cd app/src/main/python
 HOME=/tmp python3 orchestrator.py --selftest
 ```
-This mocks the model calls and proves the plan → edit → write → commit pipeline.
+This drives the loop with a scripted fake model and proves
+tools → verify → repair → commit end to end.
 
 ## Project layout
 
@@ -103,9 +108,16 @@ build.gradle.kts                 root plugins
 settings.gradle.kts              modules + repos
 app/build.gradle.kts             Android + Chaquopy config, pip deps
 app/src/main/python/
-    orchestrator.py              the agent brain (tested)
-app/src/main/java/.../MainActivity.kt   voice UI + Python bridge
-app/src/main/java/.../AgentService.kt   foreground-service scaffold
-app/src/main/res/                layouts, strings, icons, theme
+    llm.py                       provider layer: Claude + DeepSeek, tools,
+                                 streaming, retries, caching, usage
+    agent_tools.py               the tool belt (read/grep/edit/check/tests)
+    agentloop.py                 the agentic loop (the brain's engine)
+    orchestrator.py              modes, context, diff gate, commits
+    git_ops.py                   GitHub: repos, branches, PRs, CI logs
+    localrun.py                  on-device web preview server
+    agent_loader.py              OTA hot-reload of all of the above
+app/src/main/java/.../MainActivity.kt   WebView shell + Python bridge
+app/src/main/java/.../AgentService.kt   foreground service for long runs
+app/src/main/assets/web/         the chat UI (HTML/CSS/JS, OTA-updatable)
 .github/workflows/build.yml      cloud build → APK artifact
 ```

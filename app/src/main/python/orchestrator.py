@@ -2,13 +2,14 @@
 orchestrator.py — the on-device agent brain.
 
 Architecture:
-  - Opus (Anthropic) is the LEAD/architect: it reads the task, inspects the
-    repo, and produces a concrete plan of file edits.
-  - DeepSeek V4 (Flash) is the WORKER/editor: it takes each planned edit and
-    writes the actual file content, cheaply.
+  - LEAD_MODEL (Claude or DeepSeek — both speak tools via llm.py) drives an
+    agentic loop (agentloop.py): it reads the repo with tools, edits files,
+    verifies, and repairs until the task is done.
+  - WORKER_MODEL is an optional cheap implementer the lead can delegate
+    mechanical file edits to (the delegate_edit tool).
 
 Everything runs on-device via Chaquopy. Git is handled by dulwich (pure Python,
-no binary). Model calls go out over HTTPS via litellm.
+no binary). Model calls go out over HTTPS via llm.py (stdlib urllib).
 
 IMPORTANT (Android constraint): the current working directory is read-only on
 Android. All file writes MUST go under HOME. The Kotlin side passes us a
@@ -18,12 +19,13 @@ workspace path inside app storage; we never write with bare filenames.
 import os
 import json
 import traceback
-import urllib.request
-import urllib.error
 from pathlib import Path
 
 from dulwich import porcelain
 from dulwich.repo import Repo
+
+import llm
+import agentloop
 
 
 # --- Model configuration -------------------------------------------------
@@ -47,7 +49,7 @@ def _impl_model() -> str:
 # Reasoning captured from the most recent _call (read right after calling).
 _LAST_REASON = ""
 
-# Compact context form of the most recent edit run (read right after _run_edits).
+# Compact context form of the most recent edit run (read right after _finish_run).
 # The chat shows the full "Done / files / committed" text, but context only needs
 # the essence, so we carry this leaner version into DISCUSSION SO FAR.
 _LAST_EDIT_CTX = ""
@@ -117,148 +119,14 @@ def _write_file(root: Path, rel: str, content: str) -> None:
 
 # --- LLM calls -----------------------------------------------------------
 
-def _http_post_json(url: str, headers: dict, payload: dict) -> dict:
-    """Minimal JSON POST using the stdlib — no third-party HTTP deps.
-
-    litellm can't be bundled by Chaquopy (it pulls native/Rust deps like
-    fastuuid and tiktoken that lack Android wheels), so we talk to each
-    provider's HTTP API directly.
-    """
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {e.code} from {url}: {body}") from e
-
-
 def _call(model: str, system: str, user: str, max_tokens: int = 4000) -> str:
-    """Route a chat completion to the right provider based on the model prefix.
-
-    Supports "anthropic/<model>" (Anthropic Messages API) and
-    "deepseek/<model>" or any other "<provider>/<model>" that speaks the
-    OpenAI-compatible chat/completions schema (DeepSeek does).
-    """
+    """Single-turn text call via the unified llm layer (retries, streaming
+    continuation, usage accounting come for free). Kept for outline/commit
+    message generation and chat mode."""
     global _LAST_REASON
-    _LAST_REASON = ""
-    provider, _, model_name = model.partition("/")
-    if not model_name:
-        provider, model_name = "openai", model
-
-    if provider == "anthropic":
-        key = os.environ.get("ANTHROPIC_API_KEY", "")
-        payload = {
-            "model": model_name,
-            "max_tokens": max_tokens,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-        }
-        if _thinking_on():
-            payload["thinking"] = {"type": "adaptive", "display": "summarized"}
-        result = _http_post_json(
-            "https://api.anthropic.com/v1/messages",
-            {
-                "x-api-key": key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            payload,
-        )
-        parts = result.get("content", [])
-        _LAST_REASON = "".join(
-            p.get("thinking", "") for p in parts if p.get("type") == "thinking")
-        return "".join(p.get("text", "") for p in parts if p.get("type") == "text")
-
-    # OpenAI-compatible providers (DeepSeek, etc.)
-    bases = {"deepseek": "https://api.deepseek.com"}
-    keys = {"deepseek": "DEEPSEEK_API_KEY"}
-    base = bases.get(provider, "https://api.openai.com")
-    key = os.environ.get(keys.get(provider, "OPENAI_API_KEY"), "")
-    result = _http_post_json(
-        f"{base}/v1/chat/completions",
-        {
-            "Authorization": f"Bearer {key}",
-            "content-type": "application/json",
-        },
-        {
-            "model": model_name,
-            "max_tokens": max_tokens,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        },
-    )
-    choices = result.get("choices") or []
-    if not choices:
-        raise RuntimeError(f"{provider} returned no choices: {json.dumps(result)[:400]}")
-    msg = choices[0].get("message", {})
-    _LAST_REASON = msg.get("reasoning_content", "") or ""
-    return msg.get("content") or ""
-
-
-def _plan_with_lead(task: str, root: Path) -> dict:
-    """Opus reads the task + repo and returns a JSON plan of edits."""
-    file_list = _list_repo_files(root)
-    system = (
-        "You are a coding agent that can either just talk OR make file "
-        "changes. Decide which the user actually wants. Respond ONLY with "
-        "JSON, no prose, no markdown fences. Schema: "
-        "{\"mode\": \"chat\" | \"edit\", \"reply\": str, \"summary\": str, "
-        "\"edits\": [{\"path\": str, \"instruction\": str}]}. "
-        "Use mode \"chat\" for greetings, questions, discussion, or anything "
-        "that does not clearly ask you to create or modify files — put your "
-        "natural-language answer in \"reply\" and leave \"edits\" empty; do "
-        "NOT create files just to respond. Use mode \"edit\" ONLY when the "
-        "user is asking you to create or change code/files — set \"summary\" "
-        "and one \"edit\" per file. When in doubt, prefer \"chat\". "
-        "Persistent project notes, instructions, or things to remember belong "
-        "in a file named guidelines.md (create or update it)."
-    )
-    mode = os.environ.get("AGENT_MODE", "auto").strip().lower()
-    context = _full_context(task, mode).strip()
-    context_block = f"{context}\n\n" if context else ""
-    nudge = ("The user explicitly requested file changes — use mode \"edit\" "
-             "and produce concrete edits.\n\n") if mode in ("code", "plan") else ""
-    user = (
-        nudge +
-        context_block +
-        f"TASK:\n{task}\n\n"
-        f"EXISTING FILES ({len(file_list)}):\n" + "\n".join(file_list)
-    )
-    raw = (_call(LEAD_MODEL, system, user) or "").strip()
-    # Strip accidental fences if the model added them.
-    if raw.startswith("```"):
-        raw = raw.split("```", 2)[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-        raw = raw.strip("` \n")
-    # Some models (e.g. DeepSeek) don't always honor "JSON only". Rather than
-    # fail silently, fall back to treating the reply as a plain chat answer so
-    # the user always sees SOMETHING.
-    try:
-        plan = json.loads(raw)
-        if not isinstance(plan, dict):
-            raise ValueError("plan is not an object")
-    except Exception:
-        # Try to salvage an embedded JSON object; else treat as chat.
-        obj = None
-        i, j = raw.find("{"), raw.rfind("}")
-        if 0 <= i < j:
-            try:
-                obj = json.loads(raw[i:j + 1])
-            except Exception:
-                obj = None
-        if isinstance(obj, dict):
-            plan = obj
-        else:
-            plan = {"mode": "chat",
-                    "reply": raw or "(the model returned an empty response)",
-                    "summary": "", "edits": []}
-    plan["_reasoning"] = _LAST_REASON
-    return plan
+    text, reasoning = llm.chat_text(model, system, user, max_tokens=max_tokens)
+    _LAST_REASON = reasoning
+    return text
 
 
 _SR_RE = None
@@ -301,56 +169,6 @@ def _apply_sr_blocks(current: str, text: str):
             new = new.replace(search, replace, 1)
             applied += 1
     return new, applied, len(blocks)
-
-
-def _edit_with_worker(edit: dict, root: Path) -> dict:
-    """Implementer edits one file via SEARCH/REPLACE diff blocks.
-
-    Returns a structured handoff record for the review loop and insight UI.
-    """
-    path = edit["path"]
-    instruction = edit["instruction"]
-    current = _read_file(root, path)
-    is_new = not current
-    system = (
-        "You are the implementer. Make the requested change to ONE file using "
-        "SEARCH/REPLACE blocks, so only changed regions are emitted. Format each "
-        "block EXACTLY as:\n"
-        "<<<<<<< SEARCH\n<exact existing lines>\n=======\n<replacement lines>\n"
-        ">>>>>>> REPLACE\n"
-        "The SEARCH text must match the current file exactly. Use multiple "
-        "blocks for multiple regions. For a NEW file or a full rewrite, use one "
-        "block with an EMPTY search section (the replace section is the whole "
-        "file). Output ONLY blocks, no prose, no fences."
-    )
-    user = (
-        f"FILE: {path}\n\n"
-        f"CURRENT CONTENTS:\n{current if current else '(new file)'}\n\n"
-        f"INSTRUCTION:\n{instruction}"
-    )
-    output = _call(_impl_model(), system, user).strip()
-    reason = _LAST_REASON
-
-    parsed = _apply_sr_blocks(current or "", output)
-    if parsed is None:
-        # No blocks — treat the whole response as the file body (fallback).
-        new = _strip_fence(output)
-        _write_file(root, path, new + ("" if new.endswith("\n") else "\n"))
-        status = "rewrite"
-        applied, total = 1, 1
-    else:
-        new, applied, total = parsed
-        _write_file(root, path, new)
-        status = "new" if is_new else ("ok" if applied == total else "partial")
-    return {
-        "path": path,
-        "instruction": instruction,
-        "output": output,
-        "reasoning": reason,
-        "status": status,
-        "applied": applied,
-        "total": total,
-    }
 
 
 def _commit_message(summary: str, changed: list) -> str:
@@ -900,10 +718,7 @@ def build_outline(_=None) -> str:
         return "Outline failed:\n" + traceback.format_exc()
 
 
-# --- Execution: events, interrupt, review loop, run records --------------
-
-MAX_ROUNDS = 2
-
+# --- Execution: events, interrupt, run records ----------------------------
 
 def _events_file() -> Path:
     return _agent_dir() / "run_events.jsonl"
@@ -961,9 +776,15 @@ def _new_run_id() -> str:
 
 
 def _begin_run() -> None:
-    """Reset per-run state so events/interrupt start clean."""
+    """Reset per-run state so events/interrupt/usage start clean."""
     _clear_events()
     os.environ["AGENT_INTERRUPT"] = "0"
+    llm.reset_usage()
+
+
+def get_usage(_=None) -> str:
+    """Token usage of the current/most recent run (real API numbers)."""
+    return json.dumps(llm.usage())
 
 
 def _runs_dir() -> Path:
@@ -978,101 +799,176 @@ def get_run(run_id: str) -> str:
     return fp.read_text(encoding="utf-8") if fp.exists() else "{}"
 
 
-def _review_with_lead(task: str, handoffs: list, root: Path) -> dict:
-    """Orchestrator reviews what the implementers did and decides next step."""
-    summaries = []
-    for h in handoffs:
-        summaries.append(
-            f"FILE {h['path']} [{h['status']}]\nIMPLEMENTER OUTPUT:\n{h['output'][:2000]}")
-    system = (
-        "You are the orchestrator reviewing the implementers' work. Decide if "
-        "the task is complete or needs another round. Respond ONLY with JSON: "
-        "{\"status\": \"done\" | \"continue\", \"notes\": str, "
-        "\"edits\": [{\"path\": str, \"instruction\": str}]}. Use \"done\" with "
-        "empty edits when the task is satisfied; use \"continue\" with edits to "
-        "fix or extend. Be strict but do not loop unnecessarily."
-    )
-    user = (f"TASK:\n{task}\n\nWHAT THE IMPLEMENTERS DID:\n" +
-            "\n\n".join(summaries))
+# --- diff gate + autocommit ------------------------------------------------
+
+def _autocommit_on() -> bool:
+    """Autocommit is the default; a marker file turns the diff gate on."""
+    return not (_agent_dir() / "noautocommit").exists()
+
+
+def set_autocommit(flag="1") -> str:
+    on = str(flag) in ("1", "true", "True", "on")
+    marker = _agent_dir() / "noautocommit"
+    if on and marker.exists():
+        marker.unlink()
+    elif not on:
+        marker.write_text("1")
+    return "Autocommit " + ("on" if on else "off — review the diff, then Commit")
+
+
+def get_autocommit(_=None) -> str:
+    return "1" if _autocommit_on() else "0"
+
+
+def _changed_paths(root: Path) -> list:
+    """Working-tree paths that differ from the index/HEAD (via dulwich status)."""
     try:
-        raw = _strip_fence(_call(LEAD_MODEL, system, user, max_tokens=1500))
-        return json.loads(raw)
+        status = porcelain.status(str(root))
     except Exception:
-        return {"status": "done", "notes": "(review unavailable)", "edits": []}
+        return []
+    out = []
+    for p in status.untracked:
+        out.append(p.decode() if isinstance(p, bytes) else p)
+    for kind in ("add", "delete", "modify"):
+        out += [p.decode() if isinstance(p, bytes) else p
+                for p in status.staged.get(kind, [])]
+    out += [p.decode() if isinstance(p, bytes) else p for p in status.unstaged]
+    seen, uniq = set(), []
+    for p in out:
+        if p not in seen and ".agent/" not in p and p not in ("meta.json", "transcript.jsonl"):
+            seen.add(p)
+            uniq.append(p)
+    return uniq
 
 
-def _run_edits(task: str, plan: dict, root: Path, run_id: str) -> str:
-    """The orchestrator↔implementer feedback loop with live events."""
-    rounds = []
-    round_edits = plan.get("edits", [])
-    interrupted = False
+def _head_file(root: Path, rel: str):
+    """The file's content at HEAD, or None if it doesn't exist there."""
+    try:
+        from dulwich.object_store import tree_lookup_path
+        r = Repo(str(root))
+        head = r[r.head()]
+        _, sha = tree_lookup_path(r.object_store.__getitem__, head.tree,
+                                  rel.encode())
+        return r.object_store[sha].data.decode("utf-8", "replace")
+    except Exception:
+        return None
 
-    for r in range(MAX_ROUNDS):
-        if _interrupted():
-            interrupted = True
-            break
-        _emit("round_start", round=r, files=[e.get("path") for e in round_edits])
-        handoffs = []
-        for e in round_edits:
-            if _interrupted():
-                interrupted = True
-                break
-            _emit("impl_start", round=r, path=e.get("path"), instruction=e.get("instruction"))
+
+def get_diff(_=None) -> str:
+    """Unified diff of the working tree vs HEAD (uncommitted changes)."""
+    import difflib
+    root = _workspace()
+    if not (root / ".git").exists():
+        return "(no git repo yet)"
+    chunks = []
+    for rel in _changed_paths(root)[:50]:
+        old = _head_file(root, rel)
+        fp = root / rel
+        new = None
+        if fp.exists() and fp.is_file():
             try:
-                res = _edit_with_worker(e, root)
-            except Exception as ex:
-                res = {"path": e.get("path"), "instruction": e.get("instruction"),
-                       "output": f"ERROR: {ex}", "status": "error", "applied": 0, "total": 0}
-            handoffs.append(res)
-            if res.get("reasoning"):
-                _emit("impl_reason", round=r, path=res["path"], reason=res["reasoning"][:500])
-            _emit("impl_done", round=r, path=res["path"], status=res["status"])
+                new = fp.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                new = "(binary or unreadable)"
+        if old == new:
+            continue
+        diff = difflib.unified_diff(
+            (old or "").splitlines(keepends=True),
+            (new or "").splitlines(keepends=True),
+            fromfile=f"a/{rel}" if old is not None else "/dev/null",
+            tofile=f"b/{rel}" if new is not None else "/dev/null")
+        chunks.append("".join(diff)[:20000])
+    return "\n".join(chunks) or "(no uncommitted changes)"
 
-        review = {"status": "done", "notes": "", "edits": []}
-        if handoffs and not interrupted and r < MAX_ROUNDS - 1:
-            _emit("review_start", round=r)
-            review = _review_with_lead(task, handoffs, root)
-            _emit("review_done", round=r, status=review.get("status"), notes=review.get("notes", ""))
 
-        rounds.append({"round": r, "plan_summary": plan.get("summary", ""),
-                       "plan_reasoning": plan.get("_reasoning", ""),
-                       "handoffs": handoffs, "review": review})
+def discard_changes(_=None) -> str:
+    """Throw away all uncommitted changes (hard reset to HEAD)."""
+    try:
+        root = _workspace()
+        for rel in _changed_paths(root):
+            old = _head_file(root, rel)
+            fp = root / rel
+            if old is None:
+                if fp.exists():
+                    fp.unlink()
+            else:
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                fp.write_text(old, encoding="utf-8")
+        try:
+            porcelain.reset(str(_workspace()), "hard")
+        except Exception:
+            pass
+        return "Uncommitted changes discarded"
+    except Exception:
+        return "Discard failed:\n" + traceback.format_exc()
 
-        if interrupted or review.get("status") == "done" or not review.get("edits"):
-            break
-        round_edits = review["edits"]
 
-    # Commit whatever was written.
-    all_changed = [h["path"] for rd in rounds for h in rd["handoffs"]]
-    summary = plan.get("summary", "(no summary)")
-    _emit("commit_start")
-    message = _commit_message(summary, all_changed)
-    commit_id = _commit(root, message)[:8]
-    _emit("done", commit=commit_id)
+def revert_last(_=None) -> str:
+    """Undo the most recent commit (moves the branch back one; files follow)."""
+    try:
+        root = _workspace()
+        r = Repo(str(root))
+        head = r[r.head()]
+        if not head.parents:
+            return "Nothing before the first commit — cannot revert."
+        parent = head.parents[0]
+        try:
+            ref = r.refs.follow(b"HEAD")[0][-1]
+        except Exception:
+            ref = b"refs/heads/master"
+        r.refs[ref] = parent
+        porcelain.reset(str(root), "hard")
+        msg = r[parent].message.decode("utf-8", "replace").strip()
+        return f"Reverted to {parent.decode()[:8]}: {msg.splitlines()[0]}"
+    except Exception:
+        return "Revert failed:\n" + traceback.format_exc()
 
-    # Persist the run record for the insight UI.
+
+def _finish_run(task: str, res: dict, run_id: str) -> str:
+    """Verify → commit (or hold for review) → record. Returns the reply text."""
+    global _LAST_EDIT_CTX
+    root = _workspace()
+    touched = res.get("touched") or []
+    lines = []
+    if res.get("interrupted"):
+        lines.append("Interrupted.")
+    lines.append(res.get("text", "").strip() or "(no summary)")
+
+    commit_id, message = "", ""
+    if touched:
+        lines.append(f"\nFiles changed: {len(touched)}")
+        lines += [f"  - {c}" for c in touched]
+        if _autocommit_on():
+            _emit("commit_start")
+            summary = (res.get("text", "").strip().splitlines() or ["update"])[0][:120]
+            message = _commit_message(summary, touched)
+            commit_id = _commit(root, message)[:8]
+            _emit("done", commit=commit_id)
+            lines.append(f"Committed {commit_id}: {message}")
+        else:
+            _emit("pending_commit", files=touched)
+            lines.append("Not committed — review the diff, then Commit or Discard.")
+
+    u = res.get("usage") or {}
+    if u.get("input") or u.get("output"):
+        lines.append(f"[tokens: {u.get('input', 0)} in / {u.get('output', 0)} out, "
+                     f"{res.get('steps', 0)} steps]")
+
     try:
         (_runs_dir() / f"{run_id}.json").write_text(
-            json.dumps({"task": task, "rounds": rounds, "commit": commit_id,
-                        "message": message}), encoding="utf-8")
+            json.dumps({"task": task, "text": res.get("text", ""),
+                        "reasoning": res.get("reasoning", ""),
+                        "touched": touched, "steps": res.get("steps", 0),
+                        "usage": u, "commit": commit_id, "message": message}),
+            encoding="utf-8")
     except Exception:
         pass
 
-    lines = []
-    if interrupted:
-        lines.append("Interrupted.")
-    lines.append(f"Done: {summary}")
-    files = sorted(set(all_changed))
-    lines.append(f"Files changed: {len(files)}")
-    lines += [f"  - {c}" for c in files]
-    lines.append(f"Committed {commit_id}: {message}")
     full = "\n".join(lines)
-    # Context only needs the outcome: the commit message (which is the summary
-    # of what changed). Drop the file list and commit id. If nothing committed,
-    # fall back to the full text.
-    global _LAST_EDIT_CTX
-    _LAST_EDIT_CTX = (("Interrupted. " if interrupted else "") +
-                      f"Done: {message}") if commit_id else full
+    _LAST_EDIT_CTX = (("Interrupted. " if res.get("interrupted") else "") +
+                      (f"Done: {message}" if commit_id else
+                       ((res.get("text", "").strip().splitlines() or ["done"])[0][:200]
+                        if touched else full)))
     return full
 
 
@@ -1121,35 +1017,18 @@ def _format_plan(plan: dict) -> str:
     return "\n".join(lines)
 
 
-def _execute_edits(plan: dict, root: Path) -> str:
-    edits = plan.get("edits", [])
-    summary = plan.get("summary", "(no summary)")
-    changed = []
-    for edit in edits:
-        try:
-            changed.append(_edit_with_worker(edit, root))
-        except Exception as e:
-            changed.append(f"{edit.get('path','?')} [FAILED: {e}]")
-    message = _commit_message(summary, changed)
-    commit_id = _commit(root, message)[:8]
-    lines = [f"Done: {summary}", f"Files changed: {len(changed)}"]
-    lines += [f"  - {c}" for c in changed]
-    lines.append(f"Committed {commit_id}: {message}")
-    return "\n".join(lines)
-
-
 # --- Public entry point (called from Kotlin) -----------------------------
 
 def run_task(task: str) -> str:
     """
     Handle one turn. Mode comes from env AGENT_MODE:
-      chat  — just reply
-      code  — always make changes
-      plan  — produce a plan and stash it for approval (no writes)
-      auto  — let the model decide chat vs edit (default)
+      chat  — just reply (no tools, cheap)
+      code  — agentic loop with write tools
+      plan  — agentic loop with read-only tools; plan stashed for approval
+      auto  — agentic loop with write tools; the model just answers when the
+              task doesn't need edits (default)
     """
     try:
-        root = _workspace()
         mode = os.environ.get("AGENT_MODE", "auto").strip().lower()
         _begin_run()
         _append_discussion("user", task)
@@ -1159,39 +1038,33 @@ def run_task(task: str) -> str:
             _append_discussion("agent", reply)
             return reply
 
-        _emit("plan_start")
-        plan = _plan_with_lead(task, root)
-        edits = plan.get("edits", [])
-        _emit("plan_done", summary=plan.get("summary", ""),
-              files=[e.get("path") for e in edits])
+        context = _full_context(task, mode).strip()
 
         if mode == "plan":
-            if not edits:
-                result = plan.get("reply") or _chat_reply(task)
+            res = agentloop.run(task, context=context, plan=True)
+            plan = res.get("plan")
+            if not plan or not plan.get("edits"):
+                result = res.get("text") or "(no plan produced)"
                 _append_discussion("agent", result)
-            else:
-                try:
-                    plan["task"] = task
-                    _plan_path().write_text(json.dumps(plan))
-                except Exception:
-                    pass
-                result = _format_plan(plan)
-                _append_discussion("agent", result)
-            return result
-
-        if mode != "code" and (plan.get("mode") == "chat" or not edits):
-            result = plan.get("reply") or plan.get("summary") or "(no reply)"
+                return result
+            plan["task"] = task
+            try:
+                _plan_path().write_text(json.dumps(plan))
+            except Exception:
+                pass
+            result = _format_plan(plan)
             _append_discussion("agent", result)
             return result
 
-        if not edits:
-            result = plan.get("reply") or "(nothing to change)"
-            _append_discussion("agent", result)
-            return result
-
+        extra = ("" if mode == "code" else
+                 "If the user's message is a question or discussion that needs "
+                 "no file changes, just answer it in plain text without tools.")
+        res = agentloop.run(task, context=context, write=True, extra_system=extra)
         run_id = _new_run_id()
-        result = _run_edits(task, plan, root, run_id)
-        _append_discussion("agent", result, run_id=run_id, ctx=_LAST_EDIT_CTX)
+        result = _finish_run(task, res, run_id)
+        _append_discussion("agent", result,
+                           run_id=run_id if res.get("touched") else "",
+                           ctx=_LAST_EDIT_CTX)
         return result
 
     except Exception:
@@ -1206,15 +1079,23 @@ def run_task(task: str) -> str:
 
 
 def execute_plan() -> str:
-    """Build the previously-stashed plan (plan-mode approval)."""
+    """Build the previously-stashed plan (plan-mode approval) with the full
+    agentic loop, so the builder can still read files and verify its work."""
     try:
         p = _plan_path()
         if not p.exists():
             return "No pending plan to approve."
         plan = json.loads(p.read_text())
         _begin_run()
+        steps = "\n".join(
+            f"{i}. {e.get('path', '(path up to you)')}: {e.get('instruction', '')}"
+            for i, e in enumerate(plan.get("edits", []), 1))
+        task = (f"Implement this approved plan.\n\nORIGINAL TASK:\n"
+                f"{plan.get('task', '')}\n\nPLAN: {plan.get('summary', '')}\n{steps}")
+        context = _full_context(task, "code").strip()
+        res = agentloop.run(task, context=context, write=True)
         run_id = _new_run_id()
-        result = _run_edits(plan.get("task", ""), plan, _workspace(), run_id)
+        result = _finish_run(task, res, run_id)
         try:
             p.unlink()
         except Exception:
@@ -1223,6 +1104,27 @@ def execute_plan() -> str:
         return result
     except Exception:
         return "Approve failed:\n" + traceback.format_exc()
+
+
+def fix_build(_=None) -> str:
+    """Pull the latest CI failure from GitHub Actions and set the agent on it."""
+    try:
+        import git_ops
+        log = git_ops.ci_failure_log()
+        if log.startswith("("):
+            return log  # no repo / no failure / API problem — explain, don't run
+        _begin_run()
+        task = ("The cloud build (GitHub Actions) failed. Diagnose from the log "
+                "below, fix the workspace, and verify. Failure log (tail):\n\n" + log)
+        _append_discussion("user", "Fix the failed cloud build", ctx="Fix the failed cloud build")
+        context = _full_context(task, "code").strip()
+        res = agentloop.run(task, context=context, write=True)
+        run_id = _new_run_id()
+        result = _finish_run(task, res, run_id)
+        _append_discussion("agent", result, run_id=run_id, ctx=_LAST_EDIT_CTX)
+        return result
+    except Exception:
+        return "Fix build failed:\n" + traceback.format_exc()
 
 
 def commit_now() -> str:
@@ -1259,28 +1161,56 @@ def commit_now() -> str:
 
 
 # --- Local test harness (does NOT run on device) -------------------------
-# Lets us exercise control flow here with a mock, no API keys needed.
+# Exercises the full tool loop with a scripted fake model — no API keys.
 if __name__ == "__main__":
     import sys
     if "--selftest" in sys.argv:
-        # Monkeypatch the LLM calls with deterministic fakes.
-        def fake_call(model, system, user, max_tokens=4000):
-            if model == LEAD_MODEL:
-                return json.dumps({
-                    "summary": "Add a greeting module",
-                    "edits": [
-                        {"path": "greet.py",
-                         "instruction": "Create a function hello() that prints hi"},
-                    ],
-                })
-            else:
-                return "def hello():\n    print('hi from agent')\n"
-        globals()["_call"] = fake_call
+        script = [
+            # step 1: model inspects, then writes a (deliberately broken) file
+            {"text": "", "reasoning": "", "stop": "tool_use", "usage": {"input": 10, "output": 5},
+             "tool_calls": [
+                 {"id": "t1", "name": "list_files", "args": {}},
+                 {"id": "t2", "name": "write_file",
+                  "args": {"path": "greet.py",
+                           "content": "def hello(:\n    print('hi')\n"}}]},
+            # step 2: model checks its work, finds the syntax error, fixes it
+            {"text": "", "reasoning": "", "stop": "tool_use", "usage": {"input": 10, "output": 5},
+             "tool_calls": [
+                 {"id": "t3", "name": "check_python", "args": {}},
+                 {"id": "t4", "name": "write_file",
+                  "args": {"path": "greet.py",
+                           "content": "def hello():\n    print('hi from agent')\n"}}]},
+            # step 3: done
+            {"text": "Added greet.py with a hello() function.", "reasoning": "",
+             "stop": "end_turn", "usage": {"input": 10, "output": 5}, "tool_calls": []},
+        ]
+        calls = {"n": 0}
+
+        def fake_chat(model, system, messages, tools=None, max_tokens=8000,
+                      cached_context="", on_delta=None):
+            r = script[min(calls["n"], len(script) - 1)]
+            calls["n"] += 1
+            return r
+
+        def fake_chat_text(model, system, user, max_tokens=4000, on_delta=None):
+            return "Add greeting module", ""
+
+        llm.chat = fake_chat
+        llm.chat_text = fake_chat_text
+        import agentloop as _al
+        _al.llm.chat = fake_chat
 
         os.environ["AGENT_WORKSPACE"] = os.path.join(
             os.environ.get("HOME", "/tmp"), "selftest_ws")
-        # clean slate
+        os.environ["AGENT_MODE"] = "code"
         import shutil
         shutil.rmtree(os.environ["AGENT_WORKSPACE"], ignore_errors=True)
 
-        print(run_task("Add a hello world greeting function"))
+        out = run_task("Add a hello world greeting function")
+        print(out)
+        ws = Path(os.environ["AGENT_WORKSPACE"])
+        body = (ws / "greet.py").read_text()
+        assert "hi from agent" in body, "final file content wrong"
+        assert "Committed" in out, "run did not commit"
+        assert (ws / ".git").exists(), "no git repo created"
+        print("\nSELFTEST OK — loop, tools, verify, commit all exercised")

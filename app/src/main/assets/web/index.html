@@ -71,13 +71,25 @@
 
       <div class="group-title">Git</div>
       <div class="grid">
+        <button data-act="diff">Diff</button>
         <button data-act="commit">Commit</button>
         <button data-act="push">Push</button>
         <button data-act="pull">Pull</button>
+        <button data-act="revertLast">Revert last</button>
+        <button data-act="autocommit">Autocommit: —</button>
         <button data-act="newRepo">New repo</button>
         <button data-act="switchRepo">Switch repo</button>
+        <button data-act="forcePush">Force push</button>
+      </div>
+
+      <div class="group-title">Branch &amp; PR</div>
+      <div class="grid">
+        <button data-act="startBranch">Start branch</button>
+        <button data-act="createPR">Open PR</button>
+        <button data-act="prStatus">PR status</button>
         <button data-act="cloudBuild">Build in cloud</button>
         <button data-act="buildStatus">Build status</button>
+        <button data-act="fixBuild">Fix CI build</button>
       </div>
 
       <div class="group-title">Context</div>

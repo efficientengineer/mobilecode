@@ -1,28 +1,68 @@
 """
 agent_loader.py — thin indirection so the agent brain can be hot-updated.
 
-The Kotlin layer always calls agent_loader.run_task(). If an override copy of
-orchestrator.py has been downloaded into app storage (env AGENT_OVERRIDE points
-at it), we load and run *that* file fresh on every call — so an over-the-air
-update takes effect on the next task with no app restart. Otherwise we fall
-back to the orchestrator.py bundled inside the APK.
+The Kotlin layer always calls through this module. If an override directory of
+downloaded .py files exists (env AGENT_OVERRIDE_DIR), those files are loaded
+fresh — in dependency order, registered in sys.modules so they import each
+other's override versions — whenever one of them changed on disk. So an
+over-the-air update takes effect on the next task with no app restart.
+
+Back-compat: env AGENT_OVERRIDE (a single orchestrator.py path) still works.
 """
 
 import os
+import sys
+import importlib
 import importlib.util
+
+# Load order matters: leaves first, orchestrator last.
+_MODULES = ["llm", "agent_tools", "agentloop", "git_ops", "localrun", "orchestrator"]
+
+_loaded_mtimes = {}
+
+
+def _override_files():
+    d = os.environ.get("AGENT_OVERRIDE_DIR", "")
+    files = {}
+    if d and os.path.isdir(d):
+        for name in _MODULES:
+            fp = os.path.join(d, name + ".py")
+            if os.path.exists(fp):
+                files[name] = fp
+    legacy = os.environ.get("AGENT_OVERRIDE", "")
+    if "orchestrator" not in files and legacy and os.path.exists(legacy):
+        files["orchestrator"] = legacy
+    return files
+
+
+def _load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod  # register BEFORE exec so cross-imports resolve
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _load_orchestrator():
-    override = os.environ.get("AGENT_OVERRIDE")
-    if override and os.path.exists(override):
-        # Load the downloaded file fresh each time (no import cache) so edits
-        # are picked up immediately.
-        spec = importlib.util.spec_from_file_location("orchestrator_live", override)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
-    import orchestrator
-    return orchestrator
+    files = _override_files()
+    if not files:
+        import orchestrator
+        return orchestrator
+
+    mtimes = {n: os.path.getmtime(p) for n, p in files.items()}
+    changed = mtimes != _loaded_mtimes
+    for name in _MODULES:
+        if name in files:
+            if changed or name not in sys.modules:
+                _load_module(name, files[name])
+        else:
+            # Bundled version, reloaded so it links against override deps.
+            if changed:
+                sys.modules.pop(name, None)
+            importlib.import_module(name)
+    _loaded_mtimes.clear()
+    _loaded_mtimes.update(mtimes)
+    return sys.modules["orchestrator"]
 
 
 def run_task(task: str) -> str:

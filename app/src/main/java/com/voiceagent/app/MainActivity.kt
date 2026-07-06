@@ -182,7 +182,9 @@ class MainActivity : AppCompatActivity() {
         fun set(k: String, v: String) = os.get("environ")?.callAttr("__setitem__", k, v)
         set("AGENT_WORKSPACE", sessions.activeDir().absolutePath)
         set("HOME", filesDir.absolutePath)
-        set("AGENT_OVERRIDE", File(File(filesDir, "py_override").apply { mkdirs() }, "orchestrator.py").absolutePath)
+        val pyOverride = File(filesDir, "py_override").apply { mkdirs() }
+        set("AGENT_OVERRIDE", File(pyOverride, "orchestrator.py").absolutePath)
+        set("AGENT_OVERRIDE_DIR", pyOverride.absolutePath)
         val prefs = getSharedPreferences("keys", MODE_PRIVATE)
         prefs.getString("ANTHROPIC_API_KEY", null)?.let { set("ANTHROPIC_API_KEY", it) }
         prefs.getString("DEEPSEEK_API_KEY", null)?.let { set("DEEPSEEK_API_KEY", it) }
@@ -269,17 +271,26 @@ class MainActivity : AppCompatActivity() {
         }
         "agent.run" -> withContext(Dispatchers.IO) {
             // The orchestrator now owns the discussion/context (in the project
-            // folder), so we just set the mode and run.
+            // folder), so we just set the mode and run. A foreground service
+            // keeps the run alive if the user switches apps or the screen dims.
             py("os").get("environ")?.callAttr("__setitem__", "AGENT_MODE", arg.optString("mode", "auto"))
-            text(py("agent_loader").callAttr("run_task", arg.getString("task")).toString())
+            withAgentService {
+                text(py("agent_loader").callAttr("run_task", arg.getString("task")).toString())
+            }
         }
         "plan.approve" -> withContext(Dispatchers.IO) {
-            text(py("agent_loader").callAttr("execute_plan").toString())
+            withAgentService {
+                text(py("agent_loader").callAttr("execute_plan").toString())
+            }
         }
         "orch" -> withContext(Dispatchers.IO) {
             // Generic call into an orchestrator function (OTA-updatable), so
             // new context/project features ship without a native change.
-            text(py("agent_loader").callAttr("op", arg.getString("fn"), arg.optString("arg", "")).toString())
+            val fn = arg.getString("fn")
+            val body = {
+                text(py("agent_loader").callAttr("op", fn, arg.optString("arg", "")).toString())
+            }
+            if (fn == "fix_build") withAgentService(body) else body()
         }
         "context.get", "session.turns2" -> withContext(Dispatchers.IO) {
             val arr = JSONArray()
@@ -380,6 +391,31 @@ class MainActivity : AppCompatActivity() {
 
     // --- OTA updates ------------------------------------------------------
 
+    // --- Foreground service around long agent runs ------------------------
+
+    private var serviceRuns = 0
+
+    private fun <T> withAgentService(body: () -> T): T {
+        synchronized(this) {
+            if (serviceRuns++ == 0) {
+                try {
+                    ContextCompat.startForegroundService(
+                        this, Intent(this, AgentService::class.java))
+                } catch (_: Throwable) {}
+            }
+        }
+        try {
+            return body()
+        } finally {
+            synchronized(this) {
+                if (--serviceRuns == 0) {
+                    try { stopService(Intent(this, AgentService::class.java)) }
+                    catch (_: Throwable) {}
+                }
+            }
+        }
+    }
+
     private fun branch(): String =
         getSharedPreferences("keys", MODE_PRIVATE).getString("AGENT_BRANCH", "")
             ?.takeIf { it.isNotBlank() } ?: getString(R.string.agent_branch_default)
@@ -398,9 +434,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateAgent(): String = try {
-        val body = fetchRaw("app/src/main/python/orchestrator.py")
-        File(File(filesDir, "py_override").apply { mkdirs() }, "orchestrator.py").writeText(body)
-        "Agent updated — next task uses the new code"
+        val dir = File(filesDir, "py_override").apply { mkdirs() }
+        val files = listOf("llm.py", "agent_tools.py", "agentloop.py",
+            "git_ops.py", "localrun.py", "orchestrator.py")
+        val fetched = files.map { it to fetchRaw("app/src/main/python/$it") }
+        fetched.forEach { (name, body) -> File(dir, name).writeText(body) }
+        "Agent updated (${files.size} modules) — next task uses the new code"
     } catch (e: Throwable) {
         "Update agent failed: ${e.message}"
     }

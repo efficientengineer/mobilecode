@@ -190,6 +190,39 @@ function submit(task) {
   runTask(task, currentMode);
 }
 
+// Poll run events into a live element. Streams `delta` text into a tail
+// block so the model's reply appears as it is generated; tracks whether a
+// commit is pending user review. Returns { stop(), pendingCommit() }.
+function makeLivePoller(live) {
+  const lines = [];
+  let stream = "";
+  let cursor = 0, polling = true, pending = false;
+  function render() {
+    let t = lines.slice(-10).join("\n");
+    if (stream) t += (t ? "\n" : "") + "💬 " + stream.slice(-600);
+    live.textContent = t || "Starting…";
+    chat.scrollTop = chat.scrollHeight;
+  }
+  (async function poll() {
+    while (polling) {
+      try {
+        const r = JSON.parse((await call("orch", { fn: "get_events", arg: String(cursor) })).text);
+        cursor = r.cursor;
+        (r.events || []).forEach((e) => {
+          if (e.kind === "delta") { stream += e.text || ""; return; }
+          if (e.kind === "pending_commit") pending = true;
+          if (e.kind === "step") stream = ""; // new model turn — reset the tail
+          const f = fmtEvent(e);
+          if (f) lines.push(f);
+        });
+        render();
+      } catch (e) {}
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  })();
+  return { stop() { polling = false; }, pendingCommit: () => pending };
+}
+
 async function runTask(task, mode) {
   running = true;
   bubble(task, "user");
@@ -199,35 +232,22 @@ async function runTask(task, mode) {
   live.className = "live";
   live.textContent = "Starting…";
   chat.appendChild(live);
-  const lines = [];
-  let cursor = 0, polling = true;
-
-  (async function poll() {
-    while (polling) {
-      try {
-        const r = JSON.parse((await call("orch", { fn: "get_events", arg: String(cursor) })).text);
-        cursor = r.cursor;
-        (r.events || []).forEach((e) => { lines.push(fmtEvent(e)); });
-        if (lines.length) { live.textContent = lines.slice(-12).join("\n"); chat.scrollTop = chat.scrollHeight; }
-      } catch (e) {}
-      await new Promise((r) => setTimeout(r, 700));
-    }
-  })();
+  const poller = makeLivePoller(live);
 
   let reply = "";
   try {
     reply = (await call("agent.run", { task, mode })).text || "";
   } catch (e) {
-    lines.push("Error: " + e.message);
     reply = "Error: " + e.message;
   }
-  polling = false;
+  poller.stop();
   live.remove();
   await loadHistory();
   if (mode === "plan") {
     addApprove();
     notifyUser("Plan ready — approve to build", firstLine(reply));
   } else {
+    if (poller.pendingCommit()) addCommitReview();
     notifyUser("Agent replied", firstLine(reply));
   }
   running = false;
@@ -255,7 +275,7 @@ function drainQueue() {
   runTask(next.task, next.mode);
 }
 
-// Live progress for an arbitrary agent call (e.g. plan approval).
+// Live progress for an arbitrary agent call (e.g. plan approval, fix build).
 async function driveLive(label, promiseFactory) {
   running = true;
   $("#runbar").classList.remove("hidden");
@@ -263,44 +283,87 @@ async function driveLive(label, promiseFactory) {
   const live = document.createElement("div");
   live.className = "live"; live.textContent = "Starting…";
   chat.appendChild(live);
-  const lines = []; let cursor = 0, polling = true;
-  (async function poll() {
-    while (polling) {
-      try {
-        const r = JSON.parse((await call("orch", { fn: "get_events", arg: String(cursor) })).text);
-        cursor = r.cursor;
-        (r.events || []).forEach((e) => lines.push(fmtEvent(e)));
-        if (lines.length) { live.textContent = lines.slice(-12).join("\n"); chat.scrollTop = chat.scrollHeight; }
-      } catch (e) {}
-      await new Promise((r) => setTimeout(r, 700));
-    }
-  })();
+  const poller = makeLivePoller(live);
   try { await promiseFactory(); } catch (e) {}
-  polling = false; live.remove(); await loadHistory();
+  poller.stop(); live.remove(); await loadHistory();
+  if (poller.pendingCommit()) addCommitReview();
   running = false; $("#runbar").classList.add("hidden"); drainQueue();
 }
 
+const TOOL_ICONS = {
+  read_file: "📖", list_files: "📂", grep: "🔍", write_file: "✏️",
+  str_replace: "✂️", delete_file: "🗑", check_python: "🧪", run_tests: "🧪",
+  delegate_edit: "🤝", propose_plan: "📋",
+};
+
 function fmtEvent(e) {
   switch (e.kind) {
+    case "step": return "── step " + e.n;
+    case "tool_start":
+      return (TOOL_ICONS[e.name] || "⚙️") + " " + e.name + (e.detail ? " " + e.detail : "");
+    case "tool_done":
+      return "   ✓ " + (e.result || e.name);
+    case "reason": return "💭 " + (e.text || "").slice(0, 160);
+    case "verify_failed": return "🧪 verification FAILED — repairing:\n" + (e.detail || "");
+    case "verify_ok": return "🧪 verification passed";
+    case "usage": return "∑ " + (e.input || 0) + " in / " + (e.output || 0) + " out tokens, " + (e.calls || 0) + " calls";
+    case "pending_commit": return "⏸ Changes held for your review (autocommit off)";
+    case "error": return "⚠️ " + (e.detail || "error");
     case "plan_start": return "🧠 Orchestrator planning…";
     case "plan_done": return "📋 Plan: " + (e.summary || "") + " (" + (e.files || []).length + " files)";
-    case "round_start": return "── Round " + (e.round + 1) + ": " + (e.files || []).join(", ");
-    case "impl_start": return "⚙️ implementer → " + e.path + "\n    " + (e.instruction || "").slice(0, 120);
-    case "impl_reason": return "   💭 " + (e.reason || "").slice(0, 160);
-    case "plan_reason": return "💭 " + (e.reason || "").slice(0, 160);
-    case "impl_done": return "   ✓ " + e.path + " [" + e.status + "]";
-    case "review_start": return "🔎 Orchestrator reviewing…";
-    case "review_done": return "   review: " + e.status + (e.notes ? " — " + e.notes.slice(0, 120) : "");
     case "commit_start": return "💾 Committing…";
     case "done": return "✅ Committed " + (e.commit || "");
     case "interrupt": return "⏹ Interrupting…";
+    // legacy kinds (old orchestrator versions)
+    case "round_start": return "── Round " + (e.round + 1) + ": " + (e.files || []).join(", ");
+    case "impl_start": return "⚙️ implementer → " + e.path;
+    case "impl_done": return "   ✓ " + e.path + " [" + e.status + "]";
     default: return e.kind;
   }
+}
+
+// Review bar shown after a run when autocommit is off and changes are pending.
+function addCommitReview() {
+  const bar = document.createElement("div");
+  bar.className = "review-bar";
+  bar.innerHTML =
+    `<button class="pill ghost" id="rvDiff">View diff</button>
+     <button class="pill" id="rvCommit">✓ Commit</button>
+     <button class="pill stop" id="rvDiscard">Discard</button>`;
+  chat.appendChild(bar);
+  chat.scrollTop = chat.scrollHeight;
+  bar.querySelector("#rvDiff").onclick = () => actions.diff();
+  bar.querySelector("#rvCommit").onclick = async () => {
+    bar.remove();
+    await runText("Commit", "agent.commit");
+  };
+  bar.querySelector("#rvDiscard").onclick = () => {
+    modal("Discard changes",
+      `<div class="hint">Throw away ALL uncommitted changes in this project?</div>`,
+      async () => {
+        bar.remove();
+        bubble((await call("orch", { fn: "discard_changes" })).text, "sys");
+      });
+  };
 }
 
 async function openRun(runId) {
   let rec = {};
   try { rec = JSON.parse((await call("orch", { fn: "get_run", arg: String(runId) })).text); } catch (e) {}
+  if (rec.touched || rec.usage) {
+    // New agent-loop record shape.
+    const u = rec.usage || {};
+    const files = (rec.touched || []).map((p) => `<div class="run-file">${escapeHtml(p)}</div>`).join("");
+    const think = rec.reasoning
+      ? `<div class="hint">model thinking (last step):</div><pre class="small">${escapeHtml(rec.reasoning.slice(0, 4000))}</pre>` : "";
+    modal("Run details",
+      `<div class="hint">task:</div><pre class="small">${escapeHtml((rec.task || "").slice(0, 2000))}</pre>` +
+      think +
+      `<div class="hint">${(rec.touched || []).length} file(s) touched, ${rec.steps || 0} steps:</div>${files}` +
+      (rec.commit ? `<div class="hint">committed ${escapeHtml(rec.commit)}: ${escapeHtml(rec.message || "")}</div>` : "") +
+      `<div class="hint">tokens: ${u.input || 0} in / ${u.output || 0} out (${u.calls || 0} calls)</div>`);
+    return;
+  }
   const rounds = rec.rounds || [];
   if (!rounds.length) { modal("Run details", `<div class="hint">No details recorded.</div>`); return; }
   const html = rounds.map((rd) => {
@@ -316,6 +379,11 @@ async function openRun(runId) {
     return `<div class="run-round"><h4>Round ${(rd.round || 0) + 1} — ${(rd.handoffs || []).length} implementer(s)</h4>${planThink}${files}${rev}</div>`;
   }).join("");
   modal("Run details", html);
+}
+
+function updateAutocommitLabel(on) {
+  const b = document.querySelector('[data-act="autocommit"]');
+  if (b) b.textContent = "Autocommit: " + (on ? "on" : "off");
 }
 
 function updateCavemanLabel(on) {
@@ -377,6 +445,47 @@ const actions = {
   balance() { runText("Balance", "git.balances"); },
   cloudBuild() { runText("Cloud build", "git.cloudBuild"); },
   buildStatus() { runText("Build status", "git.buildStatus"); },
+  async diff() {
+    const r = await call("orch", { fn: "get_diff" });
+    modal("Uncommitted changes", `<pre class="filebody diff">${escapeHtml(r.text || "(none)")}</pre>`);
+  },
+  revertLast() {
+    modal("Revert last commit",
+      `<div class="hint">Undo the most recent commit? Files return to the previous commit's state.</div>`,
+      async () => { bubble((await call("orch", { fn: "revert_last" })).text, "sys"); });
+  },
+  startBranch() {
+    modal("Start work branch",
+      `<label>Branch name (blank = agent/&lt;session&gt;)</label><input id="bn" type="text" placeholder="agent/my-feature" />
+       <div class="hint">Work lands on this branch; open a PR to merge it. Safe: your files don't change.</div>`,
+      async () => {
+        bubble((await call("py.call", { module: "git_ops", fn: "start_branch", args: [$("#bn").value.trim()] })).text, "sys");
+      });
+  },
+  createPR() {
+    modal("Open pull request",
+      `<label>Title</label><input id="prt" type="text" placeholder="What changed?" />
+       <div class="hint">Pushes the current branch, then opens a PR against the repo's default branch.</div>`,
+      async () => {
+        bubble("Opening PR…", "sys");
+        bubble((await call("py.call", { module: "git_ops", fn: "create_pr", args: [$("#prt").value.trim(), ""] })).text, "sys");
+      });
+  },
+  prStatus() { runText("PR status", "py.call", { module: "git_ops", fn: "pr_status", args: [] }); },
+  forcePush() {
+    modal("Force push",
+      `<div class="hint">Overwrite the remote branch with your local history? Remote-only commits are LOST.</div>`,
+      async () => { bubble((await call("py.call", { module: "git_ops", fn: "push_force", args: [] })).text, "sys"); });
+  },
+  fixBuild() {
+    driveLive("Fixing CI build…", () => call("orch", { fn: "fix_build" }));
+  },
+  async autocommit() {
+    const cur = (await call("orch", { fn: "get_autocommit" })).text.trim();
+    const next = cur === "1" ? "0" : "1";
+    bubble((await call("orch", { fn: "set_autocommit", arg: next })).text, "sys");
+    updateAutocommitLabel(next === "1");
+  },
   async updateApp() {
     bubble("Updating agent + UI…", "sys");
     setStatus("Updating…");
@@ -744,5 +853,6 @@ document.querySelectorAll(".mode").forEach((b) => {
   try { await refreshHeader(); await loadHistory(); } catch (e) {}
   try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
   try { updateThinkingLabel((await call("orch", { fn: "get_thinking" })).text.trim() === "1"); } catch (e) {}
+  try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
   bubble("Ready. Type or tap 🎤 to dictate a task.", "sys");
 })();

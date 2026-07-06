@@ -156,3 +156,10 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   border: 1px solid var(--border); border-radius: 10px; padding: 12px; font-size: 12.5px;
   max-height: 60vh; overflow: auto; }
 .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+/* Commit review bar (autocommit off) */
+.review-bar { align-self: stretch; display: flex; gap: 8px; justify-content: flex-end;
+  padding: 8px 0; }
+
+/* Diff viewer */
+pre.filebody.diff { font-size: 12px; }

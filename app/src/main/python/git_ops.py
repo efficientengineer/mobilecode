@@ -113,6 +113,48 @@ def set_active_repo(full_name: str) -> str:
         return "Set repo failed:\n" + traceback.format_exc()
 
 
+# --- branches --------------------------------------------------------------
+
+def current_branch() -> str:
+    try:
+        return porcelain.active_branch(str(_workspace())).decode()
+    except Exception:
+        return "master"
+
+
+def _default_branch(full: str) -> str:
+    try:
+        return _api("GET", f"/repos/{full}").get("default_branch", "main")
+    except Exception:
+        return "main"
+
+
+def start_branch(name: str = "") -> str:
+    """Create (if needed) and switch to a work branch at the current HEAD.
+
+    The working tree is untouched — the new branch points at the same commit,
+    so this is always safe. Default name: agent/<workspace folder>.
+    """
+    try:
+        root = _workspace()
+        if not (root / ".git").exists():
+            porcelain.init(str(root))
+        name = (name or "").strip() or ("agent/" + root.name)
+        from dulwich.repo import Repo
+        r = Repo(str(root))
+        ref = ("refs/heads/" + name).encode()
+        try:
+            head = r.head()
+            if ref not in r.refs:
+                r.refs[ref] = head
+        except KeyError:
+            pass  # no commits yet — the symref alone is enough
+        r.refs.set_symbolic_ref(b"HEAD", ref)
+        return f"On branch {name}"
+    except Exception:
+        return "Branch failed:\n" + traceback.format_exc()
+
+
 # --- git remote ----------------------------------------------------------
 
 def clone_repo(full_name: str) -> str:
@@ -136,35 +178,116 @@ def clone_repo(full_name: str) -> str:
         return "Clone failed:\n" + traceback.format_exc()
 
 
-def push() -> str:
-    """Push the active workspace to its origin (as the 'main' branch)."""
+def push(force: bool = False) -> str:
+    """Push the current branch to origin under its own name (no force by
+    default — history on the remote is never silently rewritten)."""
     try:
         root = _workspace()
         full = _remote_full_name(root)
         if not full:
             return "No repo set for this workspace (create or select one first)."
+        branch = current_branch()
+        refspec = f"refs/heads/{branch}:refs/heads/{branch}"
         try:
-            branch = porcelain.active_branch(str(root)).decode()
-        except Exception:
-            branch = "master"
-        refspec = f"refs/heads/{branch}:refs/heads/main"
-        porcelain.push(str(root), _auth_url(full), refspec, force=True)
-        return f"Pushed to {full} (main)"
+            porcelain.push(str(root), _auth_url(full), refspec, force=bool(force))
+        except Exception as e:
+            if force:
+                raise
+            return (f"Push rejected ({e}).\nThe remote {branch} has commits you "
+                    "don't have — Pull first, or use Force push if you're sure.")
+        return f"Pushed {branch} to {full}"
     except Exception:
         return "Push failed:\n" + traceback.format_exc()
 
 
+def push_force(_=None) -> str:
+    return push(force=True)
+
+
 def pull() -> str:
-    """Pull origin/main into the active workspace."""
+    """Pull the current branch (falling back to the default branch) from origin."""
     try:
         root = _workspace()
         full = _remote_full_name(root)
         if not full:
             return "No repo set for this workspace (create or select one first)."
-        porcelain.pull(str(root), _auth_url(full), b"refs/heads/main")
-        return f"Pulled from {full}"
+        branch = current_branch()
+        try:
+            porcelain.pull(str(root), _auth_url(full),
+                           f"refs/heads/{branch}".encode())
+            return f"Pulled {branch} from {full}"
+        except Exception:
+            default = _default_branch(full)
+            porcelain.pull(str(root), _auth_url(full),
+                           f"refs/heads/{default}".encode())
+            return f"Pulled {default} from {full}"
     except Exception:
         return "Pull failed:\n" + traceback.format_exc()
+
+
+# --- pull requests ---------------------------------------------------------
+
+def create_pr(title: str = "", body: str = "") -> str:
+    """Open a PR from the current branch to the repo's default branch."""
+    try:
+        root = _workspace()
+        full = _remote_full_name(root)
+        if not full:
+            return "No repo set for this workspace."
+        branch = current_branch()
+        base = _default_branch(full)
+        if branch == base:
+            return (f"You are on {base} (the default branch). Use Start branch "
+                    "first, then push, then open the PR.")
+        # Make sure the branch exists remotely before opening the PR.
+        p = push()
+        if p.startswith(("Push failed", "Push rejected")):
+            return p
+        title = (title or "").strip() or f"Agent changes on {branch}"
+        pr = _api("POST", f"/repos/{full}/pulls",
+                  {"title": title, "body": body or "Created from the phone by Voice Agent.",
+                   "head": branch, "base": base})
+        return f"PR #{pr.get('number')}: {pr.get('html_url')}"
+    except RuntimeError as e:
+        if "A pull request already exists" in str(e):
+            return pr_status()
+        return "Create PR failed:\n" + traceback.format_exc()
+    except Exception:
+        return "Create PR failed:\n" + traceback.format_exc()
+
+
+def pr_status(_=None) -> str:
+    """State + CI verdict of the open PR for the current branch, if any."""
+    try:
+        full = _remote_full_name(_workspace())
+        if not full:
+            return "No repo set for this workspace."
+        branch = current_branch()
+        owner = full.split("/")[0]
+        prs = _api("GET", f"/repos/{full}/pulls?head={owner}:{branch}&state=all&per_page=1")
+        if not prs:
+            return f"No PR for branch {branch}."
+        pr = prs[0]
+        line = f"PR #{pr['number']} [{pr['state']}"
+        if pr.get("merged_at"):
+            line += ", merged"
+        line += f"]: {pr['html_url']}"
+        try:
+            sha = pr["head"]["sha"]
+            runs = _api("GET", f"/repos/{full}/commits/{sha}/check-runs").get(
+                "check_runs", [])
+            if runs:
+                bad = [r for r in runs if r.get("conclusion") not in
+                       (None, "success", "neutral", "skipped")]
+                line += "\nCI: " + ("FAILING — " + ", ".join(r["name"] for r in bad[:5])
+                                     if bad else
+                                     ("passing" if all(r.get("status") == "completed"
+                                                        for r in runs) else "running…"))
+        except Exception:
+            pass
+        return line
+    except Exception:
+        return "PR status failed:\n" + traceback.format_exc()
 
 
 # --- file inspection -----------------------------------------------------
@@ -217,6 +340,71 @@ def latest_build() -> str:
         return f"{status} / {concl}\n{r.get('html_url')}"
     except Exception:
         return "Status check failed:\n" + traceback.format_exc()
+
+
+def ci_failure_log(_=None) -> str:
+    """Tail of the failed job's log from the most recent workflow run.
+
+    Returns "(…)"-wrapped explanations when there's nothing to fix, so
+    callers can tell 'no failure' apart from an actual log.
+    """
+    try:
+        full = _remote_full_name(_workspace())
+        if not full:
+            return "(no repo set for this session)"
+        runs = _api("GET", f"/repos/{full}/actions/runs?per_page=1").get(
+            "workflow_runs", [])
+        if not runs:
+            return "(no workflow runs yet)"
+        run = runs[0]
+        if run.get("status") != "completed":
+            return f"(latest run is still {run.get('status')} — check back when it finishes)"
+        if run.get("conclusion") == "success":
+            return "(latest run succeeded — nothing to fix)"
+        jobs = _api("GET", f"/repos/{full}/actions/runs/{run['id']}/jobs").get(
+            "jobs", [])
+        failed = [j for j in jobs if j.get("conclusion") == "failure"] or jobs[:1]
+        if not failed:
+            return "(run failed but no jobs found)"
+        job = failed[0]
+        steps = [s.get("name", "?") for s in job.get("steps", [])
+                 if s.get("conclusion") == "failure"]
+        header = (f"run '{run.get('name')}' #{run.get('run_number')} failed; "
+                  f"job '{job.get('name')}'"
+                  + (f", failed step(s): {', '.join(steps)}" if steps else ""))
+        log = _fetch_job_log(full, job["id"])
+        return header + "\n\n" + log[-12000:]
+    except Exception:
+        return "(CI log fetch failed:\n" + traceback.format_exc() + ")"
+
+
+def _fetch_job_log(full: str, job_id) -> str:
+    """GitHub returns the log as a 302 to a signed URL; the signed URL must be
+    fetched WITHOUT the Authorization header, so handle the redirect manually."""
+    import urllib.request
+    import urllib.error
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    url = f"{_API}/repos/{full}/actions/jobs/{job_id}/logs"
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {_token()}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "voice-agent",
+    })
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(req, timeout=60) as r:
+            return r.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 307):
+            signed = e.headers.get("Location")
+            with urllib.request.urlopen(signed, timeout=60) as r:
+                return r.read().decode("utf-8", errors="replace")
+        raise
 
 
 def balances() -> str:
