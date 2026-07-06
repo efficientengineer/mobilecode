@@ -17,6 +17,8 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.net.Uri
+import android.view.ViewGroup
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -33,6 +35,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -492,6 +495,7 @@ class MainActivity : AppCompatActivity() {
         "run" -> { withContext(Dispatchers.Main) { startActivity(Intent(this@MainActivity, RunActivity::class.java)) }; JSONObject().put("ok", true) }
         "updateAgent" -> withContext(Dispatchers.IO) { text(updateAgent()) }
         "updateUI" -> withContext(Dispatchers.IO) { text(updateUI()) }
+        "web.runtimeCheck" -> webRuntimeCheck()
         else -> JSONObject().put("text", "unknown action: $action")
     }
 
@@ -574,6 +578,56 @@ class MainActivity : AppCompatActivity() {
         "UI updated"
     } catch (e: Throwable) {
         "Update UI failed: ${e.message}"
+    }
+
+    // --- Headless web runtime check --------------------------------------
+    // Loads the running preview in a hidden 1x1 WebView and collects JS console
+    // errors (uncaught exceptions surface here too) over a short settle window,
+    // so the reviewer catches runtime breakage that static checks can't. Returns
+    // {url, errors:[...]} — or {skipped:true} fast when there's no web entry.
+    private suspend fun webRuntimeCheck(): JSONObject {
+        val ws = sessions.activeDir()
+        val hasWeb = withContext(Dispatchers.IO) {
+            File(ws, "index.html").exists() || ws.walkTopDown().any {
+                it.isFile && it.extension.lowercase() in setOf("html", "js", "mjs")
+            }
+        }
+        if (!hasWeb) return JSONObject().put("skipped", true).put("errors", JSONArray())
+        val url = withContext(Dispatchers.IO) {
+            py("localrun").callAttr("start")
+            py("localrun").callAttr("url").toString()
+        }
+        return withContext(Dispatchers.Main) {
+            val errors = ArrayList<String>()
+            val done = CompletableDeferred<Unit>()
+            val root = window.decorView as ViewGroup
+            val probe = WebView(this@MainActivity)
+            probe.settings.javaScriptEnabled = true
+            probe.settings.domStorageEnabled = true
+            probe.webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(cm: ConsoleMessage): Boolean {
+                    if (cm.messageLevel() == ConsoleMessage.MessageLevel.ERROR && errors.size < 25) {
+                        val src = cm.sourceId()?.substringAfterLast('/') ?: ""
+                        errors.add(cm.message() +
+                            (if (src.isNotBlank()) " ($src:${cm.lineNumber()})" else ""))
+                    }
+                    return true
+                }
+            }
+            probe.webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, u: String?) {
+                    // Settle briefly for async/module/rAF errors, then finish.
+                    probe.postDelayed({ if (!done.isCompleted) done.complete(Unit) }, 2500L)
+                }
+            }
+            root.addView(probe, ViewGroup.LayoutParams(1, 1))
+            probe.loadUrl(url)
+            // Hard ceiling in case the page never finishes loading.
+            probe.postDelayed({ if (!done.isCompleted) done.complete(Unit) }, 7000L)
+            done.await()
+            try { root.removeView(probe); probe.destroy() } catch (_: Throwable) {}
+            JSONObject().put("url", url).put("errors", JSONArray(errors.toList()))
+        }
     }
 
     // --- Aggregate model list --------------------------------------------

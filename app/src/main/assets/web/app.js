@@ -360,6 +360,36 @@ async function runTask(task, mode) {
   $("#runbar").classList.add("hidden");
   setStatus("");
   drainQueue();
+  // After an edit run, load the preview headlessly and surface any real JS
+  // runtime errors (fire-and-forget; skipped if a queued task took over).
+  if (mode !== "plan") maybeWebCheck();
+}
+
+// Load the running preview in a hidden WebView and report runtime JS errors.
+async function maybeWebCheck() {
+  if (running) return;   // a queued task started; skip to avoid clashing
+  let r;
+  try { r = await call("web.runtimeCheck"); } catch (e) { return; }
+  if (!r || r.skipped) return;
+  const errs = r.errors || [];
+  if (!errs.length) return;
+  bubble("⚠️ The preview threw runtime errors:\n" +
+    errs.slice(0, 12).map((e) => "• " + e).join("\n"), "sys");
+  addFixRuntime(errs);
+}
+
+function addFixRuntime(errs) {
+  const btn = document.createElement("button");
+  btn.className = "approve";
+  btn.textContent = "🩹 Fix runtime errors";
+  btn.onclick = () => {
+    btn.remove();
+    runTask("The running preview throws these JavaScript runtime errors — find "
+      + "the cause and fix them:\n" +
+      errs.slice(0, 15).map((e) => "- " + e).join("\n"), "code");
+  };
+  chat.appendChild(btn);
+  chat.scrollTop = chat.scrollHeight;
 }
 
 function firstLine(s) {
@@ -750,6 +780,17 @@ const actions = {
     bubble("Refreshing project map (dependency graph + outline)…", "sys");
     bubble((await call("orch", { fn: "refresh_project_map" })).text, "sys");
     refreshStats();
+  },
+  async checkWeb() {
+    bubble("Loading the preview to check for runtime errors…", "sys");
+    let r;
+    try { r = await call("web.runtimeCheck"); }
+    catch (e) { bubble("Check failed: " + e.message, "sys"); return; }
+    if (r.skipped) { bubble("No web entry point (index.html) to check.", "sys"); return; }
+    const errs = r.errors || [];
+    if (!errs.length) { bubble("✓ No runtime errors from the preview.", "sys"); return; }
+    bubble("⚠️ Runtime errors:\n" + errs.slice(0, 12).map((e) => "• " + e).join("\n"), "sys");
+    addFixRuntime(errs);
   },
   async caveman() {
     const cur = (await call("orch", { fn: "get_caveman" })).text.trim();
