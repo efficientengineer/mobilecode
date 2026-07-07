@@ -134,6 +134,7 @@ async function loadHistory() {
   } catch (e) {}
   if (!turns.length) showHome();
   refreshStats();
+  renderTree();
 }
 
 // The home screen for an empty session: game-making leads, generic coding is one
@@ -1237,6 +1238,83 @@ async function filesModal(path) {
   };
 }
 
+// --- Persistent file explorer (tree view) --------------------------------
+const treeState = { expanded: new Set(), active: "" };
+
+function buildTree(paths) {
+  const root = { dirs: {}, files: [], path: "" };
+  for (const p of paths) {
+    const parts = p.split("/");
+    let node = root, cur = "";
+    for (let i = 0; i < parts.length - 1; i++) {
+      const d = parts[i];
+      cur = cur ? cur + "/" + d : d;
+      if (!node.dirs[d]) node.dirs[d] = { dirs: {}, files: [], path: cur };
+      node = node.dirs[d];
+    }
+    node.files.push({ name: parts[parts.length - 1], path: p });
+  }
+  return root;
+}
+function fileIcon(name) {
+  const e = (name.split(".").pop() || "").toLowerCase();
+  if (["js", "ts", "jsx", "tsx", "kt", "java"].includes(e)) return "📜";
+  if (["py", "pyw"].includes(e)) return "🐍";
+  if (["json", "toml", "yaml", "yml", "ini", "cfg"].includes(e)) return "🧾";
+  if (["md", "txt"].includes(e)) return "📝";
+  if (e === "html") return "🌐";
+  if (e === "css") return "🎨";
+  if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(e)) return "🖼️";
+  return "📄";
+}
+function escAttr(s) { return escapeHtml(s).replace(/"/g, "&quot;"); }
+function treeRowHtml(o) {
+  const pad = 8 + o.depth * 14;
+  const caret = o.dir ? `<span class="tw-caret">${o.open ? "▾" : "▸"}</span>` : `<span class="tw-caret"></span>`;
+  const ico = o.dir ? (o.open ? "📂" : "📁") : fileIcon(o.name);
+  const active = !o.dir && o.path === treeState.active ? " active" : "";
+  const attr = o.dir ? `data-dir="${escAttr(o.path)}"` : `data-file="${escAttr(o.path)}"`;
+  return `<div class="tree-row${o.dir ? " dir" : ""}${active}" style="padding-left:${pad}px" ${attr}>` +
+    `${caret}<span class="tw-ico">${ico}</span><span class="tw-name">${escapeHtml(o.name)}</span></div>`;
+}
+function renderTreeNode(node, depth, out) {
+  Object.keys(node.dirs).sort((a, b) => a.localeCompare(b)).forEach((d) => {
+    const dir = node.dirs[d];
+    const open = treeState.expanded.has(dir.path);
+    out.push(treeRowHtml({ dir: true, name: d, path: dir.path, depth, open }));
+    if (open) renderTreeNode(dir, depth + 1, out);
+  });
+  node.files.sort((a, b) => a.name.localeCompare(b.name)).forEach((f) => {
+    out.push(treeRowHtml({ dir: false, name: f.name, path: f.path, depth }));
+  });
+}
+async function renderTree() {
+  const el = $("#tree");
+  if (!el) return;
+  let paths = [];
+  try { paths = JSON.parse((await call("orch", { fn: "browse_files" })).text) || []; } catch (e) {}
+  if (!paths.length) { el.innerHTML = `<div class="tree-empty">No files yet.</div>`; return; }
+  const out = [];
+  renderTreeNode(buildTree(paths), 0, out);
+  el.innerHTML = out.join("");
+  el.querySelectorAll("[data-dir]").forEach((row) => {
+    row.onclick = () => {
+      const p = row.getAttribute("data-dir");
+      if (treeState.expanded.has(p)) treeState.expanded.delete(p);
+      else treeState.expanded.add(p);
+      renderTree();
+    };
+  });
+  el.querySelectorAll("[data-file]").forEach((row) => {
+    row.onclick = () => {
+      treeState.active = row.getAttribute("data-file");
+      el.querySelectorAll(".tree-row.active").forEach((x) => x.classList.remove("active"));
+      row.classList.add("active");
+      showFile(treeState.active);
+    };
+  });
+}
+
 // --- Syntax highlighting -------------------------------------------------
 // A small, dependency-free highlighter. It tokenizes the RAW text and only
 // wraps recognized tokens in <span>s (everything is HTML-escaped), so the
@@ -1318,7 +1396,7 @@ async function showFile(rel) {
     async () => {
       const res = await call("py.call", { module: "orchestrator", fn: "write_ws_file", args: [rel, area.value] });
       $("#edStatus").textContent = res.text || "";
-      if ((res.text || "").startsWith("Saved")) { saved = area.value; setDirty(); }
+      if ((res.text || "").startsWith("Saved")) { saved = area.value; setDirty(); renderTree(); }
       return true; // keep the editor open after saving
     });
   $("#modalOk").textContent = "Save";
@@ -1526,6 +1604,13 @@ $("#micBtn").onclick = () => {
   }
 };
 $("#stopBtn").onclick = () => { $("#runlabel").textContent = "Stopping…"; call("orch", { fn: "interrupt" }); };
+const _exRefresh = $("#explorerRefresh");
+if (_exRefresh) _exRefresh.onclick = () => renderTree();
+const _exToggle = $("#explorerToggle");
+if (_exToggle) _exToggle.onclick = () => {
+  const collapsed = $("#explorer").classList.toggle("collapsed");
+  _exToggle.textContent = collapsed ? "▸" : "▾";
+};
 document.querySelectorAll(".mode").forEach((b) => {
   b.onclick = () => {
     document.querySelectorAll(".mode").forEach((x) => x.classList.remove("active"));

@@ -21,47 +21,62 @@
     </div>
   </header>
 
-  <div id="subbar">
-    <button id="modelChip" class="chip" data-act="modelSwitch" title="Switch model">Model: <span id="modelName">…</span> ▾</button>
-    <button id="clearChip" class="chip" data-act="clearContext">Clear</button>
-    <button id="usage" class="chip usagechip hidden" title="tokens this run — tap for detail"></button>
-    <div id="balance" class="balchip">—</div>
-  </div>
+  <div id="workspace">
+    <aside id="explorer">
+      <div id="explorer-head">
+        <span id="explorer-title">Explorer</span>
+        <span id="explorer-actions">
+          <button id="explorerRefresh" class="txtbtn xs" title="Refresh files">⟳</button>
+          <button id="explorerToggle" class="txtbtn xs" title="Collapse">▾</button>
+        </span>
+      </div>
+      <div id="tree"></div>
+    </aside>
 
-  <main id="chat"></main>
+    <div id="mainCol">
+      <div id="subbar">
+        <button id="modelChip" class="chip" data-act="modelSwitch" title="Switch model">Model: <span id="modelName">…</span> ▾</button>
+        <button id="clearChip" class="chip" data-act="clearContext">Clear</button>
+        <button id="usage" class="chip usagechip hidden" title="tokens this run — tap for detail"></button>
+        <div id="balance" class="balchip">—</div>
+      </div>
 
-  <div id="todos" class="hidden">
-    <div id="todos-head">
-      <span id="todos-now"></span>
-      <span id="todos-count"></span>
-      <span id="todos-chev">▸</span>
+      <main id="chat"></main>
+
+      <div id="todos" class="hidden">
+        <div id="todos-head">
+          <span id="todos-now"></span>
+          <span id="todos-count"></span>
+          <span id="todos-chev">▸</span>
+        </div>
+        <div id="todos-body"></div>
+      </div>
+
+      <div id="status"></div>
+
+      <div id="runbar" class="hidden">
+        <span id="runlabel">Working…</span>
+        <div id="queueChips"></div>
+        <button id="stopBtn" class="pill stop">Stop</button>
+      </div>
+
+      <div id="attachBar" class="hidden"></div>
+
+      <div id="modes">
+        <button class="mode active" data-mode="auto">Auto</button>
+        <button class="mode" data-mode="chat">Talk</button>
+        <button class="mode" data-mode="code">Code</button>
+        <button class="mode" data-mode="plan">Plan</button>
+      </div>
+
+      <footer id="composer">
+        <textarea id="input" rows="1" placeholder="Type or dictate a task…"></textarea>
+        <button id="askBtn" class="icon" title="Ask (not saved to context)">❓</button>
+        <button id="sendBtn" class="pill">Send</button>
+        <button id="micBtn" class="txtbtn">Speak</button>
+      </footer>
     </div>
-    <div id="todos-body"></div>
   </div>
-
-  <div id="status"></div>
-
-  <div id="runbar" class="hidden">
-    <span id="runlabel">Working…</span>
-    <div id="queueChips"></div>
-    <button id="stopBtn" class="pill stop">Stop</button>
-  </div>
-
-  <div id="attachBar" class="hidden"></div>
-
-  <div id="modes">
-    <button class="mode active" data-mode="auto">Auto</button>
-    <button class="mode" data-mode="chat">Talk</button>
-    <button class="mode" data-mode="code">Code</button>
-    <button class="mode" data-mode="plan">Plan</button>
-  </div>
-
-  <footer id="composer">
-    <textarea id="input" rows="1" placeholder="Type or dictate a task…"></textarea>
-    <button id="askBtn" class="icon" title="Ask (not saved to context)">❓</button>
-    <button id="sendBtn" class="pill">Send</button>
-    <button id="micBtn" class="txtbtn">Speak</button>
-  </footer>
 
   <!-- Slide-up menu -->
   <div id="menu" class="sheet hidden">
