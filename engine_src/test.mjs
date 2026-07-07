@@ -70,6 +70,10 @@ import { ailments } from './engine/control/ailments.js';
 import { encounters } from './engine/control/encounters.js';
 import { rewards } from './engine/control/rewards.js';
 import { commands } from './engine/control/commands.js';
+import { calendar } from './engine/control/calendar.js';
+import { crops } from './engine/control/crops.js';
+import { weather } from './engine/control/weather.js';
+import { energy } from './engine/control/energy.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -2584,6 +2588,164 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   check('commands: swdTech QuadraSlam sweeps all enemies', t3.length === 2 && t3.tier === 'QuadraSlam');
 
   check('commands bundle exposes the verbs', ['makeCommandSet', 'baseCommands', 'attack', 'magic', 'item', 'steal', 'blitz', 'swdTech', 'tools', 'lore', 'hurl'].every((k) => typeof commands[k] === 'function'));
+}
+
+
+// ===== Stardew Round 11 (farm-sim core): calendar / crops / weather / energy =====
+
+{
+  const cal = calendar.makeCalendar();
+  check('cal starts 6:00 spring 1', cal.clock().hour === 6 && cal.date().day === 1 && cal.date().season === 'spring');
+  check('cal format', cal.format() === 'Mon, Spring 1, 6:00');
+  check('cal tick event', cal.advance(10).some(e => e.type === 'tick' && e.minute === 10));
+  check('cal hour event', cal.advance(50).some(e => e.type === 'hour' && e.hour === 7));
+
+  const mid = calendar.makeCalendar();
+  const em = mid.advance((24 - 6) * 60 + 30); // 6:00 -> 0:30
+  check('cal midnight rolls day', em.some(e => e.type === 'dayRolled' && e.day === 2) && mid.date().day === 2);
+  check('cal night after midnight', mid.isNight === true);
+
+  const po = calendar.makeCalendar();
+  po.advance((26 - 6) * 60 + 120); // past 2am
+  check('cal passes out at 2am', po.passOut === true);
+  check('cal frozen while out', po.advance(60).length === 0);
+  const woke = po.sleep();
+  check('cal sleep to 6am clears passOut', po.clock().hour === 6 && po.passOut === false);
+  check('cal no double roll after midnight', !woke.some(e => e.type === 'dayRolled') && po.date().day === 2);
+
+  const ev = calendar.makeCalendar();
+  ev.advance(600); // 16:00 same day
+  check('cal evening sleep rolls once', ev.sleep().filter(e => e.type === 'dayRolled').length === 1 && ev.date().day === 2);
+
+  const yr = calendar.makeCalendar();
+  for (let i = 0; i < 28 * 4 - 1; i++) yr.sleep(); // winter 28
+  const rolled = yr.sleep();
+  check('cal season 4 -> next year', rolled.some(e => e.type === 'yearRolled' && e.year === 2) && yr.date().season === 'spring' && yr.date().year === 2);
+
+  const dow = calendar.makeCalendar();
+  dow.sleep();
+  check('cal day 2 is Tue', dow.date().dayOfWeek === 'Tue');
+
+  const a = calendar.makeCalendar(), b = calendar.makeCalendar();
+  a.advance(123.7); b.advance(123.7);
+  check('cal deterministic + fractional carry', a.format() === b.format());
+}
+
+{
+  const parsnip = { id: 'parsnip', name: 'Parsnip', seasons: ['spring'], stages: [1, 1, 1, 1], produce: 'parsnip', yield: 1 };
+  const beans = { id: 'beans', name: 'Green Bean', seasons: ['spring'], stages: [1, 2, 2, 2, 3], produce: 'bean', regrow: 3, yield: 2 };
+  const book = crops.makeCropbook([parsnip, beans]);
+  check('crops get', book.get('parsnip') === parsnip);
+  check('crops all', book.all().length === 2);
+  check('crops inSeason yes', book.inSeason('parsnip', 'spring') === true);
+  check('crops inSeason no', book.inSeason('parsnip', 'fall') === false);
+
+  let p = crops.makePlot();
+  check('crops plant untilled fails', crops.plant(p, parsnip, 'spring') === false);
+  crops.till(p);
+  check('crops tilled', p.tilled === true);
+  check('crops plant off-season fails', crops.plant(p, parsnip, 'fall') === false);
+  check('crops plant in season ok', crops.plant(p, parsnip, 'spring') === true);
+  check('crops plant occupied fails', crops.plant(p, beans, 'spring') === false);
+
+  crops.growDay(p, { season: 'spring' });
+  check('crops unwatered stalls', p.stage === 0 && !p.readyToHarvest);
+  crops.water(p);
+  check('crops watered flag', p.watered === true);
+  crops.growDay(p, { season: 'spring' });
+  check('crops watered advances', p.stage === 1);
+  crops.endOfDayReset(p);
+  check('crops reset clears water', p.watered === false);
+  crops.growDay(p, { season: 'spring', rained: true });
+  check('crops rain advances', p.stage === 2);
+  crops.growDay(p, { season: 'spring', rained: true });
+  crops.growDay(p, { season: 'spring', rained: true });
+  check('crops matured', p.readyToHarvest === true && p.stage === 4);
+  crops.growDay(p, { season: 'spring', rained: true });
+  check('crops ripe does not overgrow', p.stage === 4);
+
+  const drop = crops.harvest(p);
+  check('crops harvest drop', drop && drop.produce === 'parsnip' && drop.qty === 1);
+  check('crops one-shot cleared', p.crop === null && p.tilled === true);
+  check('crops harvest empty null', crops.harvest(p) === null);
+
+  let q = crops.makePlot();
+  crops.till(q); crops.plant(q, beans, 'spring');
+  const total = beans.stages.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < total; i++) { crops.water(q); crops.growDay(q, { season: 'spring' }); crops.endOfDayReset(q); }
+  check('crops regrow first ripe', q.readyToHarvest === true);
+  const d1 = crops.harvest(q);
+  check('crops regrow drop qty', d1.qty === 2 && d1.produce === 'bean');
+  check('crops regrow keeps roots', q.crop === beans && q.regrowLeft === 3 && !q.readyToHarvest);
+  for (let i = 0; i < 3; i++) { crops.water(q); crops.growDay(q, { season: 'spring' }); crops.endOfDayReset(q); }
+  check('crops regrow re-ripens', q.readyToHarvest === true);
+  check('crops regrow harvest again', crops.harvest(q).qty === 2);
+
+  let r = crops.makePlot();
+  crops.till(r); crops.plant(r, parsnip, 'spring'); crops.water(r);
+  crops.growDay(r, { season: 'summer' });
+  check('crops season change kills', r.dead === true && !r.readyToHarvest);
+  crops.water(r); crops.growDay(r, { season: 'spring' });
+  check('crops dead stays dead', r.dead === true && r.stage === 0);
+}
+
+{
+  // self-contained: seeded LCG -> ()=>0..1
+  const lcg = (s) => () => (s = (s * 1103515245 + 12345) & 0x7fffffff, s / 0x7fffffff);
+  const { makeWeather, effects } = weather;
+
+  // determinism: same seed -> same season of weather
+  const a = makeWeather({ rng: lcg(42) }), b = makeWeather({ rng: lcg(42) });
+  const sa = [], sb = [];
+  for (let i = 0; i < 20; i++) { sa.push(a.roll('spring').kind); sb.push(b.roll('spring').kind); }
+  check('weather deterministic sequence', sa.join() === sb.join());
+  check('weather today tracks last', a.today().kind === sa[19]);
+  check('weather today null before roll', makeWeather({ rng: lcg(1) }).today() === null);
+
+  // flag semantics
+  check('weather rain rainsCrops', effects('rain').rainsCrops === true && effects('rain').lightning === false);
+  check('weather storm lightning', effects('storm').rainsCrops === true && effects('storm').lightning === true);
+  check('weather sun dry', effects('sun').rainsCrops === false && effects('sun').wateringNeeded === true);
+  check('weather effects fresh copy', effects('rain') !== effects('rain'));
+  check('weather unknown kind -> sun', effects('zzz').rainsCrops === false);
+
+  // forecast peeks without committing, then roll honors it
+  const w = makeWeather({ rng: lcg(7) });
+  const peek = w.forecast('summer');
+  check('weather forecast stable', w.forecast('summer').kind === peek.kind);
+  check('weather roll honors forecast', w.roll('summer').kind === peek.kind);
+  check('weather forecast advances', typeof w.forecast('summer').kind === 'string');
+  const r = w.roll('spring');
+  check('weather roll shape', 'kind' in r && 'rainsCrops' in r && 'lightning' in r && 'indoorsBonus' in r);
+
+  // winter never rains/storms but snows
+  const win = makeWeather({ rng: lcg(999) });
+  let snow = 0, wet = 0;
+  for (let i = 0; i < 500; i++) { const k = win.roll('winter').kind; if (k === 'snow') snow++; if (k === 'rain' || k === 'storm') wet++; }
+  check('weather winter never rains', wet === 0);
+  check('weather winter snows', snow > 0);
+
+  // weights honored over many rolls (spring: sun>rain>storm)
+  const sp = makeWeather({ rng: lcg(123) });
+  const cnt = { sun: 0, rain: 0, storm: 0, wind: 0, snow: 0 };
+  for (let i = 0; i < 4000; i++) cnt[sp.roll('spring').kind]++;
+  check('weather weights sun>rain', cnt.sun > cnt.rain);
+  check('weather weights rain>storm', cnt.rain > cnt.storm);
+
+  // custom table + missing-season fallback
+  const cust = makeWeather({ rng: lcg(5), tables: { spring: [{ weight: 1, kind: 'wind' }] } });
+  check('weather custom table', cust.roll('spring').kind === 'wind');
+  check('weather missing season no crash', typeof cust.roll('mars').kind === 'string');
+
+  check('weather bundle wiring', typeof weather.makeWeather === 'function' && Array.isArray(weather.KINDS));
+}
+
+{
+  const mk = energy.makeVitals;
+  const v = mk();
+  check('energy default full', v.energy === 270);
+  check('energy spend blocks', v.spend(999) === false);
+  check('energy exhausted', v.exhausted === true);
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
