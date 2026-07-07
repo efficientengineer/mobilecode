@@ -1545,6 +1545,7 @@ function showEditorEmpty() {
   if (pane) { pane.classList.add("hidden"); pane.innerHTML = ""; }
   if (empty) empty.classList.remove("hidden");
   if (fab) fab.classList.add("hidden");
+  const cp = $("#cursorPos"); if (cp) cp.textContent = "";
 }
 
 // Debounced auto-save.
@@ -1600,7 +1601,6 @@ function renderEditor() {
     `<div class="editor">
        <div class="editor-body">
          <div class="editor-code">
-           <div class="editor-lines" id="edLines" aria-hidden="true"></div>
            <pre class="editor-hl" id="edHl" aria-hidden="true"></pre>
            <textarea class="editor-area" id="edArea" spellcheck="false"
                      autocomplete="off" autocapitalize="off" autocorrect="off"></textarea>
@@ -1622,17 +1622,19 @@ function renderEditor() {
        </div>
      </div>`;
 
-  const area = $("#edArea"), gutter = $("#edLines"), hl = $("#edHl");
+  const area = $("#edArea"), hl = $("#edHl");
   area.value = tab.content;
 
-  function renderGutter() {
-    const lines = area.value.split("\n").length;
-    let s = "";
-    for (let i = 1; i <= lines; i++) s += i + "\n";
-    gutter.textContent = s;
-  }
   function renderHl() { hl.innerHTML = highlightCode(area.value, hlLang); }
-  function refresh() { renderGutter(); renderHl(); findMatches(); }
+  // Show the caret's line/column in the tab bar.
+  function updatePos() {
+    const el = $("#cursorPos"); if (!el) return;
+    const upto = area.value.slice(0, area.selectionStart);
+    const line = upto.split("\n").length;
+    const col = upto.length - upto.lastIndexOf("\n"); // 1-based within the line
+    el.textContent = `Ln ${line}, Col ${col}`;
+  }
+  function refresh() { renderHl(); findMatches(); updatePos(); }
   // Any edit updates the tab buffer, flags dirty, and schedules an auto-save.
   function onEdit() {
     tab.content = area.value;
@@ -1642,10 +1644,11 @@ function renderEditor() {
   }
   area.addEventListener("input", onEdit);
   area.addEventListener("scroll", () => {
-    gutter.scrollTop = area.scrollTop;
     hl.scrollTop = area.scrollTop;
     hl.scrollLeft = area.scrollLeft;
   });
+  // Caret moves that aren't edits (click, arrows, selection) update the readout.
+  ["keyup", "click", "select", "focus"].forEach((ev) => area.addEventListener(ev, updatePos));
   area.addEventListener("keydown", (ev) => {
     if (ev.key === "Tab") {
       ev.preventDefault();
