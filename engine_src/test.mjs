@@ -56,6 +56,8 @@ import { menus } from './engine/control/menus.js';
 import { touchlayout } from './engine/control/touchlayout.js';
 import { tutorial } from './engine/control/tutorial.js';
 import { tilemap } from './engine/control/tilemap.js';
+import { tilecollision } from './engine/control/tilecollision.js';
+import { rooms } from './engine/control/rooms.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -1863,6 +1865,80 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   check('tilemap layer idempotent', map.layer('decor').get(2, 1) === 7);
   const blank = tilemap.makeTilemap({ w: 3, h: 3, fill: 0 });
   check('tilemap blank defaults', blank.isSolid(1, 1) === false && blank.get(1, 1) === 0);
+}
+
+
+// ===== Round 8 (world layer): tilecollision / rooms =====
+
+{
+  // Tiny room: '#' solid, '.' open. Row index = z, col index = x, tileSize 1.
+  const rows = ['#####', '#...#', '#.#.#', '#...#', '#####'];
+  const H = rows.length, W = rows[0].length;
+  const isSolid = (tx, tz) => (tz < 0 || tz >= H || tx < 0 || tx >= W) ? true : rows[tz][tx] === '#';
+
+  // Diagonal into the top wall: Z stops, X slides.
+  const e = { pos: [2.5, 0, 1.5], vel: [0, 0, 0] };
+  const r = tilecollision.moveAndCollide(e, 0.6, -1.0, isSolid, { size: 0.3, tileSize: 1 });
+  check('tilecollision: hitZ against top wall', r.hitZ === true);
+  check('tilecollision: slides on free X axis', r.moved[0] > 0.4);
+  check('tilecollision: does not enter solid', !tilecollision.overlapsSolid(e.pos[0], e.pos[2], 0.3, isSolid, 1));
+
+  // Straight into left wall: fully stopped on X, Z untouched.
+  const e2 = { pos: [1.5, 0, 1.5], vel: [0, 0, 0] };
+  const r2 = tilecollision.moveAndCollide(e2, -1.0, 0, isSolid, { size: 0.3 });
+  check('tilecollision: hitX flush at wall', r2.hitX === true && Math.abs(e2.pos[0] - 1.3) < 1e-6);
+  check('tilecollision: perpendicular axis untouched', e2.pos[2] === 1.5);
+
+  // Open move applies fully.
+  const e3 = { pos: [1.5, 0, 1.5], vel: [0, 0, 0] };
+  const r3 = tilecollision.moveAndCollide(e3, 0.3, 0.2, isSolid, { size: 0.2 });
+  check('tilecollision: open move unblocked', !r3.hitX && !r3.hitZ && Math.abs(r3.moved[0] - 0.3) < 1e-9);
+
+  // Depenetrate a body overlapping the left wall.
+  const dep = tilecollision.resolveCircleVsTiles([1.1, 0, 2.5], 0.3, isSolid, 1);
+  check('tilecollision: depenetrate reports hit', dep.hit === true);
+  check('tilecollision: depenetrate clears overlap', !tilecollision.overlapsSolid(dep.pos[0], dep.pos[2], 0.3, isSolid, 1));
+
+  // Ray hits the NEAR wall (the pillar at (2,2)) before the far outer wall.
+  const hit = tilecollision.rayTile([2.5, 0, 3.5], [2.5, 0, -2], isSolid, 1);
+  check('tilecollision: ray hits near pillar', hit && hit.tile[0] === 2 && hit.tile[1] === 2);
+  check('tilecollision: ray t in (0,1)', hit && hit.t > 0 && hit.t < 1);
+  const clear = tilecollision.rayTile([1.5, 0, 3.5], [1.5, 0, 1.5], isSolid, 1);
+  check('tilecollision: clear line of sight is null', clear === null);
+}
+
+{
+  // rooms: two side-by-side screens wired via neighbors, plus a locked boss door.
+  const w = rooms.makeWorld({
+    start: 'A',
+    rooms: [
+      { id: 'A', bounds: { min: [0, 0], max: [16, 16] }, neighbors: { east: 'B' } },
+      { id: 'B', bounds: { min: [16, 0], max: [32, 16] }, neighbors: { west: 'A' } },
+      { id: 'C', bounds: { min: [16, 16], max: [32, 32] } },
+    ],
+  });
+  check('rooms: starts in A', w.current().id === 'A');
+  check('rooms: A visited, B not', w.visited('A') && !w.visited('B'));
+
+  // Standing on A's east edge reports an open door to B with a landing spot.
+  const hit = w.tryDoor([15.9, 0, 8]);
+  check('rooms: east edge -> B open', hit && hit.to === 'B' && !hit.locked);
+  check('rooms: landing keeps z, lands inside B', hit.at && Math.abs(hit.at[2] - 8) < 1e-6 && hit.at[0] > 16 && hit.at[0] < 18);
+
+  // Walk through it: active room switches, B becomes visited, camera clamps to B.
+  const rb = w.enter(hit.to, { at: hit.at });
+  check('rooms: entered B', w.current().id === 'B' && rb.id === 'B' && w.visited('B'));
+  check('rooms: no door mid-room', w.tryDoor([24, 0, 8]) === null);
+  const cam = w.cameraBounds();
+  check('rooms: camera clamps to B', cam.min[0] === 16 && cam.max[0] === 32);
+
+  // A locked door blocks and names the key it needs, until the key is spent.
+  w.door('B', { at: [24, 8], radius: 1 }, 'C', { locked: true, key: 'boss', id: 'bossdoor', at: [24, 24] });
+  const locked = w.tryDoor([24, 0, 8]);
+  check('rooms: locked door reports key needed', locked && locked.locked && locked.needs === 'boss' && locked.at === null);
+  check('rooms: spend key opens it', w.unlock('boss') === true);
+  const opened = w.tryDoor([24, 0, 8]);
+  check('rooms: door now open with landing', opened && !opened.locked && opened.needs === null && opened.at[0] === 24 && opened.at[2] === 24);
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
