@@ -248,9 +248,12 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 #editorPane.hidden { display: none; }
 
 /* Floating chat button + agent drawer (slides in from the right). */
-#chatFab { position: fixed; z-index: 50; right: 14px; bottom: 16px; width: 56px; height: 56px;
+/* Low z by default so the top-bar menu dropdowns (z 45) always sit above it and
+   stay clickable. Raised above the drawer only while the chat is open. */
+#chatFab { position: fixed; z-index: 20; right: 14px; bottom: 16px; width: 56px; height: 56px;
   border-radius: 28px; background: var(--accent); color: #fff; font-size: 24px; border: none;
   display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(0,0,0,.5); }
+#chatFab.chat-open { z-index: 65; }
 #chatFab:active { opacity: .85; }
 #chatFab .unread { position: absolute; top: 8px; right: 10px; width: 12px; height: 12px;
   border-radius: 6px; background: #f87171; border: 2px solid var(--accent); }
@@ -264,6 +267,8 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 #chatDrawer.open { transform: translateX(0); }
 #chatDrawer-head { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
   padding: 10px 14px; border-bottom: 1px solid var(--border); font-weight: 700; }
+/* Leave room at the bottom-right for the ✕ toggle so it never covers Speak. */
+#chatDrawer #composer { padding-right: 76px; }
 
 /* File viewer / editor (VS Code style: highlighting + gutter + find/replace).
    Zero chrome around the code so the gutter hugs the left edge — no wasted space. */

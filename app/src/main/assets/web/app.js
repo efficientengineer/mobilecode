@@ -77,17 +77,25 @@ let _loadingHistory = false;
 // --- Agent chat drawer (slides in from the right; toggled by the 💬 button) --
 function chatIsOpen() { const d = $("#chatDrawer"); return !!(d && d.classList.contains("open")); }
 function setChatUnread(on) { const u = $("#chatUnread"); if (u) u.classList.toggle("hidden", !on); }
+function setChatFabIcon(open) {
+  const icon = $("#chatFabIcon"); if (icon) icon.textContent = open ? "✕" : "💬";
+  const fab = $("#chatFab");
+  if (fab) { fab.classList.toggle("chat-open", open); fab.title = open ? "Close chat" : "Agent chat"; }
+}
 function openChat() {
   const d = $("#chatDrawer"); if (!d) return;
   d.classList.add("open");
   const b = $("#chatBackdrop"); if (b) b.classList.remove("hidden");
   setChatUnread(false);
+  setChatFabIcon(true);
   const c = $("#chat"); if (c) setTimeout(() => { c.scrollTop = c.scrollHeight; }, 60);
 }
 function closeChat() {
   const d = $("#chatDrawer"); if (d) d.classList.remove("open");
   const b = $("#chatBackdrop"); if (b) b.classList.add("hidden");
+  setChatFabIcon(false);
 }
+function toggleChat() { chatIsOpen() ? closeChat() : openChat(); }
 
 // --- DOM helpers ---------------------------------------------------------
 const $ = (s) => document.querySelector(s);
@@ -1719,7 +1727,7 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".fab") && !e.target.closest(".fabmenu")) closeFabMenus();
 });
 wireExplorerResize();
-$("#chatFab").onclick = openChat;
+$("#chatFab").onclick = toggleChat;
 $("#chatDrawerClose").onclick = closeChat;
 $("#chatBackdrop").onclick = closeChat;
 document.querySelectorAll("[data-act]").forEach((b) => {
