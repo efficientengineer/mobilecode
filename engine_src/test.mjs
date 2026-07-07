@@ -63,6 +63,8 @@ import { melee } from './engine/control/melee.js';
 import { stats } from './engine/control/stats.js';
 import { elements } from './engine/control/elements.js';
 import { spells } from './engine/control/spells.js';
+import { formulas } from './engine/control/formulas.js';
+import { battle } from './engine/control/battle.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -2146,6 +2148,144 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   const me = { mp: 5, hp: 10, maxHp: 50 };
   const selfT = targets({ name: 'S', mp: 0, power: 10, kind: 'heal', target: 'self' }, {}, { caster: me });
   check('spells: resolver/status/self', custom[0].amount === 7 && custom[0].crit === true && stFoe.statuses.includes('poison') && selfT.length === 1 && selfT[0] === me);
+}
+
+
+// ===== FF6 Round 9 (battle core): formulas / battle (ATB) =====
+
+{
+  // deterministic fake rng (LCG) — varied stream for miss/crit/variance rolls
+  const mkRng = (s) => { let a = s >>> 0; return { next() { a = (a * 1664525 + 1013904223) >>> 0; return a / 4294967296; } }; };
+
+  // higher def lowers physical damage; crit multiplies
+  const lo = formulas.physical({ atk: 48, def: 10, power: 1, level: 10 }).amount;
+  const hi = formulas.physical({ atk: 48, def: 200, power: 1, level: 10 }).amount;
+  check('formulas: def lowers dmg', hi < lo && lo > 0);
+  const nc = formulas.physical({ atk: 48, def: 40, power: 1, level: 10 }).amount;
+  const cc = formulas.physical({ atk: 48, def: 40, power: 1, level: 10, crit: true });
+  check('formulas: crit multiplies', cc.crit === true && Math.abs(cc.amount - nc * 2) <= 1);
+
+  // level + power scale up
+  check('formulas: level scales', formulas.physical({ atk: 48, def: 40, level: 20 }).amount > formulas.physical({ atk: 48, def: 40, level: 1 }).amount);
+  check('formulas: power scales', formulas.physical({ atk: 48, def: 40, power: 2 }).amount > formulas.physical({ atk: 48, def: 40, power: 1 }).amount);
+
+  // magical mitigated by mdef; heal positive
+  check('formulas: mdef lowers magic', formulas.magical({ magic: 40, mdef: 5, power: 40 }).amount > formulas.magical({ magic: 40, mdef: 200, power: 40 }).amount);
+  check('formulas: heal positive', formulas.heal({ magic: 36, power: 40 }) > 0);
+
+  // hit chance: full at 0 evade, low at high evade, percentage inputs work
+  check('formulas: full hit', formulas.hitChance({ accuracy: 1, evade: 0 }) === 1);
+  check('formulas: high evade misses', formulas.hitChance({ accuracy: 1, evade: 0.9 }) < 0.2);
+  check('formulas: pct inputs', Math.abs(formulas.hitChance({ accuracy: 100, evade: 25 }) - 0.75) < 1e-9);
+  check('formulas: rollHit auto', formulas.rollHit(null, 1) === true && formulas.rollHit(mkRng(1), 0) === false);
+
+  // variance stays within ±spread; backRow halves
+  let inBounds = true; const rv = mkRng(7);
+  for (let i = 0; i < 100; i++) { const v = formulas.variance(rv, 100, 0.15); if (v < 85 - 1e-9 || v > 115 + 1e-9) inBounds = false; }
+  check('formulas: variance in bounds', inBounds);
+  check('formulas: backRow halves', formulas.backRow(101) === 50);
+
+  // resolveAttack: misses appear vs high evade, clean hit vs 0 evade
+  let miss = false;
+  for (let i = 0; i < 60; i++) { if (formulas.resolveAttack({ attacker: { vigor: 24, level: 10 }, defender: { defense: 40, evade: 0.95 }, weapon: { power: 1 }, rng: mkRng(i + 1) }).missed) miss = true; }
+  check('formulas: high evade produces misses', miss);
+  const clean = formulas.resolveAttack({ attacker: { vigor: 24, level: 10 }, defender: { defense: 40, evade: 0 }, weapon: { power: 1 }, rng: mkRng(3) });
+  check('formulas: clean hit', clean.missed === false && clean.amount > 0);
+
+  // element: weakness doubles, absorb heals (negative), null immune
+  const norm = formulas.resolveAttack({ attacker: { magic: 40, level: 10 }, defender: { mdefense: 30 }, spell: { power: 40, element: 'fire' }, rng: mkRng(5) });
+  const weak = formulas.resolveAttack({ attacker: { magic: 40, level: 10 }, defender: { mdefense: 30, affinity: { fire: 'weak' } }, spell: { power: 40, element: 'fire' }, rng: mkRng(5) });
+  const drain = formulas.resolveAttack({ attacker: { magic: 40, level: 10 }, defender: { mdefense: 30, affinity: { fire: 'absorb' } }, spell: { power: 40, element: 'fire' }, rng: mkRng(5) });
+  const nul = formulas.resolveAttack({ attacker: { magic: 40, level: 10 }, defender: { mdefense: 30, affinity: { fire: 'null' } }, spell: { power: 40, element: 'fire' }, rng: mkRng(5) });
+  check('formulas: weakness doubles', weak.amount > norm.amount && weak.tag === 'weak');
+  check('formulas: absorb heals', drain.amount < 0 && drain.tag === 'absorb');
+  check('formulas: null immune', nul.amount === 0 && nul.tag === 'null');
+
+  // deterministic given seed
+  const a = formulas.resolveAttack({ attacker: { vigor: 24, level: 10 }, defender: { defense: 40 }, weapon: { power: 1, crit: 0.25 }, rng: mkRng(42) });
+  const b = formulas.resolveAttack({ attacker: { vigor: 24, level: 10 }, defender: { defense: 40 }, weapon: { power: 1, crit: 0.25 }, rng: mkRng(42) });
+  check('formulas: deterministic', a.amount === b.amount && a.crit === b.crit);
+}
+
+{
+  const mkRng = (seq) => { let i = 0; return { next: () => seq[i++ % seq.length] }; };
+  const mk = (id, side, speed) => ({ id, side, speed, alive: true, hp: 30 });
+  const perform = (action, ctx) => {
+    if (action.kind === 'attack') {
+      const t = ctx.unit(action.target);
+      t.hp -= action.dmg ?? 100;
+      if (t.hp <= 0) t.alive = false;
+      return [{ target: t.id }];
+    }
+    return [];
+  };
+  // faster unit readies first + gaugeFull event
+  {
+    const a = mk('a', 'ally', 10), e = mk('e', 'enemy', 5);
+    const b = battle.makeBattle({ allies: [a], enemies: [e], rng: mkRng([0.9]), perform });
+    let evs = [];
+    for (let i = 0; i < 20 && !b.isReady('a'); i++) evs = evs.concat(b.step(0.01));
+    check('battle: faster ally readies first', b.isReady('a') && !b.isReady('e'));
+    check('battle: gaugeFull event', evs.some((x) => x.type === 'gaugeFull' && x.unit.id === 'a'));
+    check('battle: order() ready first', b.order()[0].id === 'a');
+  }
+  // submit executes, resets gauge, ko + victory
+  {
+    const a = mk('a', 'ally', 10), e = mk('e', 'enemy', 5);
+    const b = battle.makeBattle({ allies: [a], enemies: [e], rng: mkRng([0.9]), perform });
+    while (!b.isReady('a')) b.step(0.05);
+    check('battle: submit ready ok', b.submit('a', { kind: 'attack', target: 'e', dmg: 100 }) === true);
+    const ev = b.step(0.01);
+    check('battle: acted event', ev.some((x) => x.type === 'acted' && x.unit.id === 'a'));
+    check('battle: gauge reset after acting', b.gauge('a') === 0 && !b.isReady('a'));
+    check('battle: ko event on kill', ev.some((x) => x.type === 'ko' && x.unit.id === 'e'));
+    check('battle: victory when enemies down', ev.some((x) => x.type === 'victory') && b.result() === 'victory');
+    check('battle: submit on dead fails', b.submit('e', {}) === false);
+  }
+  // defeat when allies down
+  {
+    const a = mk('a', 'ally', 5), e = mk('e', 'enemy', 10);
+    const b = battle.makeBattle({ allies: [a], enemies: [e], rng: mkRng([0.9]), perform });
+    while (!b.isReady('e')) b.step(0.05);
+    b.submit('e', { kind: 'attack', target: 'a', dmg: 100 });
+    const ev = b.step(0.01);
+    check('battle: defeat when party down', ev.some((x) => x.type === 'defeat') && b.result() === 'defeat');
+  }
+  // haste makes gauge climb faster
+  {
+    const a = mk('a', 'ally', 5), c = mk('c', 'ally', 5), e = mk('e', 'enemy', 5);
+    const b = battle.makeBattle({ allies: [a, c], enemies: [e], rng: mkRng([0.9]), perform });
+    b.haste('a', 3); b.step(0.02);
+    check('battle: hasted gauge climbs faster', b.gauge('a') > b.gauge('c'));
+    b.slow('c', 0.5);
+    check('battle: rate readback', b.rate('a') === 3 && b.rate('c') === 0.5);
+  }
+  // escape + pause + wait mode
+  {
+    const a = mk('a', 'ally', 10), e = mk('e', 'enemy', 10);
+    const b = battle.makeBattle({ allies: [a], enemies: [e], rng: mkRng([0.9]), perform });
+    check('battle: escape fails on miss', b.escape(mkRng([0.9]), 0.5) === false);
+    check('battle: escape succeeds', b.escape(mkRng([0.1]), 0.5) === true);
+    check('battle: fled event next step', b.step(0.01).some((x) => x.type === 'fled') && b.isOver());
+  }
+  {
+    const a = mk('a', 'ally', 10), e = mk('e', 'enemy', 10);
+    const b = battle.makeBattle({ allies: [a], enemies: [e], rng: mkRng([0.9]), perform });
+    b.pause(); b.step(1.0);
+    check('battle: paused freezes gauges', b.gauge('a') === 0);
+    b.resume(); b.step(0.05);
+    check('battle: resume fills again', b.gauge('a') > 0);
+  }
+  {
+    const a = mk('a', 'ally', 10), c = mk('c', 'ally', 8), e = mk('e', 'enemy', 6);
+    const b = battle.makeBattle({ allies: [a, c], enemies: [e], rng: mkRng([0.9]), perform, wait: true });
+    while (!b.isReady('a')) b.step(0.02);
+    const g0 = b.gauge('c');
+    b.step(0.2);
+    check('battle: wait mode freezes while awaiting command', b.gauge('c') === g0);
+    b.submit('a', { kind: 'noop' }); b.step(0.02); b.step(0.02);
+    check('battle: wait mode resumes after command', b.gauge('c') > g0);
+  }
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
