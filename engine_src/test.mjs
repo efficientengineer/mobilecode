@@ -74,6 +74,7 @@ import { calendar } from './engine/control/calendar.js';
 import { crops } from './engine/control/crops.js';
 import { weather } from './engine/control/weather.js';
 import { energy } from './engine/control/energy.js';
+import { tools } from './engine/control/tools.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -2746,6 +2747,56 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   check('energy default full', v.energy === 270);
   check('energy spend blocks', v.spend(999) === false);
   check('energy exhausted', v.exhausted === true);
+}
+
+// ===== Stardew Round 11: tools (farmer tool-use) =====
+{
+  // tools — farmer tool-use on tiles/objects (authored test)
+  const mkVit = (e = 100) => ({ energy: e, exhausted: false,
+    canAfford(n) { return this.energy >= n; },
+    spend(n) { this.energy = Math.max(0, this.energy - n); if (this.energy === 0) this.exhausted = true; return true; } });
+
+  const v = mkVit(); const plot = {};
+  const r = tools.useTool(tools.hoe(), plot, { vitals: v });
+  check('tools: hoe tills soil and spends energy', r.ok && plot.tilled === true && v.energy < 100);
+
+  const can = tools.wateringCan({ fill: 5 });
+  const p2 = { tilled: true }, dry = {};
+  const rw = tools.useTool(can, p2, { vitals: mkVit() });
+  check('tools: can waters a tilled plot + drains water', rw.ok && p2.watered === true && can.can.fill === 4);
+  tools.useTool(can, dry, { vitals: mkVit() });
+  check('tools: can does not water untilled soil', !dry.watered);
+
+  const tree = { hp: 6, wood: 8 }; const ax = tools.axe(); let last;
+  for (let i = 0; i < 6; i++) last = tools.useTool(ax, tree, { vitals: mkVit() });
+  check('tools: axe fells a tree and drops wood', tree.hp === 0 && last.effect.drops.some((d) => d.item === 'wood'));
+
+  const rock = { hp: 2, drop: 'stone', qty: 3 };
+  const rm = tools.useTool(tools.pickaxe({ tier: 'steel' }), rock, { vitals: mkVit() });
+  check('tools: pickaxe breaks a rock and drops its ore', rock.hp === 0 && rm.effect.drops[0].item === 'stone' && rm.effect.drops[0].qty === 3);
+
+  const spent = mkVit(0); spent.exhausted = true; const fresh = {};
+  const blocked = tools.useTool(tools.hoe(), fresh, { vitals: spent });
+  check('tools: exhausted farmer cannot swing', blocked.ok === false && !fresh.tilled);
+
+  const grid = {}; const key = (x, z) => x + ',' + z;
+  for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) grid[key(x, z)] = { tilled: true };
+  const bigCan = tools.wateringCan({ tier: 'steel', fill: 40 });
+  const aoe = tools.useTool(bigCan, null, { vitals: mkVit(), center: [0, 0], plotAt: (x, z) => grid[key(x, z)] || null });
+  check('tools: upgraded can waters a 3x3 area', aoe.effect.watered === 9 && grid[key(1, 1)].watered === true);
+  check('tools: areaTiles size matches tier', tools.areaTiles(bigCan, [0, 0]).length === 9);
+
+  const basicCan = tools.wateringCan({ fill: 12 });
+  const up = tools.upgrade(basicCan, 'gold');
+  check('tools: upgrade carries water + lowers energy cost', up.can.fill === 12 && tools.energyCost(up) <= tools.energyCost(basicCan));
+
+  const rod = tools.fishingRod();
+  const fr = tools.useTool(rod, { fish: ['Carp', 'Bass'], catchChance: 0.9 }, { vitals: mkVit(), rng: () => 0.1 });
+  check('tools: fishing catches with a favorable rng', fr.effect.caught === 'Carp');
+  const miss = tools.useTool(rod, { fish: ['Carp'], catchChance: 0.5 }, { vitals: mkVit(), rng: () => 0.99 });
+  check('tools: fishing misses on a bad roll', miss.effect.caught === null);
+
+  check('tools bundle exposes the verbs', ['makeTool', 'hoe', 'wateringCan', 'axe', 'pickaxe', 'scythe', 'fishingRod', 'upgrade', 'useTool', 'areaTiles', 'energyCost'].every((k) => typeof tools[k] === 'function'));
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
