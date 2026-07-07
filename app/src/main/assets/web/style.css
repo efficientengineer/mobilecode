@@ -278,10 +278,13 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   padding: 10px 14px 8px; font-weight: 700; }
 #chatDrawer-head .cd-title { font-size: 16px; }
 /* Model selectors live in the chat drawer (orchestrator + implementer). */
-#chatDrawer-models { flex-shrink: 0; display: flex; gap: 8px; padding: 0 12px 10px;
+#chatDrawer-models { flex-shrink: 0; display: flex; gap: 10px; padding: 0 12px 10px;
   border-bottom: 1px solid var(--border); }
-.modelbtn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px;
-  background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+.modelcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.model-label { display: block; margin: 0; font-size: 11px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px; }
+.modelbtn { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between;
+  gap: 5px; background: var(--panel2); color: var(--text); border: 1px solid var(--border);
   border-radius: 12px; padding: 7px 10px; font-size: 13px; font-weight: 600; }
 .modelbtn:active { background: var(--border); }
 .modelbtn span[id] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
