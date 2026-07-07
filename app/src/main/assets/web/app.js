@@ -1421,8 +1421,8 @@ async function showFile(rel) {
          <button class="pill sm" id="edSave">Save</button>
        </div>
        <div class="editor-body">
-         <div class="editor-gutter" id="edGutter"></div>
          <div class="editor-code">
+           <div class="editor-lines" id="edLines" aria-hidden="true"></div>
            <pre class="editor-hl" id="edHl" aria-hidden="true"></pre>
            <textarea class="editor-area" id="edArea" spellcheck="false"
                      autocomplete="off" autocapitalize="off" autocorrect="off"></textarea>
@@ -1445,7 +1445,7 @@ async function showFile(rel) {
        <div class="hint" id="edStatus"></div>
      </div>`;
 
-  const area = $("#edArea"), gutter = $("#edGutter"), hl = $("#edHl");
+  const area = $("#edArea"), gutter = $("#edLines"), hl = $("#edHl");
   area.value = content;
   async function save() {
     const res = await call("py.call", { module: "orchestrator", fn: "write_ws_file", args: [rel, area.value] });
