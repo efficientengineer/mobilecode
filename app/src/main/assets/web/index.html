@@ -21,25 +21,32 @@
   <div id="actionsMenu" class="fabmenu hidden"></div>
 
   <div id="workspace">
-    <aside id="explorer">
-      <div id="explorer-head">
-        <span id="explorer-title">Explorer</span>
-        <span id="explorer-actions">
-          <button id="explorerRefresh" class="txtbtn xs" title="Refresh files">⟳</button>
-          <button id="explorerToggle" class="txtbtn xs" title="Collapse">▾</button>
-        </span>
-      </div>
-      <div id="tree"></div>
-      <div id="explorerResize" title="Drag to resize"></div>
-    </aside>
+    <div id="tabbar">
+      <button id="filesBtn" title="Files"><span class="fb-ico">☰</span> Files</button>
+      <div id="tabs"></div>
+    </div>
 
     <div id="mainCol">
       <div id="editorEmpty">
         <div class="ee-title">No file open</div>
-        <div class="ee-sub">Pick a file from the explorer to edit it here,<br>or tap 💬 to chat with the agent.</div>
+        <div class="ee-sub">Tap <b>☰ Files</b> to browse the project,<br>or tap 💬 to chat with the agent.</div>
       </div>
       <div id="editorPane" class="hidden"></div>
+      <button id="edFindFab" class="hidden" title="Find &amp; replace">🔍</button>
     </div>
+  </div>
+
+  <!-- Explorer tree (opened from the ☰ Files button) -->
+  <div id="treeBackdrop" class="hidden"></div>
+  <div id="treeOverlay" class="hidden">
+    <div id="treeOverlay-head">
+      <span>Explorer</span>
+      <span class="to-actions">
+        <button id="explorerRefresh" class="txtbtn xs" title="Refresh files">⟳</button>
+        <button id="treeClose" class="txtbtn xs" title="Close">✕</button>
+      </span>
+    </div>
+    <div id="tree"></div>
   </div>
 
   <!-- Floating chat button (opens the agent drawer) -->
