@@ -690,6 +690,31 @@ def read_ws_file(path="") -> str:
     return ""
 
 
+def write_ws_file(path="", content="") -> str:
+    """Save the editor's contents to a workspace file (creates it if new).
+
+    Confined to the workspace root — a path escaping it (via .. or an
+    absolute path) is rejected so the in-app editor can only touch project
+    files.
+    """
+    rel = str(path).strip()
+    if not rel:
+        return "Save failed: no file path."
+    root = _workspace().resolve()
+    fp = (root / rel).resolve()
+    if fp != root and root not in fp.parents:
+        return "Save failed: path is outside the project."
+    if fp.is_dir():
+        return "Save failed: that path is a directory."
+    try:
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text(str(content), encoding="utf-8")
+        n = len(str(content).splitlines())
+        return f"Saved {rel} ({n} line{'s' if n != 1 else ''})"
+    except Exception:
+        return "Save failed:\n" + traceback.format_exc()
+
+
 def preview_context(_=None) -> str:
     """Exactly what gets sent to the model as context this turn."""
     mode = os.environ.get("AGENT_MODE", "auto").strip().lower()

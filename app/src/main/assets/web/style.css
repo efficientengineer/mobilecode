@@ -157,6 +157,23 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   max-height: 60vh; overflow: auto; }
 .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
 
+/* File viewer / editor (VS Code style: gutter + editable code area) */
+.editor { display: flex; flex-direction: column; gap: 8px; }
+.editor-toolbar { display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; font-size: 12px; color: var(--muted); }
+.editor-dirty { color: #fbbf24; font-weight: 600; }
+.editor-body { display: flex; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden; height: 58vh; }
+.editor-gutter { flex-shrink: 0; overflow: hidden; padding: 10px 8px 10px 10px;
+  text-align: right; color: var(--muted); opacity: .6; background: var(--panel2);
+  border-right: 1px solid var(--border); font-family: monospace; font-size: 12.5px;
+  line-height: 1.5; white-space: pre; user-select: none; -webkit-user-select: none;
+  min-width: 2.6em; }
+.editor-area { flex: 1; min-width: 0; resize: none; border: none; outline: none;
+  background: var(--bg); color: var(--text); padding: 10px 12px;
+  font-family: monospace; font-size: 12.5px; line-height: 1.5; white-space: pre;
+  overflow: auto; tab-size: 2; -moz-tab-size: 2; }
+
 /* Commit review bar (autocommit off) */
 .review-bar { align-self: stretch; display: flex; gap: 8px; justify-content: flex-end;
   padding: 8px 0; }
