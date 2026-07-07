@@ -60,6 +60,9 @@ import { tilecollision } from './engine/control/tilecollision.js';
 import { rooms } from './engine/control/rooms.js';
 import { interact } from './engine/control/interact.js';
 import { melee } from './engine/control/melee.js';
+import { stats } from './engine/control/stats.js';
+import { elements } from './engine/control/elements.js';
+import { spells } from './engine/control/spells.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -1994,5 +1997,155 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
 }
 
 { const m = melee.arc(); check('melee loads', typeof m.trigger === 'function'); }
+
+
+// ===== FF6 Round 9 (battle core): stats / elements / spells =====
+
+{
+  const mk = () => stats.makeStats({ level: 1, hp: 80, mp: 20, vigor: 24, speed: 30, stamina: 20, magic: 18, defense: 40, mdefense: 30, evade: 5, mblock: 3 });
+  let s = mk();
+  check('stats: starts full', s.hp === s.maxHp && s.mp === s.maxMp && s.maxHp > 0);
+  const mh = s.maxHp;
+  s.damage(9999);
+  check('stats: damage clamps to 0 / KO', s.hp === 0 && s.isKO && !s.alive);
+  s.heal(50);
+  check('stats: heal on KO is a no-op', s.hp === 0);
+  s.revive(0.5);
+  check('stats: revive to half', s.hp === Math.max(1, Math.round(mh * 0.5)) && s.alive);
+  s.heal(99999);
+  check('stats: heal clamps to max', s.hp === s.maxHp);
+  check('stats: spendMp succeeds when affordable', s.spendMp(5) === true);
+  check('stats: spendMp fails when short', s.spendMp(999999) === false);
+  s.restoreMp(999999);
+  check('stats: restoreMp clamps to maxMp', s.mp === s.maxMp);
+
+  s = mk();
+  const lo = s.maxHp;
+  s.setLevel(30);
+  check('stats: level growth raises maxHp', s.maxHp > lo && s.level === 30);
+  s.levelUp();
+  check('stats: levelUp increments', s.level === 31);
+  check('stats: level clamps at 99', mk().setLevel(500).level === 99);
+
+  s = mk();
+  s.damage(20);
+  const wound = s.maxHp - s.hp;
+  s.setLevel(10);
+  check('stats: wound preserved across level up', (s.maxHp - s.hp) === wound);
+
+  s = mk();
+  const baseVig = s.get('vigor'), baseMax = s.maxHp;
+  s.equipmentMods({ vigor: 10, stamina: 100 });
+  check('stats: equipment folds flat bonus', s.get('vigor') === baseVig + 10 && s.maxHp > baseMax);
+  s.equipmentMods({ stats: () => ({ vigor: 3 }) });
+  check('stats: equipment via .stats() method', s.get('vigor') === baseVig + 3);
+  s.equipmentMods(null);
+  check('stats: unequip drops overlay', s.get('vigor') === baseVig);
+
+  const snap = mk().snapshot();
+  check('stats: snapshot shape', snap.level === 1 && snap.stats.vigor === 24 && snap.maxHp > 0);
+}
+
+{
+  const { multiplier, resolve, makeAffinity, isImmune, absorbs, combine, resolveMulti, ELEMENTS, AFFINITY } = elements;
+  const def = makeAffinity({ fire: 'weak', ice: 'resist', water: 'null', poison: 'absorb' });
+
+  check('elements: weak x2', multiplier('fire', def) === 2);
+  check('elements: resist x0.5', multiplier('ice', def) === 0.5);
+  check('elements: null x0', multiplier('water', def) === 0);
+  check('elements: absorb x-1', multiplier('poison', def) === -1);
+  check('elements: unlisted element x1', multiplier('bolt', def) === 1);
+  check('elements: non-elemental bypasses table', multiplier(null, def) === 1);
+  check('elements: bare verdict string works', multiplier('fire', 'weak') === 2);
+
+  check('elements: resolve weak doubles', resolve('fire', def, 100).amount === 200);
+  check('elements: resolve resist halves', resolve('ice', def, 100).amount === 50);
+  check('elements: resolve null zeroes', resolve('water', def, 100).amount === 0);
+  const ab = resolve('poison', def, 100);
+  check('elements: resolve absorb heals (signed negative)', ab.amount === -100 && ab.tag === 'absorb');
+  check('elements: resolve normal tag', resolve('bolt', def, 100).tag === 'normal');
+  check('elements: resolve rounds toward zero', resolve('ice', def, 101).amount === 50);
+  check('elements: resolve keeps raw with round:false', resolve('ice', def, 101, { round: false }).amount === 50.5);
+
+  check('elements: isImmune true on null', isImmune('water', def) === true);
+  check('elements: isImmune false on absorb', isImmune('poison', def) === false);
+  check('elements: absorbs true on drain', absorbs('poison', def) === true);
+  check('elements: absorbs false on weak', absorbs('fire', def) === false);
+
+  check('elements: makeAffinity returns a fresh copy', def !== makeAffinity({ fire: 'weak' }));
+  check('elements: makeAffinity defaults to none', makeAffinity().fire === 'none');
+  check('elements: ELEMENTS list', ELEMENTS.includes('fire') && ELEMENTS.length === 8);
+  check('elements: AFFINITY table', AFFINITY.weak === 2 && AFFINITY.absorb === -1);
+
+  check('elements: combine best -> weakness wins', combine('weak', 'resist', 'best') === 'weak');
+  check('elements: combine worst -> drain saves defender', combine('weak', 'absorb', 'worst') === 'absorb');
+  check('elements: combine product stacks', combine('resist', 'resist', 'product') === 0.25);
+  check('elements: combine numeric mults', combine(2, 0.5) === 'weak');
+
+  check('elements: resolveMulti best picks weakness', resolveMulti(['fire', 'bolt'], def, 100).amount === 200);
+  check('elements: resolveMulti worst picks drain', resolveMulti(['fire', 'poison'], def, 100, { mode: 'worst' }).amount === -100);
+  check('elements: resolveMulti single element', resolveMulti('ice', def, 100).amount === 50);
+  check('elements: resolveMulti empty is non-elemental', resolveMulti([], def, 100).amount === 100);
+
+  const snap = JSON.stringify(def);
+  resolve('fire', def, 100); resolveMulti(['fire', 'ice'], def, 50);
+  check('elements: never mutates the defender affinity', JSON.stringify(def) === snap);
+}
+
+{
+  const { makeSpellbook, targets, cast, canCast, SPELLS } = spells;
+  const rng = () => 0.9; // no crit, no miss
+  const book = makeSpellbook();
+  check('spells: book get/has/all', book.get('Fire').mp === 4 && book.has('Cure') && book.all().length === Object.keys(SPELLS).length);
+
+  // MP spent + damage dealt
+  const caster = { mp: 20, mag: 10, hp: 50, maxHp: 50 };
+  const foe = { hp: 100, maxHp: 100, mdef: 5 };
+  const r = cast(caster, book.get('Fire'), [foe], { rng });
+  check('spells: mp spent + dmg', caster.mp === 16 && r.cast === true && foe.hp < 100 && r[0].amount > 0);
+
+  // Insufficient MP blocks the whole cast
+  const poor = { mp: 1, mag: 5 };
+  const foe2 = { hp: 100, maxHp: 100 };
+  const blocked = cast(poor, book.get('Firaga'), [foe2], { rng });
+  check('spells: low mp blocks', poor.mp === 1 && blocked.cast === false && blocked.length === 0 && foe2.hp === 100 && !canCast(poor, book.get('Firaga')));
+
+  // all-enemies hits every foe
+  const es = [{ hp: 80, maxHp: 80 }, { hp: 80, maxHp: 80 }, { hp: 80, maxHp: 80 }];
+  const list = targets(book.get('Firaga'), { enemies: es }, { rng });
+  cast({ mp: 30, mag: 20 }, book.get('Firaga'), list, { rng });
+  check('spells: all-enemies hits all', list.length === 3 && es.every((e) => e.hp < 80));
+
+  // Cure heals + caps at maxHp; skips a KO'd ally
+  const ally = { hp: 10, maxHp: 60 };
+  cast({ mp: 20, mag: 8 }, book.get('Cure'), [ally], { rng });
+  const capped = { hp: 58, maxHp: 60 };
+  cast({ mp: 20, mag: 8 }, book.get('Cure'), [capped], { rng });
+  check('spells: cure heals + caps', ally.hp > 10 && capped.hp === 60);
+
+  // Revive only affects the fallen
+  const alive = { hp: 30, maxHp: 60 };
+  const dead = { hp: 0, maxHp: 60, dead: true };
+  const rr = cast({ mp: 40, mag: 5 }, book.get('Life'), [alive, dead], { rng });
+  check('spells: revive KO-only', rr[0].missed === true && alive.hp === 30 && rr[1].revived === true && dead.hp === 30 && dead.dead === false);
+
+  // Drain damages foe and heals caster; element weak > resist
+  const drainer = { mp: 20, mag: 10, hp: 20, maxHp: 100 };
+  const victim = { hp: 100, maxHp: 100 };
+  const dr = cast(drainer, SPELLS.Drain, [victim], { rng });
+  const weakFoe = { hp: 200, maxHp: 200, weak: ['fire'] };
+  const resFoe = { hp: 200, maxHp: 200, resist: ['fire'] };
+  const rw = cast({ mp: 10, mag: 10 }, SPELLS.Fire, [weakFoe], { rng });
+  const rz = cast({ mp: 10, mag: 10 }, SPELLS.Fire, [resFoe], { rng });
+  check('spells: drain + elements', victim.hp < 100 && drainer.hp > 20 && dr[0].drained > 0 && rw[0].amount > rz[0].amount);
+
+  // Injected resolver override + status rider + self targeting
+  const custom = cast({ mp: 10 }, SPELLS.Fire, [{ hp: 100, maxHp: 100 }], { resolve: () => ({ amount: 7, crit: true, missed: false }) });
+  const stFoe = { hp: 100, maxHp: 100 };
+  cast({ mp: 10, mag: 10 }, SPELLS.Poison, [stFoe], { rng: () => 0.1 });
+  const me = { mp: 5, hp: 10, maxHp: 50 };
+  const selfT = targets({ name: 'S', mp: 0, power: 10, kind: 'heal', target: 'self' }, {}, { caster: me });
+  check('spells: resolver/status/self', custom[0].amount === 7 && custom[0].crit === true && stFoe.statuses.includes('poison') && selfT.length === 1 && selfT[0] === me);
+}
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
