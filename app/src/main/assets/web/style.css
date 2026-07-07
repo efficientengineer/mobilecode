@@ -335,8 +335,9 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 #chatDrawer-balance #balance { font-size: 13px; padding: 4px 10px; }
 /* Leave room at the bottom-right for the ✕ toggle so it never covers Speak. */
 #chatDrawer #composer { padding-right: 76px; }
-/* The chat-actions menu opens from inside the drawer, so it sits above it. */
-#chatActionsMenu { z-index: 70; }
+/* The chat-actions and context menus open from inside the drawer → above it. */
+#chatActionsMenu, #ctxMenu { z-index: 70; }
+#ctxBtn { flex-shrink: 0; }
 
 /* File viewer / editor (VS Code style: highlighting + gutter + find/replace).
    Zero chrome around the code so the gutter hugs the left edge — no wasted space. */
