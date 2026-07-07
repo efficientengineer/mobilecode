@@ -305,20 +305,20 @@ class MainActivity : AppCompatActivity() {
             }
             JSONObject().put("activeId", sessions.activeId()).put("sessions", arr)
         }
-        "session.create" -> {
+        "session.create" -> withContext(Dispatchers.IO) {
             val id = sessions.create(arg.optString("name"))
             sessions.setActive(id); prepareEnv()
             JSONObject().put("id", id)
         }
-        "session.setActive" -> {
+        "session.setActive" -> withContext(Dispatchers.IO) {
             sessions.setActive(arg.getString("id")); prepareEnv()
             JSONObject().put("ok", true)
         }
-        "session.rename" -> {
+        "session.rename" -> withContext(Dispatchers.IO) {
             sessions.rename(arg.getString("id"), arg.optString("name"))
             JSONObject().put("ok", true)
         }
-        "session.delete" -> {
+        "session.delete" -> withContext(Dispatchers.IO) {
             val id = arg.getString("id")
             sessions.delete(id)
             // Rebind to whatever session is now active (activeId() creates a
@@ -326,7 +326,7 @@ class MainActivity : AppCompatActivity() {
             sessions.activeId(); prepareEnv()
             JSONObject().put("ok", true).put("activeId", sessions.activeId())
         }
-        "session.setModels" -> {
+        "session.setModels" -> withContext(Dispatchers.IO) {
             sessions.setModels(sessions.activeId(),
                 arg.optString("orchestrator").trim(), arg.optString("implementer").trim())
             prepareEnv()
@@ -396,12 +396,6 @@ class MainActivity : AppCompatActivity() {
             sessions.setActiveRepo(sessions.activeId(), full)
             text(r)
         }
-        "fs.tree" -> withContext(Dispatchers.IO) {
-            JSONObject().put("files", JSONArray(py("git_ops").callAttr("list_tree").toString()))
-        }
-        "fs.read" -> withContext(Dispatchers.IO) {
-            JSONObject().put("content", py("git_ops").callAttr("read_file", arg.getString("path")).toString())
-        }
         "models.aggregate" -> withContext(Dispatchers.IO) {
             JSONObject().put("models", JSONArray(aggregateModels()))
         }
@@ -418,7 +412,7 @@ class MainActivity : AppCompatActivity() {
                 .put("speechSilenceMs", p.getString("SPEECH_SILENCE_MS", "")?.ifBlank { SPEECH_SILENCE_MS.toString() })
                 .put("speechContinuous", p.getString("SPEECH_CONTINUOUS", "1"))
         }
-        "settings.save" -> {
+        "settings.save" -> withContext(Dispatchers.IO) {
             getSharedPreferences("keys", MODE_PRIVATE).edit()
                 .putString("ANTHROPIC_API_KEY", arg.optString("anthropicKey"))
                 .putString("DEEPSEEK_API_KEY", arg.optString("deepseekKey"))

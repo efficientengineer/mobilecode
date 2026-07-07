@@ -19,6 +19,7 @@ import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.google.android.material.appbar.MaterialToolbar
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
@@ -148,11 +149,28 @@ class RunActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        // Cancel the scope first so a slow localrun.start can't resume on Main
+        // and touch a destroyed Activity's views.
+        scope.cancel()
         try {
             Python.getInstance().getModule("localrun").callAttr("stop")
         } catch (e: Throwable) {
             // ignore
         }
+        // Tear down the WebView, or it leaks the Activity and keeps the page's
+        // JS timers / audio / WebGL running in the background.
+        try {
+            customCallback?.onCustomViewHidden()
+            customView = null
+            customCallback = null
+            if (this::web.isInitialized) {
+                (web.parent as? android.view.ViewGroup)?.removeView(web)
+                web.stopLoading()
+                web.webChromeClient = null
+                web.loadUrl("about:blank")
+                web.destroy()
+            }
+        } catch (_: Throwable) {}
         super.onDestroy()
     }
 

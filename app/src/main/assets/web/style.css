@@ -16,17 +16,6 @@ html, body {
 }
 body { display: flex; flex-direction: column; height: 100vh; }
 
-#topbar {
-  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-  background: var(--panel); border-bottom: 1px solid var(--border);
-}
-#titleWrap { flex: 1; min-width: 0; }
-#title { font-weight: 700; }
-#subtitle { font-size: 12px; color: var(--muted); overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; }
-#stats { font-size: 11px; color: var(--muted); opacity: .85; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; }
-
 button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 .icon { background: transparent; font-size: 20px; padding: 6px 8px; border-radius: 10px; }
 .icon:active { background: var(--panel2); }
@@ -166,14 +155,6 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 .tok.user { align-self: flex-end; }
 .tok.agent { align-self: flex-start; }
 
-#subbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px;
-  background: var(--panel); border-bottom: 1px solid var(--border); }
-.chip { background: var(--panel2); color: var(--text); border-radius: 16px;
-  padding: 6px 12px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 4px; }
-.chip:active { background: var(--border); }
-#modelChip { max-width: 55%; overflow: hidden; }
-#modelChip #modelName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#balance { margin-left: auto; }
 .balchip { background: #0d3a24; color: #4ade80; border: 1px solid #14532d;
   border-radius: 16px; padding: 6px 14px; font-size: 14px; font-weight: 800;
   white-space: nowrap; }
@@ -190,9 +171,6 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
   background: var(--panel); border-top: 1px solid var(--border); }
 #runbar.hidden { display: none; }
 #runlabel { font-size: 12px; color: var(--muted); flex-shrink: 0; }
-#queueChips { flex: 1; display: flex; gap: 6px; overflow-x: auto; }
-.qchip { background: var(--panel2); color: var(--muted); border-radius: 12px;
-  padding: 3px 10px; font-size: 12px; white-space: nowrap; }
 .pill.stop { background: #dc2626; padding: 6px 14px; }
 .live { align-self: stretch; background: var(--panel2); border: 1px solid var(--border);
   border-radius: 12px; padding: 10px 12px; font-size: 12.5px; color: var(--muted);
@@ -219,10 +197,6 @@ pre.small { white-space: pre-wrap; word-wrap: break-word; background: var(--bg);
 .attach-chip b { color: var(--muted); font-size: 13px; padding: 0 2px; cursor: pointer; }
 .attach-chip b:active { color: #f87171; }
 
-#modes { display: flex; gap: 6px; padding: 6px 8px 0; background: var(--panel); }
-.mode { background: var(--panel2); color: var(--muted); border-radius: 16px;
-  padding: 5px 14px; font-size: 13px; font-weight: 600; }
-.mode.active { background: var(--accent); color: #fff; }
 .approve { align-self: flex-start; background: #16a34a; color: #fff;
   border-radius: 16px; padding: 9px 16px; font-weight: 700; margin: 2px 0; }
 .approve:active { opacity: .85; }
@@ -240,7 +214,6 @@ pre.small { white-space: pre-wrap; word-wrap: break-word; background: var(--bg);
 .sheet-inner { width: 100%; max-height: 85vh; overflow-y: auto; background: var(--panel);
   border-top-left-radius: 18px; border-top-right-radius: 18px; padding: 16px; }
 .sheet-title { font-weight: 700; font-size: 17px; margin-bottom: 12px; }
-#quick { display: flex; gap: 2px; flex-shrink: 0; }
 .group-title { font-size: 12px; font-weight: 700; color: var(--muted);
   text-transform: uppercase; letter-spacing: .5px; margin: 14px 2px 6px; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -395,11 +368,9 @@ pre.filebody.diff { font-size: 12px; }
 .sess-btn:active { opacity: 1; }
 
 /* Live task checklist (TodoWrite) */
-#todos { padding: 8px 12px; border-top: 1px solid var(--border); background: var(--panel2);
-  max-height: 30vh; overflow-y: auto; font-size: 14px; }
+#todos { padding: 0; border-top: 1px solid var(--border); background: var(--panel2);
+  font-size: 14px; }
 #todos.hidden { display: none; }
-.todos-head { font-weight: 600; opacity: .7; font-size: 12px; text-transform: uppercase;
-  letter-spacing: .04em; margin-bottom: 4px; }
 .todo-item { padding: 2px 0; }
 .todo-item.completed { opacity: .55; text-decoration: line-through; }
 .todo-item.in_progress { font-weight: 600; }
@@ -424,7 +395,6 @@ pre.filebody.diff { font-size: 12px; }
 .live.open .live-log { display: block; }
 
 /* Collapsible todos (current task one-liner, tap to expand) */
-#todos { padding: 0; max-height: none; overflow: visible; }
 #todos-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; }
 #todos-now { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 #todos-count { opacity: .7; font-size: 12px; }
@@ -433,23 +403,13 @@ pre.filebody.diff { font-size: 12px; }
   border-top: 1px solid var(--border); }
 #todos.open #todos-body { display: block; }
 
-/* Usage / cache chip */
+/* Usage / cache chip — see the primary .usagechip block above for position. */
 .usagechip { font-variant-numeric: tabular-nums; }
-.usagechip.hidden { display: none; }
 
 /* Settings checkbox row */
 .checkrow { display: flex; align-items: center; gap: 8px; }
 .checkrow input { width: auto; }
 
-/* Home hero — the empty-session default: game-making leads. */
-.home-hero { margin: auto; max-width: 340px; text-align: center;
-  display: flex; flex-direction: column; align-items: center; gap: 10px;
-  padding: 24px 16px; }
-.home-emoji { font-size: 52px; line-height: 1; }
-.home-title { font-size: 22px; font-weight: 700; }
-.home-sub { font-size: 14px; color: var(--muted); line-height: 1.5; }
-.home-cta { font-size: 16px; padding: 12px 22px; margin-top: 6px; }
-.home-alt { font-size: 14px; padding: 9px 16px; }
 .gm-ex:active { opacity: .8; }
 
 /* An agent bubble still being streamed live (finalized when the message ends). */

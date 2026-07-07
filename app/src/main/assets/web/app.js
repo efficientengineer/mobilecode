@@ -167,22 +167,6 @@ async function loadHistory() {
   refreshOpenTabs();   // pick up any files the agent just edited
 }
 
-// The home screen for an empty session: game-making leads, generic coding is one
-// tap away. This is the app's stated default — you make games here.
-function showHome() {
-  const hero = document.createElement("div");
-  hero.className = "home-hero";
-  hero.innerHTML =
-    `<div class="home-emoji">🎮</div>
-     <div class="home-title">Make a game</div>
-     <div class="home-sub">Describe a game and the AI builds it on our engine — top-down shooter, platformer, runner, and more. No framework to pick.</div>
-     <button class="pill home-cta" id="homeMake">🎮 Make a game</button>
-     <button class="pill ghost home-alt" id="homeCode">Blank coding project</button>`;
-  chat.appendChild(hero);
-  $("#homeMake").onclick = () => actions.makeGame();
-  $("#homeCode").onclick = () => actions.newProject();
-}
-
 // --- Context + balance stats -------------------------------------------
 let _balStart = null;
 
@@ -235,21 +219,10 @@ function showUsageDetail() {
      ${perModel}
      <div class="hint">A high <b>cached %</b> means repeated context is being billed at a fraction of the price — the prompt cache is working. The by-model split shows orchestrator vs implementer spend. Actual dollars show in the balance chip.</div>`);
 }
-async function refreshStats() {
-  try {
-    const c = JSON.parse((await call("orch", { fn: "context_counts" })).text);
-    const sent = c.sentTurns != null ? c.sentTurns : c.turns;
-    const turnStr = sent < c.turns ? `${sent}/${c.turns} turns` : `${c.turns} turns`;
-    let s = `ctx ~${(c.outlineTokens + c.discussionTokens + (c.memoryTokens || 0))}t ` +
-            `(outline ${c.outlineTokens} · disc ${c.discussionTokens} · ${turnStr})`;
-    if (c.caveman) s += " · 🪨";
-    try {
-      const pins = JSON.parse((await call("orch", { fn: "list_context_files" })).text);
-      if (pins.length) s += ` · 📎${pins.length}`;
-    } catch (e) {}
-    const st = $("#stats");
-    if (st) st.textContent = s;
-  } catch (e) {}
+function refreshStats() {
+  // The old #stats readout was removed with the top bar; the two orch bridge
+  // calls that fed it (context_counts + list_context_files) were pure waste on
+  // every action. Balance/usage/attach-bar are the live indicators now.
   refreshBalance();
   refreshUsage();
   refreshAttachBar();
@@ -299,19 +272,8 @@ async function refreshBalance() {
   }
 }
 
-// --- Run state machine (queue + live progress + interrupt) --------------
+// --- Run state machine (live progress + interrupt) ----------------------
 let running = false;
-const queue = [];
-
-function renderQueue() {
-  const c = $("#queueChips");
-  c.innerHTML = queue.map((q, i) =>
-    `<span class="qchip">${q.mode}: ${escapeHtml(q.task).slice(0, 24)}<b data-q="${i}"> ✕</b></span>`
-  ).join("");
-  c.querySelectorAll("[data-q]").forEach((el) => {
-    el.onclick = () => { queue.splice(+el.dataset.q, 1); renderQueue(); };
-  });
-}
 
 function submit(task) {
   if (running) { steerRun(task); return; }
@@ -357,7 +319,7 @@ function makeLivePoller(live) {
 
   const lines = [];
   let stream = "", stepN = 0, lastAct = "";
-  let cursor = 0, polling = true, pending = false;
+  let cursor = 0, polling = true, pending = false, streamDirty = false;
 
   // The agent's PROSE renders as real chat bubbles (like the user's messages),
   // inserted ABOVE the steps feed — not merged into the tool log. `msgEl` is the
@@ -400,8 +362,9 @@ function makeLivePoller(live) {
         const r = JSON.parse((await call("orch", { fn: "get_events", arg: String(cursor) })).text);
         cursor = r.cursor;
         (r.events || []).forEach((e) => {
-          // Assistant text: stream it into a live bubble as it arrives.
-          if (e.kind === "delta") { stream += e.text || ""; ensureMsg().innerHTML = renderMarkdown(stream); maybeScroll(); return; }
+          // Assistant text: accumulate; render once per batch (below), not per
+          // delta — re-parsing the whole growing buffer per token is O(n²).
+          if (e.kind === "delta") { stream += e.text || ""; streamDirty = true; return; }
           // Message boundary: lock in the finished message as its own bubble.
           if (e.kind === "say") { finalizeMsg(e.text || stream); return; }
           if (e.kind === "todos") { renderTodos(e.todos || []); return; }
@@ -410,6 +373,7 @@ function makeLivePoller(live) {
           const f = fmtEvent(e);
           if (f) { lines.push(f); if (e.kind !== "step") lastAct = f; }
         });
+        if (streamDirty) { ensureMsg().innerHTML = renderMarkdown(stream); maybeScroll(); streamDirty = false; }
         render();
       } catch (e) {}
       await new Promise((r) => setTimeout(r, 500));
@@ -454,9 +418,8 @@ async function runTask(task, mode) {
   running = false;
   $("#runbar").classList.add("hidden");
   setStatus("");
-  drainQueue();
   // After an edit run, load the preview headlessly and surface any real JS
-  // runtime errors (fire-and-forget; skipped if a queued task took over).
+  // runtime errors (fire-and-forget).
   if (mode !== "plan") maybeWebCheck();
 }
 
@@ -496,16 +459,6 @@ function notifyUser(title, body) {
   try { call("notify", { title, body }); } catch (e) {}
 }
 
-function drainQueue() {
-  if (running || !queue.length) return;
-  const next = queue.shift();
-  renderQueue();
-  currentMode = next.mode;
-  document.querySelectorAll(".mode").forEach((x) =>
-    x.classList.toggle("active", x.dataset.mode === next.mode));
-  runTask(next.task, next.mode);
-}
-
 // Live progress for an arbitrary agent call (e.g. plan approval, fix build).
 async function driveLive(label, promiseFactory) {
   running = true;
@@ -519,7 +472,7 @@ async function driveLive(label, promiseFactory) {
   try { await promiseFactory(); } catch (e) {}
   poller.stop(); live.remove(); await loadHistory();
   if (poller.pendingCommit()) addCommitReview();
-  running = false; $("#runbar").classList.add("hidden"); drainQueue();
+  running = false; $("#runbar").classList.add("hidden");
 }
 
 const TOOL_ICONS = {
@@ -606,7 +559,7 @@ async function reattachLive() {
   poller.stop(); live.remove(); await loadHistory();
   if (poller.pendingCommit()) addCommitReview();
   notifyUser("Task finished", "The reattached run has completed.");
-  running = false; $("#runbar").classList.add("hidden"); drainQueue();
+  running = false; $("#runbar").classList.add("hidden");
 }
 
 // Review bar shown after a run when autocommit is off and changes are pending.
@@ -1006,19 +959,21 @@ const actions = {
   },
   async switchRepo() {
     bubble("Loading repos…", "sys");
-    const r = await call("git.listRepos");
-    const repos = r.repos || [];
+    let repos = [];
+    try { repos = (await call("git.listRepos")).repos || []; }
+    catch (e) { bubble("Couldn't load repos: " + e.message, "sys"); return; }
     if (!repos.length) { bubble("No repos found (check GitHub token).", "sys"); return; }
     modal("Switch repo",
-      repos.map((f) => `<div class="list-item" data-repo="${f}"><span>${f}</span></div>`).join(""));
+      repos.map((f) => `<div class="list-item" data-repo="${escAttr(f)}"><span>${escapeHtml(f)}</span></div>`).join(""));
     $("#modalBody").querySelectorAll("[data-repo]").forEach((el) => {
       el.onclick = () => { closeSheet("#modal"); confirmClone(el.dataset.repo); };
     });
   },
   async deleteRepo() {
     bubble("Loading repos…", "sys");
-    const r = await call("git.listRepos");
-    const repos = r.repos || [];
+    let repos = [];
+    try { repos = (await call("git.listRepos")).repos || []; }
+    catch (e) { bubble("Couldn't load repos: " + e.message, "sys"); return; }
     if (!repos.length) { bubble("No repos found (check GitHub token).", "sys"); return; }
     modal("Delete repository",
       `<div class="hint danger">Deletes a repo on GitHub permanently — this cannot be undone.</div>` +
@@ -1274,11 +1229,11 @@ async function filesModal(path) {
   const body = up + (entries.length
     ? entries.map((e) => {
         if (e.endsWith("/")) {
-          return `<div class="filerow dir"><span data-e="${e}">${e}</span></div>`;
+          return `<div class="filerow dir"><span data-e="${escAttr(e)}">${escapeHtml(e)}</span></div>`;
         }
         const on = pinned.includes(path + e);
-        const btn = `<button class="pinbtn ${on ? "on" : ""}" data-pin="${path + e}">${on ? "Remove from context" : "Add to context"}</button>`;
-        return `<div class="filerow"><span data-e="${e}">${on ? "📎 " : ""}${e}</span>${btn}</div>`;
+        const btn = `<button class="pinbtn ${on ? "on" : ""}" data-pin="${escAttr(path + e)}">${on ? "Remove from context" : "Add to context"}</button>`;
+        return `<div class="filerow"><span data-e="${escAttr(e)}">${on ? "📎 " : ""}${escapeHtml(e)}</span>${btn}</div>`;
       }).join("")
     : `<div class="hint">(empty)</div>`);
   modal("/" + path, body + `<div class="hint">📎 = sent to the model as context every turn. Tap "Remove from context" to stop sending a file.</div>`);
@@ -1699,7 +1654,14 @@ function renderEditor() {
   const area = $("#edArea"), hl = $("#edHl");
   area.value = tab.content;
 
-  function renderHl() { hl.innerHTML = highlightCode(area.value, hlLang); }
+  // Coalesce re-highlights to one per animation frame — re-tokenizing the whole
+  // buffer on every keystroke lags input on large files.
+  let hlPending = false;
+  function renderHl() {
+    if (hlPending) return;
+    hlPending = true;
+    requestAnimationFrame(() => { hlPending = false; hl.innerHTML = highlightCode(area.value, hlLang); });
+  }
   // Show the caret's line/column in the tab bar, and remember any selection
   // (so the chat composer can pull it into the message even after focus moves).
   function updatePos() {

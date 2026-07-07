@@ -30,6 +30,10 @@ class PrWatchWorker(private val ctx: Context, params: WorkerParameters) :
     override suspend fun doWork(): Result {
         val watch = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val workspace = watch.getString("workspace", null) ?: return Result.success()
+        // The interpreter shares os.environ with any foreground run. Rewriting
+        // AGENT_WORKSPACE/keys here mid-turn would redirect the live agent to
+        // the wrong workspace, so skip this cycle entirely while a run is active.
+        if (MainActivity.runsActive() != 0) return Result.success()
         try {
             if (!Python.isStarted()) Python.start(AndroidPlatform(ctx.applicationContext))
             val py = Python.getInstance()

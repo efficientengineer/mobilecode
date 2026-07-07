@@ -173,6 +173,12 @@ def _thinking_on() -> bool:
 
 # --- low-level HTTP with retries -------------------------------------------
 
+class StreamError(Exception):
+    """A mid-stream provider error. Deliberately NOT a RuntimeError so chat()'s
+    non-streaming retry path engages (it re-raises RuntimeError but retries
+    other exceptions)."""
+
+
 def _post(url: str, headers: dict, payload: dict, stream: bool):
     """POST returning either a parsed JSON dict or a response object (stream).
 
@@ -272,10 +278,23 @@ def _call_anthropic(model, system, cached_context, messages, tools,
     key = os.environ.get("ANTHROPIC_API_KEY", "")
     sys_blocks = [{"type": "text", "text": system}]
     if cached_context:
-        # The big, mostly-stable context block gets a cache marker so repeated
-        # loop steps hit the prompt cache instead of re-paying for it.
-        sys_blocks.append({"type": "text", "text": cached_context,
-                           "cache_control": {"type": "ephemeral"}})
+        # Split the stable prefix (guidelines/outline/dep-map/attached files)
+        # from the volatile DISCUSSION tail and give each its own cache
+        # breakpoint. Otherwise a single end-of-block marker means the changing
+        # discussion invalidates the cache for the entire unchanged prefix every
+        # turn, re-paying cache creation for all of it. With two breakpoints the
+        # stable prefix stays a cache HIT across turns; only the discussion
+        # (much smaller) re-creates.
+        marker = "\n\nDISCUSSION SO FAR:"
+        idx = cached_context.rfind(marker)
+        if idx > 0:
+            sys_blocks.append({"type": "text", "text": cached_context[:idx],
+                               "cache_control": {"type": "ephemeral"}})
+            sys_blocks.append({"type": "text", "text": cached_context[idx + 2:],
+                               "cache_control": {"type": "ephemeral"}})
+        else:
+            sys_blocks.append({"type": "text", "text": cached_context,
+                               "cache_control": {"type": "ephemeral"}})
     payload = {
         "model": model,
         "max_tokens": max_tokens,
@@ -320,6 +339,12 @@ def _call_anthropic(model, system, cached_context, messages, tools,
             except Exception:
                 continue
             t = ev.get("type")
+            if t == "error":
+                # Anthropic can emit a mid-stream error (e.g. overloaded_error)
+                # on an already-200 stream. Raise so chat()'s retry/fallback
+                # engages instead of returning a truncated turn as success.
+                err = (ev.get("error") or {})
+                raise StreamError(f"anthropic stream error: {err.get('type', '')}: {err.get('message', '')}")
             if t == "message_start":
                 u = (ev.get("message") or {}).get("usage") or {}
                 usage_in = u.get("input_tokens", 0) or 0
@@ -484,6 +509,11 @@ def _call_openai(provider, model, system, cached_context, messages, tools,
                 ev = json.loads(data)
             except Exception:
                 continue
+            if ev.get("error"):
+                # Mid-stream error payload (no choices) — raise so the retry
+                # path runs instead of silently ending the turn.
+                err = ev.get("error") or {}
+                raise StreamError(f"stream error: {err.get('type', '')}: {err.get('message', err)}")
             u = ev.get("usage")
             if u:
                 usage_in = u.get("prompt_tokens", usage_in)
