@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <link rel="stylesheet" href="style.css" />
+  <title>Voice Agent</title>
+</head>
+<body>
+  <header id="topbar">
+    <button id="menuBtn" class="txtbtn">Menu</button>
+    <div id="titleWrap">
+      <div id="title">Voice Agent</div>
+      <div id="subtitle">—</div>
+      <div id="stats"></div>
+    </div>
+    <div id="quick">
+      <button class="txtbtn" data-act="files">Files</button>
+      <button class="txtbtn" data-act="commit">Commit</button>
+      <button class="txtbtn" data-act="push">Push</button>
+    </div>
+  </header>
+
+  <div id="subbar">
+    <button id="modelChip" class="chip" data-act="modelSwitch" title="Switch model">Model: <span id="modelName">…</span> ▾</button>
+    <button id="clearChip" class="chip" data-act="clearContext">Clear</button>
+    <button id="usage" class="chip usagechip hidden" title="tokens this run — tap for detail"></button>
+    <div id="balance" class="balchip">—</div>
+  </div>
+
+  <main id="chat"></main>
+
+  <div id="todos" class="hidden">
+    <div id="todos-head">
+      <span id="todos-now"></span>
+      <span id="todos-count"></span>
+      <span id="todos-chev">▸</span>
+    </div>
+    <div id="todos-body"></div>
+  </div>
+
+  <div id="status"></div>
+
+  <div id="runbar" class="hidden">
+    <span id="runlabel">Working…</span>
+    <div id="queueChips"></div>
+    <button id="stopBtn" class="pill stop">Stop</button>
+  </div>
+
+  <div id="attachBar" class="hidden"></div>
+
+  <div id="modes">
+    <button class="mode active" data-mode="auto">Auto</button>
+    <button class="mode" data-mode="chat">Talk</button>
+    <button class="mode" data-mode="code">Code</button>
+    <button class="mode" data-mode="plan">Plan</button>
+  </div>
+
+  <footer id="composer">
+    <textarea id="input" rows="1" placeholder="Type or dictate a task…"></textarea>
+    <button id="askBtn" class="icon" title="Ask (not saved to context)">❓</button>
+    <button id="sendBtn" class="pill">Send</button>
+    <button id="micBtn" class="txtbtn">Speak</button>
+  </footer>
+
+  <!-- Slide-up menu -->
+  <div id="menu" class="sheet hidden">
+    <div class="sheet-inner">
+      <div class="sheet-title">Menu</div>
+
+      <div class="group-title">Project</div>
+      <div class="grid">
+        <button data-act="makeGame">🎮 Make a game</button>
+        <button data-act="newProject">Blank project</button>
+        <button data-act="sessions">Projects</button>
+        <button data-act="models">Models</button>
+        <button data-act="files">Files</button>
+        <button data-act="guidelines">Guidelines</button>
+        <button data-act="bestPractices">Best practices</button>
+        <button data-act="contextFiles">Attach files</button>
+        <button data-act="refreshMap">Refresh map</button>
+        <button data-act="run">Run app</button>
+        <button data-act="checkWeb">Check web</button>
+      </div>
+
+      <div class="group-title">Git</div>
+      <div class="grid">
+        <button data-act="diff">Diff</button>
+        <button data-act="commit">Commit</button>
+        <button data-act="push">Push</button>
+        <button data-act="pull">Pull</button>
+        <button data-act="revertLast">Revert last</button>
+        <button data-act="autocommit">Autocommit: —</button>
+        <button data-act="newRepo">New repo</button>
+        <button data-act="switchRepo">Switch repo</button>
+        <button data-act="forcePush">Force push</button>
+      </div>
+
+      <div class="group-title">Branch &amp; PR</div>
+      <div class="grid">
+        <button data-act="startBranch">Start branch</button>
+        <button data-act="createPR">Open PR</button>
+        <button data-act="prStatus">PR status</button>
+        <button data-act="cloudBuild">Build in cloud</button>
+        <button data-act="buildStatus">Build status</button>
+        <button data-act="fixBuild">Fix CI build</button>
+        <button data-act="watchPr">Watch PR</button>
+      </div>
+
+      <div class="group-title">Context</div>
+      <div class="grid">
+        <button data-act="viewContext">View</button>
+        <button data-act="previewContext">Preview payload</button>
+        <button data-act="trimContext">Trim</button>
+        <button data-act="clearContext">Clear</button>
+        <button data-act="compaction">Compaction</button>
+        <button data-act="caveman">Caveman: —</button>
+        <button data-act="effort">Effort: —</button>
+        <button data-act="frugal">Frugal: —</button>
+      </div>
+
+      <div class="group-title">System</div>
+      <div class="grid">
+        <button data-act="balance">Balance</button>
+        <button data-act="battery">Battery</button>
+        <button data-act="speak">Speak replies: —</button>
+        <button data-act="settings">Settings</button>
+        <button data-act="updateApp">Update app</button>
+      </div>
+
+      <button class="close" data-close>Close</button>
+    </div>
+  </div>
+
+  <!-- Generic modal -->
+  <div id="modal" class="sheet hidden">
+    <div class="sheet-inner">
+      <div class="sheet-title" id="modalTitle"></div>
+      <div id="modalBody"></div>
+      <div class="modal-actions">
+        <button class="pill ghost" data-close>Close</button>
+        <button class="pill" id="modalOk" style="display:none">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

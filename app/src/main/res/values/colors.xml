@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="bubble_user">#0B57D0</color>
+    <color name="bubble_user_text">#FFFFFFFF</color>
+    <color name="bubble_agent">#ECECEC</color>
+    <color name="bubble_agent_text">#111111</color>
+</resources>
