@@ -55,7 +55,25 @@ def _api(method: str, path: str, payload=None):
             return json.loads(body) if body else {}
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"GitHub HTTP {e.code}: {detail}") from e
+        raise _GitHubApiError(e.code, detail) from e
+
+
+class _GitHubApiError(RuntimeError):
+    """A GitHub REST API call returned a non-2xx status.
+
+    Carries the HTTP status code and the parsed API message so callers can
+    turn common failures (e.g. an insufficiently-scoped token) into a clear,
+    user-facing explanation instead of a raw traceback.
+    """
+
+    def __init__(self, code: int, detail: str):
+        self.code = code
+        self.detail = detail
+        try:
+            self.message = (json.loads(detail) or {}).get("message", "")
+        except Exception:
+            self.message = ""
+        super().__init__(f"GitHub HTTP {code}: {detail}")
 
 
 def _auth_url(full_name: str) -> str:
@@ -151,6 +169,18 @@ def create_repo(name: str, private: bool = True) -> str:
             porcelain.init(str(root))
         _set_origin(root, full)
         return f"Created {full}"
+    except _GitHubApiError as e:
+        if e.code in (403, 401):
+            return (
+                "Create repo failed: your GitHub token isn't allowed to "
+                "create repositories.\n\n"
+                "Give the token the \"repo\" scope (classic token) or "
+                "\"Administration: Read and write\" repository permission "
+                "plus access to your account (fine-grained token), then try "
+                "again.\n\n"
+                f"(GitHub said: {e.message or e.detail})"
+            )
+        return f"Create repo failed: GitHub returned HTTP {e.code}.\n\n{e.message or e.detail}"
     except Exception:
         return "Create repo failed:\n" + traceback.format_exc()
 
