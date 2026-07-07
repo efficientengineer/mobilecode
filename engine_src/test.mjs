@@ -75,6 +75,11 @@ import { crops } from './engine/control/crops.js';
 import { weather } from './engine/control/weather.js';
 import { energy } from './engine/control/energy.js';
 import { tools } from './engine/control/tools.js';
+import { relationships } from './engine/control/relationships.js';
+import { schedules } from './engine/control/schedules.js';
+import { skills } from './engine/control/skills.js';
+import { fishing } from './engine/control/fishing.js';
+import { animals } from './engine/control/animals.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -2797,6 +2802,241 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   check('tools: fishing misses on a bad roll', miss.effect.caught === null);
 
   check('tools bundle exposes the verbs', ['makeTool', 'hoe', 'wateringCan', 'axe', 'pickaxe', 'scythe', 'fishingRod', 'upgrade', 'useTool', 'areaTiles', 'energyCost'].every((k) => typeof tools[k] === 'function'));
+}
+
+
+// ===== Stardew Round 12 (life-sim): relationships / schedules / skills / fishing / animals =====
+
+{
+  const { makeRelationships } = relationships;
+  const prefs = { loved: ['diamond'], liked: ['egg'], disliked: ['weed'], hated: ['trash'] };
+
+  const r = makeRelationships();
+  r.meet('abby');
+  check('rel: starts at 0 hearts', r.hearts('abby') === 0 && r.points('abby') === 0);
+
+  const g = r.gift('abby', 'diamond', prefs);
+  check('rel: loved gift +80', g.delta === 80 && g.reaction === 'love' && r.points('abby') === 80);
+  check('rel: liked gift reaction', r.gift('abby', 'egg', prefs).reaction === 'like');
+
+  const rh = makeRelationships();
+  check('rel: hate delta -40', rh.gift('x', 'trash', prefs).delta === -40);
+  check('rel: points floor at 0', rh.points('x') === 0);
+  check('rel: neutral gift', rh.gift('y', 'rock', prefs).reaction === 'neutral');
+
+  const rc = makeRelationships();
+  rc.gift('a', 'egg', prefs); rc.gift('a', 'egg', prefs);
+  const third = rc.gift('a', 'egg', prefs);
+  check('rel: weekly cap blocks 3rd gift', third.reaction === 'none' && third.delta === 0);
+  rc.weekReset();
+  check('rel: weekReset frees gifts', rc.gift('a', 'egg', prefs).reaction === 'like');
+
+  const rt = makeRelationships();
+  check('rel: talk bumps once', rt.talk('b').talked === true && rt.points('b') === 20);
+  check('rel: talk once/day', rt.talk('b').talked === false && rt.points('b') === 20);
+  rt.dayReset();
+  check('rel: dayReset re-enables talk', rt.talk('b').talked === true);
+
+  const rd = makeRelationships({ decay: 5 });
+  rd.add('idle', 100); rd.add('vip', 100);
+  rd.decayDay();            // touched via add this day -> spared
+  check('rel: touched NPC spared from decay', rd.points('idle') === 100);
+  rd.decayDay();            // untouched now
+  check('rel: idle bond decays', rd.points('idle') === 95);
+  rd.decayDay(['vip']);
+  check('rel: exceptIds spares NPC', rd.points('vip') === 95 && rd.points('idle') === 90);
+
+  const rm = makeRelationships({ maxHearts: 10, pointsPerHeart: 250 });
+  rm.add('m', 999999);
+  check('rel: points cap at maxHearts*pointsPerHeart', rm.points('m') === 2500);
+  check('rel: hearts cap at max', rm.hearts('m') === 10);
+
+  const snap = rm.toJSON();
+  const rl = makeRelationships();
+  rl.load(snap);
+  check('rel: save/load roundtrip', rl.hearts('m') === 10 && rl.points('m') === 2500);
+}
+
+{
+  const hm = (h, m = 0) => h * 60 + m;
+  const def = {
+    npcId: 'abby',
+    entries: [
+      { at: '06:00', place: 'bedroom', pos: [2, 3] },
+      { at: '10:00', place: 'shop', pos: [8, 1], action: 'browse' },
+      { at: '22:00', place: 'bedroom', pos: [2, 3], action: 'sleep' },
+    ],
+    variants: [
+      { weather: 'rain', entries: [{ at: '06:00', place: 'home', pos: [2, 3] }, { at: '12:00', place: 'saloon', pos: [5, 5] }] },
+      { weather: 'rain', dayOfWeek: 'Sat', entries: [{ at: '06:00', place: 'special', pos: [9, 9] }] },
+      { hearts: 8, entries: [{ at: '06:00', place: 'bff', pos: [1, 1] }] },
+    ],
+  };
+  const s = schedules.makeSchedule(def);
+  check('schedules: bundle', !!(schedules.makeSchedule && schedules.makeDirector));
+  check('schedules: early wraps to overnight block', s.at(hm(5)).place === 'bedroom');
+  check('schedules: active block is latest passed', s.at(hm(10)).place === 'shop' && s.at(hm(9, 59)).place === 'bedroom');
+  check('schedules: posAt/place', s.posAt(hm(10))[0] === 8 && s.place(hm(10)) === 'shop');
+  check('schedules: next after 8 is 10, wraps at night', s.next(hm(8)).min === hm(10) && s.next(hm(23)).min === hm(6));
+  check('schedules: numeric at parses', schedules.makeSchedule({ npcId: 'x', entries: [{ at: 360, place: 'a', pos: [0, 0] }, { at: 720, place: 'b', pos: [1, 1] }] }).at(hm(13)).place === 'b');
+  check('schedules: rain variant overrides default', s.at(hm(13), { weather: 'rain' }).place === 'saloon' && s.at(hm(13), { weather: 'sun' }).place === 'shop');
+  check('schedules: tightest variant wins', s.at(hm(13), { weather: 'rain', dayOfWeek: 'Sat' }).place === 'special');
+  check('schedules: hearts gate (num + map)', s.at(hm(7), { hearts: 9 }).place === 'bff' && s.at(hm(7), { hearts: 2 }).place === 'bedroom' && s.at(hm(7), { hearts: { abby: 10 } }).place === 'bff');
+  const s2 = schedules.makeSchedule({ npcId: 'bob', entries: [{ at: '06:00', place: 'farm', pos: [0, 0] }, { at: '12:00', place: 'town', pos: [4, 4] }] });
+  const dir = schedules.makeDirector([s, s2]);
+  check('schedules: director initial reports all', dir.update(hm(6)).length === 2);
+  check('schedules: director no change -> empty', dir.update(hm(7)).length === 0);
+  const mv = dir.update(hm(10));
+  check('schedules: director surfaces only the mover', mv.length === 1 && mv[0].npcId === 'abby' && mv[0].entry.place === 'shop' && mv[0].moved === true);
+  check('schedules: director positions snapshot', dir.positions(hm(12)).length === 2);
+  dir.reset();
+  check('schedules: reset re-emits everyone', dir.update(hm(12)).length === 2);
+}
+
+{
+  const sk = skills.makeSkills();
+  check('skills: start at lvl 0', sk.level('fishing') === 0 && sk.xp('fishing') === 0);
+  const r1 = sk.addXp('fishing', 50);
+  check('skills: partial xp no level', r1.leveledUp === 0 && Math.abs(sk.progress('fishing') - 0.5) < 1e-9);
+  check('skills: xp isolates one skill', sk.level('farming') === 0 && sk.xp('farming') === 0);
+  const r2 = sk.addXp('fishing', 60); // total 110 -> lvl1
+  check('skills: reach level 1', r2.level === 1 && r2.leveledUp === 1 && sk.xp('fishing') === 110);
+
+  const sk2 = skills.makeSkills();
+  const r3 = sk2.addXp('mining', 100000);
+  check('skills: multi-level to cap', r3.level === 10 && r3.leveledUp === 10);
+  check('skills: maxed progress=1, xpToNext=0', sk2.progress('mining') === 1 && sk2.xpToNext('mining') === 0);
+  check('skills: no gain past cap', sk2.addXp('mining', 500).leveledUp === 0);
+  check('skills: totalLevel sums', sk2.totalLevel() === 10);
+
+  sk.definePerks('fishing', [
+    { level: 1, id: 'bait' },
+    { level: 3, id: 'sonar' },
+    { level: 5, id: 'fisher', choice: true },
+    { level: 5, id: 'trapper', choice: true },
+    { level: 10, id: 'angler', choice: true, requires: 'fisher' },
+  ]);
+  check('skills: auto perk earned at level', sk.has('bait') === true && sk.earned().includes('bait'));
+  check('skills: auto perk not yet reached', sk.has('sonar') === false);
+  check('skills: choose fails before tier reached', sk.choose('fishing', 5, 'fisher') === false);
+  while (sk.level('fishing') < 5) sk.addXp('fishing', 1000);
+  check('skills: two choices offered at tier', sk.choices('fishing', 5).length === 2);
+  check('skills: choose profession', sk.choose('fishing', 5, 'fisher') === true && sk.has('fisher') === true);
+  check('skills: choice is exclusive per tier', sk.choose('fishing', 5, 'trapper') === true && sk.has('fisher') === false && sk.has('trapper') === true);
+  while (sk.level('fishing') < 10) sk.addXp('fishing', 2000);
+  check('skills: requires-gate blocks branch', sk.choose('fishing', 10, 'angler') === false);
+  sk.choose('fishing', 5, 'fisher');
+  check('skills: branch unlocks once requirement met', sk.choose('fishing', 10, 'angler') === true && sk.chosen().includes('angler'));
+
+  const snap = sk.toJSON();
+  const sk3 = skills.makeSkills();
+  sk3.definePerks('fishing', [{ level: 5, id: 'fisher', choice: true }, { level: 10, id: 'angler', choice: true, requires: 'fisher' }]);
+  sk3.load(snap);
+  check('skills: save round-trips level+picks', sk3.level('fishing') === sk.level('fishing') && sk3.has('angler') === true);
+}
+
+{
+  // fishing.js — the catch-bar minigame state machine
+  check('fishing bundle', typeof fishing.makeFishingBar === 'function');
+
+  // snapshot shape + everything clamped to 0..1
+  const b0 = fishing.makeFishingBar({ seed: 5 });
+  const s0 = b0.get();
+  check('fishing snapshot fields', ['fishPos','barPos','barTop','barBottom','progress','overlapping','done','caught'].every(k => k in s0));
+  check('fishing bar in range', s0.barBottom >= -1e-9 && s0.barTop <= 1 + 1e-9 && s0.fishPos >= 0 && s0.fishPos <= 1);
+
+  // determinism: same seed -> identical trajectory, different seed -> different
+  const trace = (seed) => { const b = fishing.makeFishingBar({ seed }); let a = 0; for (let i = 0; i < 200; i++) a += b.step(0.016, i % 2 === 0).fishPos; return a; };
+  check('fishing deterministic', trace(9) === trace(9) && trace(9) !== trace(10));
+
+  // progress RISES while a chased fish is caged (P-controller: reel when fish is above center)
+  { const b = fishing.makeFishingBar({ seed: 3, difficulty: 0.2 }); let prev = b.get().progress, rose = false, ov = 0;
+    for (let i = 0; i < 400 && !b.get().done; i++) { const c = b.get(); const st = b.step(0.016, c.fishPos > c.barPos); if (st.overlapping) ov++; if (st.progress > prev) rose = true; prev = st.progress; }
+    check('fishing progress rises on overlap', rose && ov > 0); }
+
+  // a run of good holds lands the CATCH
+  { const b = fishing.makeFishingBar({ seed: 3, difficulty: 0.2 }); let d = null;
+    for (let i = 0; i < 2000; i++) { const c = b.get(); const st = b.step(0.016, c.fishPos > c.barPos); if (st.done) { d = st; break; } }
+    check('fishing good play catches', d && d.caught === true && d.progress >= 1); }
+
+  // never reeling -> a floater fish escapes the parked bar -> progress drains to a FAIL
+  { const b = fishing.makeFishingBar({ seed: 42, difficulty: 0.5, startProgress: 0.4, barSize: 0.2 }); b.cast({ behavior: 'floater' }); let d = null;
+    for (let i = 0; i < 2000; i++) { const st = b.step(0.016, false); if (st.done) { d = st; break; } }
+    check('fishing no-reel fails', d && d.caught === false && d.progress <= 0); }
+
+  // cast() resets a fresh run
+  { const b = fishing.makeFishingBar({ seed: 7 }); for (let i = 0; i < 50; i++) b.step(0.016, false); const f = b.cast({ difficulty: 0.8, behavior: 'dart' });
+    check('fishing cast resets', f.done === false && Math.abs(f.progress - 0.35) < 1e-9); }
+
+  // treasure option adds a second target whose meter fills while covered
+  { const b = fishing.makeFishingBar({ seed: 2, treasure: true, barSize: 1.0 }); const t0 = b.get();
+    check('fishing treasure fields', 'treasurePos' in t0 && 'treasureProgress' in t0 && 'treasureCaught' in t0);
+    let grew = false, prev = t0.treasureProgress; for (let i = 0; i < 20; i++) { const st = b.step(0.016, true); if (st.overlappingTreasure && st.treasureProgress > prev) grew = true; prev = st.treasureProgress; }
+    check('fishing treasure fills when covered', grew); }
+
+  // done freezes idempotently
+  { const b = fishing.makeFishingBar({ seed: 42, difficulty: 0.5, startProgress: 0.4, barSize: 0.2 }); b.cast({ behavior: 'floater' }); let d;
+    for (let i = 0; i < 3000; i++) { d = b.step(0.016, false); if (d.done) break; } const after = b.step(0.5, true);
+    check('fishing done freezes', d.done && after.done && after.progress === d.progress); }
+}
+
+{
+  const { makeBarn, makeAnimal, feed, feedAll, pet, dayPass, collect } = animals;
+
+  // barn roster: add/dup/capacity/remove/list-copy
+  const barn = makeBarn({ capacity: 2 });
+  const c1 = makeAnimal({ id: 'c1', kind: 'chicken', name: 'Cluck' });
+  const cow = makeAnimal({ id: 'cw', kind: 'cow' });
+  const extra = makeAnimal({ id: 'x', kind: 'sheep' });
+  check('animals: add', barn.add(c1) && barn.add(cow));
+  check('animals: no dup id', !barn.add(c1));
+  check('animals: capacity full', !barn.add(extra));
+  check('animals: list is copy', barn.list().length === 2 && barn.list() !== barn.list());
+  check('animals: remove returns animal', barn.remove('cw') === cow && barn.count === 1);
+
+  // feed + pet + dayPass -> produce, ages, happiness rises, flags clear
+  check('animals: feed sets fed', feed(c1) && c1.fed);
+  check('animals: feed idempotent same day', !feed(c1));
+  check('animals: pet once/day', pet(c1) && c1.pettedToday && !pet(c1));
+  const h0 = c1.happiness;
+  const day = dayPass(c1, { fed: true, housed: true, weather: 'sun' });
+  check('animals: fed+pet yields egg', day.produced && day.produced.item === 'egg' && c1.produceReady);
+  check('animals: dayPass ages + clears daily flags', c1.age === 1 && !c1.fed && !c1.pettedToday);
+  check('animals: happiness rose when tended', c1.happiness > h0);
+
+  // collect returns then clears
+  const egg = collect(c1);
+  check('animals: collect returns produce', egg && egg.item === 'egg');
+  check('animals: collect clears + second is null', !c1.produceReady && collect(c1) === null);
+
+  // unfed skips produce and drops happiness
+  const hungry = makeAnimal({ id: 'u', kind: 'chicken', happiness: 60 });
+  const hr = dayPass(hungry, { fed: false, housed: true, weather: 'sun' });
+  check('animals: unfed skips produce', hr.produced === null && !hungry.produceReady);
+  check('animals: unfed drops happiness', hungry.happiness < 60);
+
+  // left out in a storm: skip + penalty
+  const outside = makeAnimal({ id: 'o', kind: 'chicken', happiness: 80 });
+  feed(outside); pet(outside);
+  const sr = dayPass(outside, { housed: false, weather: 'storm' });
+  check('animals: storm exposure skips produce + drops happiness', sr.produced === null && outside.happiness < 80);
+
+  // quality rises with happiness (same age), gold at the top; tool-gated collect
+  const rank = { regular: 0, silver: 1, gold: 2 };
+  const lo = makeAnimal({ id: 'lo', kind: 'cow', happiness: 20, age: 10, produceIn: 0 });
+  const hi = makeAnimal({ id: 'hi', kind: 'cow', happiness: 100, age: 10, produceIn: 0 });
+  dayPass(lo, { fed: true }); dayPass(hi, { fed: true });
+  check('animals: milk needsTool pail', hi.produce.needsTool === 'pail');
+  check('animals: collect blocked without required tool', collect(hi, { tools: ['axe'] }) === null && hi.produceReady);
+  const loMilk = collect(lo, { tools: ['pail'] });
+  const hiMilk = collect(hi, { tools: ['pail'] });
+  check('animals: quality rises with happiness', rank[hiMilk.quality] > rank[loMilk.quality] && hiMilk.quality === 'gold');
+
+  // feedAll draws from a hay count
+  const b2 = makeBarn({ capacity: 5 });
+  for (let i = 0; i < 4; i++) b2.add(makeAnimal({ id: 'a' + i, kind: 'chicken' }));
+  const fa = feedAll(b2, 2);
+  check('animals: feedAll draws from hay count', fa.fed === 2 && fa.hayLeft === 0 && b2.list().filter((a) => a.fed).length === 2);
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
