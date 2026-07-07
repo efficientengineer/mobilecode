@@ -289,14 +289,13 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 .editor-lines, .editor-hl, .editor-area { position: absolute; inset: 0; margin: 0; padding: 8px 10px;
   font-family: monospace; font-size: 12.5px; line-height: 1.5; white-space: pre;
   tab-size: 2; -moz-tab-size: 2; border: 0; }
-/* Numbers underlaid at the line start: bold at the left edge, fading out to the
-   right — the mirror of the code's fade-in, so the two crossfade over the first
-   few characters. */
+/* Numbers sit under the code, tucked into the left margin: fully visible in the
+   margin, fading out to the right as they pass behind the text. */
 .editor-lines { overflow: hidden; pointer-events: none; z-index: 0; text-align: left;
-  color: #38bdf8; opacity: .85; font-weight: 700;
+  padding-left: 2px; color: #38bdf8; opacity: .85; font-weight: 700;
   text-shadow: 0 0 2px #000, 0 1px 2px rgba(0,0,0,.95);
-  -webkit-mask-image: linear-gradient(to right, #000 0, #000 8px, transparent 40px);
-  mask-image: linear-gradient(to right, #000 0, #000 8px, transparent 40px);
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 12px, transparent 34px);
+  mask-image: linear-gradient(to right, #000 0, #000 12px, transparent 34px);
   user-select: none; -webkit-user-select: none; }
 
 /* Find & replace popover — opened from the 🔍 button, floats over the code. */
@@ -311,11 +310,8 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   min-width: 30px; text-align: center; }
 .hint#edStatus { margin: 0; padding: 3px 8px; flex-shrink: 0; }
 .hint#edStatus:empty { display: none; }
-/* The code's first few characters fade in from the left, so the number underneath
-   reads clearly at the line start. Compositor-only — no per-keystroke cost. */
-.editor-hl { overflow: hidden; color: var(--text); pointer-events: none; z-index: 1; background: transparent;
-  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.12) 0, rgba(0,0,0,.12) 6px, #000 42px);
-  mask-image: linear-gradient(to right, rgba(0,0,0,.12) 0, rgba(0,0,0,.12) 6px, #000 42px); }
+/* Code sits above the numbers, fully opaque — the numbers read as underneath. */
+.editor-hl { overflow: hidden; color: var(--text); pointer-events: none; z-index: 1; background: transparent; }
 .editor-area { overflow: auto; background: transparent; color: transparent;
   caret-color: var(--text); resize: none; outline: none; z-index: 2; }
 .editor-area::selection { background: rgba(59,130,246,.35); }
