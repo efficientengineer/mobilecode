@@ -1512,6 +1512,26 @@ function highlightCss(code) {
   return out + "\n";
 }
 function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+// Line-based diff (LCS). Returns [[sign, line], …] with sign " ", "-", or "+",
+// or null if the inputs are too large to diff cheaply on-device.
+function lineDiff(a, b) {
+  const A = a.split("\n"), B = b.split("\n");
+  const n = A.length, m = B.length;
+  if (n * m > 4000000) return null;
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { out.push([" ", A[i]]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push(["-", A[i]]); i++; }
+    else { out.push(["+", B[j]]); j++; }
+  }
+  while (i < n) out.push(["-", A[i++]]);
+  while (j < m) out.push(["+", B[j++]]);
+  return out;
+}
 
 // --- Tabbed, auto-saving editor ------------------------------------------
 // Open files live as tabs to the right of the ☰ Files button. There is no
@@ -1571,10 +1591,11 @@ function closeTab(rel) {
   if (activeTab) renderEditor(); else showEditorEmpty();
 }
 function showEditorEmpty() {
-  const pane = $("#editorPane"), empty = $("#editorEmpty"), fab = $("#edFindFab");
+  const pane = $("#editorPane"), empty = $("#editorEmpty"), fab = $("#edFindFab"), diffFab = $("#edDiffFab");
   if (pane) { pane.classList.add("hidden"); pane.innerHTML = ""; }
   if (empty) empty.classList.remove("hidden");
   if (fab) fab.classList.add("hidden");
+  if (diffFab) diffFab.classList.add("hidden");
   const cp = $("#cursorPos"); if (cp) cp.textContent = "";
 }
 
@@ -1621,11 +1642,13 @@ async function refreshOpenTabs() {
 // Render the active tab's file into the (chrome-less) editor pane.
 function renderEditor() {
   const tab = openTabs.find((t) => t.rel === activeTab);
-  const pane = $("#editorPane"), empty = $("#editorEmpty"), fab = $("#edFindFab");
+  const pane = $("#editorPane"), empty = $("#editorEmpty"), fab = $("#edFindFab"), diffFab = $("#edDiffFab");
   if (!tab) { showEditorEmpty(); return; }
   empty.classList.add("hidden");
   pane.classList.remove("hidden");
   fab.classList.remove("hidden");
+  diffFab.classList.remove("hidden");
+  diffFab.classList.remove("active");
   const hlLang = hlLangFor(tab.rel);
   pane.innerHTML =
     `<div class="editor">
@@ -1634,6 +1657,7 @@ function renderEditor() {
            <pre class="editor-hl" id="edHl" aria-hidden="true"></pre>
            <textarea class="editor-area" id="edArea" spellcheck="false"
                      autocomplete="off" autocapitalize="off" autocorrect="off"></textarea>
+           <div class="editor-diff hidden" id="edDiff"></div>
            <div class="editor-findpop hidden" id="edFindPop">
              <div class="fp-row">
                <input id="edFindI" class="field" placeholder="Find" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
@@ -1665,8 +1689,33 @@ function renderEditor() {
     el.textContent = `Ln ${line}, Col ${col}`;
   }
   function refresh() { renderHl(); findMatches(); updatePos(); }
+
+  // --- Inline diff (working buffer vs last commit), toggled by the ± button ---
+  const edDiff = $("#edDiff");
+  let diffOn = false;
+  function hideDiff() { diffOn = false; diffFab.classList.remove("active"); edDiff.classList.add("hidden"); }
+  async function toggleDiff() {
+    if (diffOn) { hideDiff(); return; }
+    diffOn = true;
+    diffFab.classList.add("active");
+    findPop.classList.add("hidden");
+    let head = "";
+    try { head = (await call("py.call", { module: "orchestrator", fn: "head_file", args: [tab.rel] })).text || ""; } catch (e) {}
+    if (!diffOn) return; // toggled off while awaiting
+    const rows = lineDiff(head, area.value);
+    if (rows === null) edDiff.innerHTML = `<span class="di-empty">File too large to diff.</span>`;
+    else if (!rows.some((r) => r[0] !== " ")) edDiff.innerHTML = `<span class="di-empty">No changes vs last commit.</span>`;
+    else edDiff.innerHTML = rows.map(([t, s]) => {
+      const cls = t === "+" ? "di-add" : t === "-" ? "di-del" : "di-ctx";
+      return `<span class="${cls}">${escapeHtml(t + " " + s)}</span>`;
+    }).join("");
+    edDiff.classList.remove("hidden");
+  }
+  diffFab.onclick = toggleDiff;
+
   // Any edit updates the tab buffer, flags dirty, and schedules an auto-save.
   function onEdit() {
+    if (diffOn) hideDiff(); // editing exits the (now stale) diff view
     tab.content = area.value;
     updateActiveTabDirty(tab.content !== tab.saved);
     refresh();
