@@ -37,6 +37,44 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 .pill.ghost { background: var(--panel2); color: var(--text); }
 .pill:active { opacity: .8; }
 
+/* Workspace: the file explorer + the main (chat/editor) column. Reorients by
+   device orientation — explorer on top in portrait, on the left in landscape. */
+#workspace { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+#mainCol { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+#explorer { display: flex; flex-direction: column; background: var(--panel);
+  border-bottom: 1px solid var(--border); min-height: 0; }
+#explorer-head { display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 12px; font-size: 11px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px; }
+#explorer-actions { display: flex; gap: 4px; }
+.txtbtn.xs { padding: 3px 8px; font-size: 13px; line-height: 1; }
+#tree { overflow: auto; padding: 2px 0 6px; }
+#explorer.collapsed #tree { display: none; }
+
+/* Portrait: a capped-height panel across the top (collapsible to save space). */
+@media (orientation: portrait) {
+  #explorer { max-height: 34vh; }
+}
+/* Landscape: a fixed-width sidebar down the left. */
+@media (orientation: landscape) {
+  #workspace { flex-direction: row; }
+  #explorer { width: 260px; flex-shrink: 0; border-bottom: none;
+    border-right: 1px solid var(--border); max-height: none; }
+  #explorer.collapsed { width: auto; }
+}
+
+/* Tree rows */
+.tree-row { display: flex; align-items: center; gap: 5px; padding: 5px 12px;
+  font-size: 13px; white-space: nowrap; cursor: pointer; }
+.tree-row:active { background: var(--panel2); }
+.tree-row.active { background: var(--agent); }
+.tree-row .tw-caret { width: 12px; flex-shrink: 0; color: var(--muted); font-size: 10px; }
+.tree-row .tw-ico { flex-shrink: 0; opacity: .85; }
+.tree-row .tw-name { overflow: hidden; text-overflow: ellipsis; }
+.tree-row.dir .tw-name { font-weight: 600; }
+.tree-empty { color: var(--muted); font-size: 12px; padding: 8px 12px; }
+
 #chat { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .bubble {
   max-width: 82%; padding: 10px 13px; border-radius: 16px; white-space: pre-wrap;
