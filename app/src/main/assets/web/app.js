@@ -702,7 +702,19 @@ function modal(title, bodyHtml, onOk) {
   const ok = $("#modalOk");
   if (onOk) {
     ok.style.display = "";
-    ok.onclick = async () => { const keep = await onOk(); if (keep !== true) closeSheet("#modal"); };
+    let running = false;
+    ok.onclick = async () => {
+      if (running) return; // ignore double-taps while the handler is in flight
+      running = true;
+      ok.disabled = true;
+      try {
+        const keep = await onOk();
+        if (keep !== true) closeSheet("#modal");
+      } finally {
+        running = false;
+        ok.disabled = false;
+      }
+    };
   } else {
     ok.style.display = "none";
   }
