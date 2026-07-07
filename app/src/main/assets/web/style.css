@@ -37,14 +37,6 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 .pill.ghost { background: var(--panel2); color: var(--text); }
 .pill:active { opacity: .8; }
 
-/* Thin balance strip at the very top of the window. */
-#topbalance { flex-shrink: 0; display: flex; align-items: center; justify-content: center;
-  height: 20px; background: var(--bg); border-bottom: 1px solid var(--border); }
-#topbalance #balance { background: transparent; border: none; padding: 0; margin: 0;
-  font-size: 11px; font-weight: 700; color: #4ade80; white-space: nowrap; }
-#topbalance #balance.low { color: #f87171; }
-#topbalance #balance.none { color: var(--muted); font-weight: 600; }
-
 /* Floating controls (menu / model picker / actions catch-all). */
 .fab { position: fixed; z-index: 40; top: 26px; height: 34px; padding: 0 12px;
   background: var(--panel2); color: var(--text); border: 1px solid var(--border);
@@ -72,7 +64,7 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 /* Workspace: the file explorer + the main (chat/editor) column. Reorients by
    device orientation — explorer on top in portrait, on the left in landscape.
    Padded down so content clears the floating controls. */
-#workspace { flex: 1; display: flex; flex-direction: column; min-height: 0; padding-top: 44px; }
+#workspace { flex: 1; display: flex; flex-direction: column; min-height: 0; padding-top: 64px; }
 #mainCol { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .txtbtn.xs { padding: 3px 8px; font-size: 13px; line-height: 1; }
 
@@ -107,6 +99,18 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
   color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
 .to-actions { display: flex; gap: 4px; }
 #tree { flex: 1; overflow: auto; padding: 4px 0 6px; }
+
+/* GitHub bar at the top of the Files overlay. */
+#githubBar { flex-shrink: 0; border-bottom: 1px solid var(--border); }
+.gh-toggle { width: 100%; text-align: left; background: var(--panel2); color: var(--text);
+  padding: 10px 12px; font-size: 13px; font-weight: 700; display: flex; align-items: center;
+  justify-content: space-between; }
+.gh-toggle:active { background: var(--border); }
+#githubMenu { display: flex; flex-direction: column; padding: 4px; gap: 2px; background: var(--bg); }
+#githubMenu.hidden { display: none; }
+#githubMenu button { text-align: left; background: transparent; color: var(--text);
+  padding: 10px 12px; border-radius: 8px; font-size: 13px; }
+#githubMenu button:active { background: var(--panel2); }
 
 /* Floating find button inside the editor. */
 #edFindFab { position: absolute; z-index: 15; top: 8px; right: 10px; width: 40px; height: 40px;
@@ -208,7 +212,7 @@ pre.small { white-space: pre-wrap; word-wrap: break-word; background: var(--bg);
 #input:focus { outline: none; border-color: var(--accent); }
 
 .sheet { position: fixed; inset: 0; background: rgba(0,0,0,.5);
-  display: flex; align-items: flex-end; z-index: 20; }
+  display: flex; align-items: flex-end; z-index: 80; }
 .sheet.hidden { display: none; }
 .sheet-inner { width: 100%; max-height: 85vh; overflow-y: auto; background: var(--panel);
   border-top-left-radius: 18px; border-top-right-radius: 18px; padding: 16px; }
@@ -288,8 +292,17 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   border-radius: 12px; padding: 7px 10px; font-size: 13px; font-weight: 600; }
 .modelbtn:active { background: var(--border); }
 .modelbtn span[id] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cd-head-actions { display: flex; gap: 6px; }
+/* DeepSeek balance row in the drawer. */
+#chatDrawer-balance { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
+#chatDrawer-balance .db-label { font-size: 11px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px; }
+#chatDrawer-balance #balance { font-size: 13px; padding: 4px 10px; }
 /* Leave room at the bottom-right for the ✕ toggle so it never covers Speak. */
 #chatDrawer #composer { padding-right: 76px; }
+/* The chat-actions menu opens from inside the drawer, so it sits above it. */
+#chatActionsMenu { z-index: 70; }
 
 /* File viewer / editor (VS Code style: highlighting + gutter + find/replace).
    Zero chrome around the code so the gutter hugs the left edge — no wasted space. */
@@ -340,6 +353,7 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 .tk-s { color: #c3e88d; }
 .tk-c { color: #7d8799; font-style: italic; }
 .tk-n { color: #f78c6c; }
+.tk-p { color: #82aaff; }   /* html tag punctuation / css property names */
 
 /* Commit review bar (autocommit off) */
 .review-bar { align-self: stretch; display: flex; gap: 8px; justify-content: flex-end;
