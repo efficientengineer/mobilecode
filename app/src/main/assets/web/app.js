@@ -1352,14 +1352,6 @@ function closeTree() {
   const o = $("#treeOverlay"), b = $("#treeBackdrop");
   if (o) o.classList.add("hidden");
   if (b) b.classList.add("hidden");
-  const gm = $("#githubMenu"); if (gm && !gm.classList.contains("hidden")) toggleGithubMenu();
-}
-function toggleGithubMenu() {
-  const m = $("#githubMenu"), b = $("#githubBtn");
-  if (!m) return;
-  const hidden = m.classList.toggle("hidden");
-  const chev = b && b.querySelector(".gh-chev");
-  if (chev) chev.textContent = hidden ? "▾" : "▴";
 }
 // Create a new empty file from the explorer and open it in a tab for editing.
 function newFile() {
@@ -1794,10 +1786,11 @@ async function askEphemeral(q) {
 
 // --- Floating controls (menu / model picker / actions catch-all) ---------
 function closeFabMenus() {
-  const mm = $("#modelMenu"), am = $("#actionsMenu"), cm = $("#chatActionsMenu");
+  const mm = $("#modelMenu"), am = $("#actionsMenu"), cm = $("#chatActionsMenu"), gm = $("#githubMenu");
   if (mm) mm.classList.add("hidden");
   if (am) am.classList.add("hidden");
   if (cm) cm.classList.add("hidden");
+  if (gm) gm.classList.add("hidden");
 }
 function positionFabMenu(menu, fab, align) {
   const r = fab.getBoundingClientRect();
@@ -1897,10 +1890,32 @@ function openChatActionsMenu() {
     el.onclick = () => { menu.classList.add("hidden"); (actions[el.getAttribute("data-chatact")] || (() => {}))(); };
   });
 }
+// GitHub actions, opened from the top-bar GitHub button.
+const GITHUB_ITEMS = [
+  { label: "Switch repository", act: "switchRepo" },
+  { label: "Commit (AI message)", act: "commit" },
+  { label: "Pull", act: "pull" },
+  { label: "Push", act: "push" },
+  { label: "Merge → open PR", act: "createPR" },
+];
+function openGithubMenu() {
+  const menu = $("#githubMenu");
+  if (!menu.classList.contains("hidden")) { menu.classList.add("hidden"); return; }
+  closeFabMenus();
+  menu.innerHTML = GITHUB_ITEMS.map((a) => `<div class="fab-item" data-ghact="${a.act}">${a.label}</div>`).join("");
+  positionFabMenu(menu, $("#githubFab"), "left");
+  clampFabMenu(menu);
+  menu.classList.remove("hidden");
+  menu.querySelectorAll("[data-ghact]").forEach((el) => {
+    el.onclick = () => { menu.classList.add("hidden"); (actions[el.getAttribute("data-ghact")] || (() => {}))(); };
+  });
+}
 
 // --- Wire up -------------------------------------------------------------
 $("#menuFab").onclick = () => { closeFabMenus(); openSheet("#menu"); };
 $("#actionsFab").onclick = (e) => { e.stopPropagation(); openActionsMenu(); };
+$("#githubFab").onclick = (e) => { e.stopPropagation(); openGithubMenu(); };
+$("#playFab").onclick = () => { closeFabMenus(); (actions.run || (() => {}))(); };
 $("#modelLead").onclick = (e) => { e.stopPropagation(); openModelMenu("orchestrator", e.currentTarget); };
 $("#modelImpl").onclick = (e) => { e.stopPropagation(); openModelMenu("implementer", e.currentTarget); };
 $("#chatActionsBtn").onclick = (e) => { e.stopPropagation(); openChatActionsMenu(); };
@@ -1912,10 +1927,6 @@ $("#filesBtn").onclick = openTree;
 $("#treeClose").onclick = closeTree;
 $("#treeBackdrop").onclick = closeTree;
 $("#newFileBtn").onclick = newFile;
-$("#githubBtn").onclick = toggleGithubMenu;
-document.querySelectorAll("#githubMenu [data-ghact]").forEach((b) => {
-  b.onclick = () => { closeTree(); (actions[b.dataset.ghact] || (() => {}))(); };
-});
 $("#chatFab").onclick = toggleChat;
 $("#chatDrawerClose").onclick = closeChat;
 $("#chatBackdrop").onclick = closeChat;

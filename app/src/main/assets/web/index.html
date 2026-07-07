@@ -8,14 +8,17 @@
 </head>
 <body>
   <!-- Floating controls -->
-  <button id="actionsFab" class="fab" title="Actions">⋯</button>
+  <button id="githubFab" class="fab fab-wide" title="GitHub">GitHub ▾</button>
+  <button id="playFab" class="fab" title="Run app">▶</button>
   <button id="menuFab" class="fab" title="Menu">☰</button>
+  <button id="actionsFab" class="fab" title="Actions">⋯</button>
   <button id="usage" class="usagechip hidden" title="tokens this run — tap for detail"></button>
 
   <!-- Floating dropdown panels -->
   <div id="modelMenu" class="fabmenu hidden"></div>
   <div id="actionsMenu" class="fabmenu hidden"></div>
   <div id="chatActionsMenu" class="fabmenu hidden"></div>
+  <div id="githubMenu" class="fabmenu hidden"></div>
 
   <div id="workspace">
     <div id="tabbar">
@@ -37,16 +40,6 @@
   <!-- Explorer tree (opened from the ☰ Files button) -->
   <div id="treeBackdrop" class="hidden"></div>
   <div id="treeOverlay" class="hidden">
-    <div id="githubBar">
-      <button id="githubBtn" class="gh-toggle">GitHub <span class="gh-chev">▾</span></button>
-      <div id="githubMenu" class="hidden">
-        <button data-ghact="switchRepo">Switch repository</button>
-        <button data-ghact="commit">Commit (AI message)</button>
-        <button data-ghact="pull">Pull</button>
-        <button data-ghact="push">Push</button>
-        <button data-ghact="createPR">Merge → open PR</button>
-      </div>
-    </div>
     <div id="treeOverlay-head">
       <span>Explorer</span>
       <span class="to-actions">
