@@ -114,8 +114,8 @@ function shortModel(m) {
 
 async function refreshHeader() {
   const m = await call("session.meta");
-  $("#subtitle").textContent =
-    (m.name || "session") + " • " + (m.activeRepo || "no repo");
+  const sub = $("#subtitle");
+  if (sub) sub.textContent = (m.name || "session") + " • " + (m.activeRepo || "no repo");
   const mn = $("#modelName");
   if (mn) mn.textContent = shortModel(m.orchestrator);
 }
@@ -132,7 +132,6 @@ async function loadHistory() {
       bubble(t.text, t.role === "user" ? "user" : "agent", t.run_id || null,
         t.display_only ? false : t.ctx));
   } catch (e) {}
-  if (!turns.length) showHome();
   refreshStats();
   renderTree();
 }
@@ -217,7 +216,8 @@ async function refreshStats() {
       const pins = JSON.parse((await call("orch", { fn: "list_context_files" })).text);
       if (pins.length) s += ` · 📎${pins.length}`;
     } catch (e) {}
-    $("#stats").textContent = s;
+    const st = $("#stats");
+    if (st) st.textContent = s;
   } catch (e) {}
   refreshBalance();
   refreshUsage();
@@ -1561,8 +1561,108 @@ async function askEphemeral(q) {
   setStatus("");
 }
 
+// --- Floating controls (menu / model picker / actions catch-all) ---------
+function closeFabMenus() {
+  const mm = $("#modelMenu"), am = $("#actionsMenu");
+  if (mm) mm.classList.add("hidden");
+  if (am) am.classList.add("hidden");
+}
+function positionFabMenu(menu, fab, align) {
+  const r = fab.getBoundingClientRect();
+  menu.style.top = (r.bottom + 6) + "px";
+  if (align === "right") { menu.style.right = (window.innerWidth - r.right) + "px"; menu.style.left = "auto"; }
+  else { menu.style.left = r.left + "px"; menu.style.right = "auto"; }
+}
+async function openModelMenu() {
+  const menu = $("#modelMenu");
+  if (!menu.classList.contains("hidden")) { menu.classList.add("hidden"); return; }
+  closeFabMenus();
+  menu.innerHTML = `<div class="fab-item muted">Loading…</div>`;
+  positionFabMenu(menu, $("#modelFab"), "left");
+  menu.classList.remove("hidden");
+  let all = [], cur = "", implementer = "";
+  try {
+    const [meta, agg] = await Promise.all([call("session.meta"), call("models.aggregate")]);
+    all = agg.models || []; cur = meta.orchestrator || ""; implementer = meta.implementer || "";
+  } catch (e) {}
+  const recent = getRecentModels(), rank = (m) => recent.indexOf(m);
+  const sorted = all.slice().sort((a, b) => {
+    const ra = rank(a), rb = rank(b);
+    if (ra < 0 && rb < 0) return a.localeCompare(b);
+    if (ra < 0) return -1;
+    if (rb < 0) return 1;
+    return rb - ra; // most recent first (top of an anchored-below dropdown)
+  });
+  menu.innerHTML = sorted.length
+    ? sorted.map((m) => `<div class="fab-item" data-model="${escAttr(m)}">${m === cur ? "● " : ""}${escapeHtml(shortModel(m))}</div>`).join("")
+    : `<div class="fab-item muted">No models — add an API key in Settings.</div>`;
+  menu.querySelectorAll("[data-model]").forEach((el) => {
+    el.onclick = async () => {
+      const m = el.getAttribute("data-model");
+      await call("session.setModels", { orchestrator: m, implementer });
+      pushRecentModel(m);
+      menu.classList.add("hidden");
+      await refreshHeader();
+      bubble("Model → " + shortModel(m), "sys");
+    };
+  });
+}
+const ACTION_ITEMS = [
+  { label: "Clear context", act: "clearContext" },
+  { label: "Files", act: "files" },
+  { label: "Diff", act: "diff" },
+  { label: "Commit", act: "commit" },
+  { label: "Push", act: "push" },
+  { label: "Pull", act: "pull" },
+];
+function openActionsMenu() {
+  const menu = $("#actionsMenu");
+  if (!menu.classList.contains("hidden")) { menu.classList.add("hidden"); return; }
+  closeFabMenus();
+  menu.innerHTML = ACTION_ITEMS.map((a) => `<div class="fab-item" data-fabact="${a.act}">${a.label}</div>`).join("");
+  positionFabMenu(menu, $("#actionsFab"), "right");
+  menu.classList.remove("hidden");
+  menu.querySelectorAll("[data-fabact]").forEach((el) => {
+    el.onclick = () => { menu.classList.add("hidden"); (actions[el.getAttribute("data-fabact")] || (() => {}))(); };
+  });
+}
+
+// --- Explorer resize (drag the handle: height in portrait, width in landscape) -
+function wireExplorerResize() {
+  const explorer = $("#explorer"), handle = $("#explorerResize");
+  if (!explorer || !handle) return;
+  const landscape = () => window.matchMedia("(orientation: landscape)").matches;
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+    const startX = e.clientX, startY = e.clientY;
+    const rect = explorer.getBoundingClientRect();
+    const startW = rect.width, startH = rect.height, ls = landscape();
+    const move = (ev) => {
+      if (ls) {
+        let w = Math.max(140, Math.min(startW + (ev.clientX - startX), window.innerWidth * 0.7));
+        explorer.style.width = w + "px"; explorer.style.height = "";
+      } else {
+        let h = Math.max(80, Math.min(startH + (ev.clientY - startY), window.innerHeight * 0.7));
+        explorer.style.height = h + "px"; explorer.style.width = "";
+      }
+    };
+    const up = () => { handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", up); };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  });
+  // On rotation the axis changes; drop the inline size so the media default applies.
+  window.addEventListener("orientationchange", () => { explorer.style.height = ""; explorer.style.width = ""; });
+}
+
 // --- Wire up -------------------------------------------------------------
-$("#menuBtn").onclick = () => openSheet("#menu");
+$("#menuFab").onclick = () => { closeFabMenus(); openSheet("#menu"); };
+$("#modelFab").onclick = (e) => { e.stopPropagation(); openModelMenu(); };
+$("#actionsFab").onclick = (e) => { e.stopPropagation(); openActionsMenu(); };
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".fab") && !e.target.closest(".fabmenu")) closeFabMenus();
+});
+wireExplorerResize();
 document.querySelectorAll("[data-act]").forEach((b) => {
   b.onclick = () => { closeSheet("#menu"); (actions[b.dataset.act] || (() => {}))(); };
 });
@@ -1611,14 +1711,6 @@ if (_exToggle) _exToggle.onclick = () => {
   const collapsed = $("#explorer").classList.toggle("collapsed");
   _exToggle.textContent = collapsed ? "▸" : "▾";
 };
-document.querySelectorAll(".mode").forEach((b) => {
-  b.onclick = () => {
-    document.querySelectorAll(".mode").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active");
-    currentMode = b.dataset.mode;
-  };
-});
-
 // Boot
 (async function () {
   try { await refreshHeader(); await loadHistory(); } catch (e) {}
@@ -1632,5 +1724,4 @@ document.querySelectorAll(".mode").forEach((b) => {
   try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
   try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
   updateSpeakLabel(autoSpeakOn());
-  bubble("Ready. Type or tap 🎤 to dictate a task.", "sys");
 })();
