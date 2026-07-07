@@ -59,8 +59,14 @@
       <button id="chatDrawerClose" class="txtbtn xs" title="Close">✕</button>
     </div>
     <div id="chatDrawer-models">
-      <button id="modelLead" class="modelbtn" title="Orchestrator model">🧠 <span id="modelName">…</span> ▾</button>
-      <button id="modelImpl" class="modelbtn" title="Implementer (coder) model">🛠 <span id="implName">…</span> ▾</button>
+      <div class="modelcol">
+        <label class="model-label">Orchestrator</label>
+        <button id="modelLead" class="modelbtn"><span id="modelName">…</span> ▾</button>
+      </div>
+      <div class="modelcol">
+        <label class="model-label">Implementer</label>
+        <button id="modelImpl" class="modelbtn"><span id="implName">…</span> ▾</button>
+      </div>
     </div>
 
     <main id="chat"></main>
