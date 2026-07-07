@@ -1237,11 +1237,58 @@ async function filesModal(path) {
   };
 }
 
-// A lightweight VS Code-style viewer/editor: line-numbered gutter, an
-// editable code area, and Save (writes back to the workspace file).
+// --- Syntax highlighting -------------------------------------------------
+// A small, dependency-free highlighter. It tokenizes the RAW text and only
+// wraps recognized tokens in <span>s (everything is HTML-escaped), so the
+// highlighted layer lines up character-for-character with the textarea.
+const HL_KEYWORDS = {
+  c: ["if","else","for","while","do","switch","case","break","continue","return",
+      "function","var","let","const","class","extends","new","this","super","import",
+      "export","default","from","as","try","catch","finally","throw","typeof",
+      "instanceof","in","of","void","delete","yield","async","await","static","get",
+      "set","fun","val","when","object","override","private","public","internal",
+      "suspend","interface","enum","true","false","null","undefined"],
+  py: ["def","class","return","if","elif","else","for","while","import","from","as",
+       "try","except","finally","with","lambda","yield","async","await","pass","break",
+       "continue","in","is","not","and","or","None","True","False","self","raise",
+       "global","nonlocal","assert","del","print"],
+};
+function hlOptsFor(rel) {
+  const ext = (rel.split(".").pop() || "").toLowerCase();
+  if (["py","pyw","sh","bash","yaml","yml","toml","rb","cfg","ini"].includes(ext))
+    return { keywords: HL_KEYWORDS.py, hash: true };
+  return { keywords: HL_KEYWORDS.c, hash: false };
+}
+function highlightCode(code, opts) {
+  const kwRe = opts.keywords.length ? new RegExp("^(?:" + opts.keywords.join("|") + ")$") : null;
+  const comment = opts.hash ? "#[^\\n]*" : "//[^\\n]*|/\\*[\\s\\S]*?\\*/";
+  const re = new RegExp(
+    "(" + comment + ")" +
+    "|(\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`)" +
+    "|(\\b\\d[\\w.]*\\b)" +
+    "|([A-Za-z_$][\\w$]*)", "g");
+  let out = "", last = 0, m;
+  while ((m = re.exec(code))) {
+    out += escapeHtml(code.slice(last, m.index));
+    const t = m[0];
+    if (m[1]) out += '<span class="tk-c">' + escapeHtml(t) + "</span>";
+    else if (m[2]) out += '<span class="tk-s">' + escapeHtml(t) + "</span>";
+    else if (m[3]) out += '<span class="tk-n">' + escapeHtml(t) + "</span>";
+    else if (m[4] && kwRe && kwRe.test(t)) out += '<span class="tk-k">' + escapeHtml(t) + "</span>";
+    else out += escapeHtml(t);
+    last = re.lastIndex;
+  }
+  out += escapeHtml(code.slice(last));
+  return out + "\n"; // trailing newline keeps the layer's height in sync
+}
+function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+// A VS Code-style viewer/editor: syntax highlighting, a line-numbered gutter,
+// find & replace, and Save (writes back to the workspace file).
 async function showFile(rel) {
   const r = await call("orch", { fn: "read_ws_file", arg: rel });
   const content = r.text || "";
+  const hlOpts = hlOptsFor(rel);
   let saved = content;   // last-persisted contents (for the dirty flag)
   modal(rel,
     `<div class="editor">
@@ -1249,27 +1296,34 @@ async function showFile(rel) {
          <span class="editor-meta" id="edMeta"></span>
          <span class="editor-dirty" id="edDirty"></span>
        </div>
+       <div class="editor-find">
+         <input id="edFindI" class="field" placeholder="Find" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+         <input id="edReplI" class="field" placeholder="Replace" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+         <span id="edFindCount" class="editor-find-count">0/0</span>
+         <button class="pill ghost sm" id="edPrev" title="Previous">‹</button>
+         <button class="pill ghost sm" id="edNext" title="Next">›</button>
+         <button class="pill ghost sm" id="edRepl">Replace</button>
+         <button class="pill ghost sm" id="edReplAll">All</button>
+       </div>
        <div class="editor-body">
          <div class="editor-gutter" id="edGutter"></div>
-         <textarea class="editor-area" id="edArea" spellcheck="false"
-                   autocomplete="off" autocapitalize="off" autocorrect="off"></textarea>
+         <div class="editor-code">
+           <pre class="editor-hl" id="edHl" aria-hidden="true"></pre>
+           <textarea class="editor-area" id="edArea" spellcheck="false"
+                     autocomplete="off" autocapitalize="off" autocorrect="off"></textarea>
+         </div>
        </div>
        <div class="hint" id="edStatus"></div>
      </div>`,
     async () => {
-      const area = $("#edArea");
       const res = await call("py.call", { module: "orchestrator", fn: "write_ws_file", args: [rel, area.value] });
       $("#edStatus").textContent = res.text || "";
-      if ((res.text || "").startsWith("Saved")) {
-        saved = area.value;
-        setDirty();
-      }
+      if ((res.text || "").startsWith("Saved")) { saved = area.value; setDirty(); }
       return true; // keep the editor open after saving
     });
   $("#modalOk").textContent = "Save";
 
-  const area = $("#edArea");
-  const gutter = $("#edGutter");
+  const area = $("#edArea"), gutter = $("#edGutter"), hl = $("#edHl");
   area.value = content;
 
   function renderGutter() {
@@ -1278,27 +1332,89 @@ async function showFile(rel) {
     for (let i = 1; i <= lines; i++) s += i + "\n";
     gutter.textContent = s;
   }
+  function renderHl() { hl.innerHTML = highlightCode(area.value, hlOpts); }
   function updateMeta() {
-    const v = area.value;
-    const lines = v.split("\n").length;
+    const v = area.value, lines = v.split("\n").length;
     $("#edMeta").textContent = `${lines} line${lines !== 1 ? "s" : ""} · ${v.length} chars`;
   }
-  function setDirty() {
-    $("#edDirty").textContent = area.value !== saved ? "● unsaved" : "";
-  }
-  area.addEventListener("input", () => { renderGutter(); updateMeta(); setDirty(); });
-  area.addEventListener("scroll", () => { gutter.scrollTop = area.scrollTop; });
-  // Tab inserts two spaces instead of leaving the field.
+  function setDirty() { $("#edDirty").textContent = area.value !== saved ? "● unsaved" : ""; }
+  function refresh() { renderGutter(); renderHl(); updateMeta(); setDirty(); findMatches(); }
+
+  area.addEventListener("input", refresh);
+  area.addEventListener("scroll", () => {
+    gutter.scrollTop = area.scrollTop;
+    hl.scrollTop = area.scrollTop;
+    hl.scrollLeft = area.scrollLeft;
+  });
   area.addEventListener("keydown", (ev) => {
     if (ev.key === "Tab") {
       ev.preventDefault();
       const s = area.selectionStart, e = area.selectionEnd;
       area.value = area.value.slice(0, s) + "  " + area.value.slice(e);
       area.selectionStart = area.selectionEnd = s + 2;
-      renderGutter(); updateMeta(); setDirty();
+      refresh();
     }
   });
-  renderGutter(); updateMeta(); setDirty();
+
+  // --- Find & replace ---
+  let matches = [], curMatch = -1;
+  function updateFindCount() {
+    $("#edFindCount").textContent = `${matches.length ? curMatch + 1 : 0}/${matches.length}`;
+  }
+  function findMatches() {
+    const q = $("#edFindI").value;
+    matches = [];
+    if (q) {
+      const hay = area.value.toLowerCase(), needle = q.toLowerCase();
+      let i = hay.indexOf(needle);
+      while (i >= 0) { matches.push(i); i = hay.indexOf(needle, i + Math.max(1, needle.length)); }
+    }
+    if (curMatch >= matches.length) curMatch = matches.length - 1;
+    updateFindCount();
+  }
+  function scrollToOffset(off) {
+    const line = area.value.slice(0, off).split("\n").length; // 1-based
+    const lh = 12.5 * 1.5;
+    area.scrollTop = Math.max(0, (line - 3) * lh);
+    area.dispatchEvent(new Event("scroll"));
+  }
+  function selectCurrent(focus) {
+    if (curMatch < 0 || !matches.length) return;
+    const q = $("#edFindI").value, s = matches[curMatch];
+    if (focus) area.focus();
+    area.setSelectionRange(s, s + q.length);
+    scrollToOffset(s);
+    updateFindCount();
+  }
+  function gotoMatch(dir) {
+    if (!matches.length) return;
+    curMatch = (Math.max(0, curMatch) + dir + matches.length) % matches.length;
+    selectCurrent(true);
+  }
+  $("#edFindI").addEventListener("input", () => { curMatch = matches.length ? 0 : -1; findMatches(); if (matches.length) selectCurrent(false); });
+  $("#edNext").onclick = () => gotoMatch(1);
+  $("#edPrev").onclick = () => gotoMatch(-1);
+  $("#edRepl").onclick = () => {
+    const q = $("#edFindI").value, rep = $("#edReplI").value;
+    if (!q || curMatch < 0 || !matches.length) return;
+    const s = matches[curMatch];
+    area.value = area.value.slice(0, s) + rep + area.value.slice(s + q.length);
+    renderGutter(); renderHl(); updateMeta(); setDirty();
+    findMatches();
+    if (matches.length) { curMatch = curMatch % matches.length; selectCurrent(true); }
+  };
+  $("#edReplAll").onclick = () => {
+    const q = $("#edFindI").value, rep = $("#edReplI").value;
+    if (!q) return;
+    const before = area.value;
+    area.value = area.value.replace(new RegExp(escapeRegExp(q), "gi"), () => rep);
+    renderGutter(); renderHl(); updateMeta(); setDirty();
+    findMatches();
+    const n = before === area.value ? 0 : before.split(new RegExp(escapeRegExp(q), "i")).length - 1;
+    $("#edStatus").textContent = `Replaced ${n} occurrence${n !== 1 ? "s" : ""}.`;
+  };
+
+  refresh();
 }
 
 function escapeHtml(s) {
