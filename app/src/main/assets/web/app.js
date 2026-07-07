@@ -144,6 +144,8 @@ async function refreshHeader() {
   if (sub) sub.textContent = (m.name || "session") + " • " + (m.activeRepo || "no repo");
   const mn = $("#modelName");
   if (mn) mn.textContent = shortModel(m.orchestrator);
+  const inm = $("#implName");
+  if (inm) inm.textContent = m.implementer ? shortModel(m.implementer) : "single";
 }
 
 async function loadHistory() {
@@ -1483,15 +1485,15 @@ async function saveTab(rel) {
   }
 }
 
-// Re-read open tabs from disk so agent edits show up. A tab with unsaved local
-// edits (dirty) is left alone so we never clobber what you're typing.
+// Re-read open tabs from disk so agent edits show up. If the agent changed the
+// file (disk differs from what we last saved), take the agent's version — even
+// over local edits. If the agent didn't touch it, any unsaved edits are kept.
 async function refreshOpenTabs() {
   for (const tab of openTabs) {
-    if (tab.content !== tab.saved) continue; // don't overwrite unsaved edits
     let disk;
     try { disk = (await call("orch", { fn: "read_ws_file", arg: tab.rel })).text || ""; }
     catch (e) { continue; }
-    if (disk === tab.saved) continue;         // unchanged on disk
+    if (disk === tab.saved) continue;         // agent didn't change it → keep local edits
     tab.content = disk;
     tab.saved = disk;
     if (tab.rel === activeTab) {
@@ -1716,17 +1718,29 @@ function positionFabMenu(menu, fab, align) {
   if (align === "right") { menu.style.right = (window.innerWidth - r.right) + "px"; menu.style.left = "auto"; }
   else { menu.style.left = r.left + "px"; menu.style.right = "auto"; }
 }
-async function openModelMenu() {
+// Keep a left-anchored menu on screen after its content (and width) are known.
+function clampFabMenu(menu) {
+  if (!menu.style.left || menu.style.left === "auto") return;
+  const w = menu.offsetWidth;
+  let left = parseFloat(menu.style.left) || 0;
+  left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+  menu.style.left = left + "px";
+}
+// Model picker for a given role ("orchestrator" or "implementer"), anchored to
+// the button that opened it. Selecting sets that role and keeps the other.
+async function openModelMenu(role, anchor) {
   const menu = $("#modelMenu");
-  if (!menu.classList.contains("hidden")) { menu.classList.add("hidden"); return; }
+  if (!menu.classList.contains("hidden") && menu._role === role) { menu.classList.add("hidden"); return; }
   closeFabMenus();
+  menu._role = role;
   menu.innerHTML = `<div class="fab-item muted">Loading…</div>`;
-  positionFabMenu(menu, $("#modelFab"), "left");
+  positionFabMenu(menu, anchor, "left");
   menu.classList.remove("hidden");
-  let all = [], cur = "", implementer = "";
+  let all = [], cur = "", meta = {};
   try {
-    const [meta, agg] = await Promise.all([call("session.meta"), call("models.aggregate")]);
-    all = agg.models || []; cur = meta.orchestrator || ""; implementer = meta.implementer || "";
+    const [m, agg] = await Promise.all([call("session.meta"), call("models.aggregate")]);
+    meta = m; all = agg.models || [];
+    cur = (role === "implementer" ? m.implementer : m.orchestrator) || "";
   } catch (e) {}
   const recent = getRecentModels(), rank = (m) => recent.indexOf(m);
   const sorted = all.slice().sort((a, b) => {
@@ -1736,17 +1750,25 @@ async function openModelMenu() {
     if (rb < 0) return 1;
     return rb - ra; // most recent first (top of an anchored-below dropdown)
   });
-  menu.innerHTML = sorted.length
-    ? sorted.map((m) => `<div class="fab-item" data-model="${escAttr(m)}">${m === cur ? "● " : ""}${escapeHtml(shortModel(m))}</div>`).join("")
+  const items = [];
+  if (role === "implementer") {
+    items.push(`<div class="fab-item" data-model="">${cur === "" ? "● " : ""}(single agent)</div>`);
+  }
+  items.push(...sorted.map((m) => `<div class="fab-item" data-model="${escAttr(m)}">${m === cur ? "● " : ""}${escapeHtml(shortModel(m))}</div>`));
+  menu.innerHTML = (items.length && (sorted.length || role === "implementer"))
+    ? items.join("")
     : `<div class="fab-item muted">No models — add an API key in Settings.</div>`;
+  clampFabMenu(menu);
   menu.querySelectorAll("[data-model]").forEach((el) => {
     el.onclick = async () => {
-      const m = el.getAttribute("data-model");
-      await call("session.setModels", { orchestrator: m, implementer });
-      pushRecentModel(m);
+      const chosen = el.getAttribute("data-model");
+      const orchestrator = role === "implementer" ? (meta.orchestrator || "") : chosen;
+      const implementer = role === "implementer" ? chosen : (meta.implementer || "");
+      await call("session.setModels", { orchestrator, implementer });
+      if (chosen) pushRecentModel(chosen);
       menu.classList.add("hidden");
       await refreshHeader();
-      bubble("Model → " + shortModel(m), "sys");
+      bubble((role === "implementer" ? "Implementer → " : "Model → ") + (chosen ? shortModel(chosen) : "single agent"), "sys");
     };
   });
 }
@@ -1772,8 +1794,9 @@ function openActionsMenu() {
 
 // --- Wire up -------------------------------------------------------------
 $("#menuFab").onclick = () => { closeFabMenus(); openSheet("#menu"); };
-$("#modelFab").onclick = (e) => { e.stopPropagation(); openModelMenu(); };
 $("#actionsFab").onclick = (e) => { e.stopPropagation(); openActionsMenu(); };
+$("#modelLead").onclick = (e) => { e.stopPropagation(); openModelMenu("orchestrator", e.currentTarget); };
+$("#modelImpl").onclick = (e) => { e.stopPropagation(); openModelMenu("implementer", e.currentTarget); };
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".fab") && !e.target.closest(".fabmenu")) closeFabMenus();
 });

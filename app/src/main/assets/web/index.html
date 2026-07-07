@@ -11,7 +11,6 @@
   <div id="topbalance"><span id="balance" class="balmini">—</span></div>
 
   <!-- Floating controls -->
-  <div id="modelFab" class="fab fab-wide" title="Switch model">Model: <span id="modelName">…</span> ▾</div>
   <button id="actionsFab" class="fab" title="Actions">⋯</button>
   <button id="menuFab" class="fab" title="Menu">☰</button>
   <button id="usage" class="usagechip hidden" title="tokens this run — tap for detail"></button>
@@ -56,8 +55,12 @@
   <div id="chatBackdrop" class="hidden"></div>
   <aside id="chatDrawer">
     <div id="chatDrawer-head">
-      <span>Agent</span>
+      <span class="cd-title">Agent</span>
       <button id="chatDrawerClose" class="txtbtn xs" title="Close">✕</button>
+    </div>
+    <div id="chatDrawer-models">
+      <button id="modelLead" class="modelbtn" title="Orchestrator model">🧠 <span id="modelName">…</span> ▾</button>
+      <button id="modelImpl" class="modelbtn" title="Implementer (coder) model">🛠 <span id="implName">…</span> ▾</button>
     </div>
 
     <main id="chat"></main>
