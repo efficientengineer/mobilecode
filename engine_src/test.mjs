@@ -65,6 +65,10 @@ import { elements } from './engine/control/elements.js';
 import { spells } from './engine/control/spells.js';
 import { formulas } from './engine/control/formulas.js';
 import { battle } from './engine/control/battle.js';
+import { party } from './engine/control/party.js';
+import { ailments } from './engine/control/ailments.js';
+import { encounters } from './engine/control/encounters.js';
+import { rewards } from './engine/control/rewards.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -2286,6 +2290,245 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
     b.submit('a', { kind: 'noop' }); b.step(0.02); b.step(0.02);
     check('battle: wait mode resumes after command', b.gauge('c') > g0);
   }
+}
+
+
+// ===== FF6 Round 10 (JRPG systems): party / ailments / encounters / rewards =====
+
+{
+  // --- fakes: minimal stats-like store (hp/speed + KO) ---
+  const mkStore = (hp, speed) => {
+    let cur = hp; const max = hp;
+    return { get hp(){return cur;}, get isKO(){return cur<=0;}, get alive(){return cur>0;},
+             speed, get(k){ return k==='speed'?speed:k==='hp'?cur:0; },
+             damage(n){ cur=Math.max(0,cur-n); return cur; }, revive(f=0.5){ if(cur<=0) cur=Math.round(max*f); return cur; } };
+  };
+  const mk = (id, name, speed) => ({ id, name, stats: mkStore(100, speed) });
+  const roster = [mk('a','A',40), mk('b','B',48), mk('c','C',36), mk('d','D',38), mk('e','E',44)];
+  const p = party.makeParty({ roster, activeMax: 4 });
+
+  check('party active caps at N', p.active().length === 4);
+  check('party bench holds overflow', p.bench().length === 1 && p.bench()[0].id === 'e');
+  check('party leader is first active', p.leader().id === 'a');
+  check('party inActive', p.inActive('a') && !p.inActive('e'));
+
+  p.setActive(['b','a','c','d','e','b','ghost']);
+  check('party setActive capped+ordered', p.active().length === 4 && p.leader().id === 'b');
+  check('party setActive dropped overflow/unknown', !p.inActive('e'));
+
+  check('party swap fields a bencher', p.swap('d','e') && p.inActive('e') && !p.inActive('d'));
+  check('party swap keeps slot', p.active()[3].id === 'e');
+  p.swap('b','c');
+  check('party swap reorders actives', p.active()[0].id === 'c' && p.active()[2].id === 'b');
+  check('party swap same-id no-op', p.swap('a','a') === false);
+
+  p.setRow('a','back');
+  check('party setRow back', p.rowOf('a') === 'back');
+  p.setRow('a','xyz');
+  check('party setRow normalizes to front', p.rowOf('a') === 'front');
+
+  p.remove('c');
+  check('party remove drops from roster+active', p.byId('c') === null && !p.inActive('c'));
+
+  const f = mk('f','F',30);
+  p.add(f);
+  check('party add fills free active slot', p.inActive('f'));
+
+  const slots = p.formationSlots('ally');
+  check('party formationSlots shape', slots[0].side === 'ally' && slots[0].speed > 0 && slots[0].alive === true && slots[0].stats != null);
+
+  p.active().forEach(m => m.stats.damage(9999));
+  check('party wiped when all active KO', p.wiped() && p.alive().length === 0);
+  p.active()[0].stats.revive(0.5);
+  check('party not wiped after revive', !p.wiped() && p.alive().length === 1);
+}
+
+{
+  const mkUnit = () => ({ id: 'u', side: 'ally', maxHp: 100, hp: 100, damage(n){ this.hp -= n; } });
+
+  // poison ticks flat DoT; gauge unaffected
+  const p = mkUnit();
+  ailments.attach(p, ailments.poison({ dps: 10 }));
+  const pa = ailments.step(p, 1);
+  check('ailments: poison dps ticks', Math.abs(pa.damage - 10) < 1e-9 && pa.gaugeRate === 1);
+
+  // regen folds through as negative (healing)
+  const rg = mkUnit();
+  ailments.attach(rg, ailments.regen({ hps: 8 }));
+  check('ailments: regen heals (negative damage)', ailments.step(rg, 1).damage === -8);
+
+  // haste*slow product = 1; stop zeroes gauge rate
+  const h = mkUnit();
+  ailments.attach(h, ailments.haste());
+  ailments.attach(h, ailments.slow());
+  check('ailments: haste*slow cancel', ailments.gaugeRate(h) === 1);
+  const s = mkUnit();
+  ailments.attach(s, ailments.stop());
+  check('ailments: stop zeroes gauge', ailments.step(s, 0.1).gaugeRate === 0);
+
+  // sleep skips on ready; a hit wakes it
+  const z = mkUnit();
+  ailments.attach(z, ailments.sleep());
+  check('ailments: sleep skips turn', ailments.ready(z).skip === true);
+  ailments.wake(z);
+  check('ailments: hit wakes sleep', !ailments.has(z, 'sleep') && ailments.ready(z).skip === false);
+
+  // silence blocks magic; confuse forces a random target and clears on hit
+  const m = mkUnit();
+  ailments.attach(m, ailments.silence());
+  check('ailments: silence blocks magic', ailments.ready(m).blockMagic === true);
+  const c = mkUnit();
+  ailments.attach(c, ailments.confuse());
+  check('ailments: confuse forces random', ailments.ready(c).forceAction.target === 'random');
+  ailments.wake(c);
+  check('ailments: hit clears confuse', !ailments.has(c, 'muddle'));
+
+  // petrify: out + skip, immune to a plain hit, cured by gold needle
+  const st = mkUnit();
+  ailments.attach(st, ailments.petrify());
+  const stA = ailments.step(st, 0.5);
+  check('ailments: petrify out+skip+frozen', stA.out && stA.skip && stA.gaugeRate === 0);
+  ailments.wake(st);
+  check('ailments: petrify ignores hit', ailments.has(st, 'petrify'));
+  check('ailments: goldneedle cures petrify', ailments.cure(st, 'goldneedle') && !ailments.has(st, 'petrify'));
+
+  // durations expire and drop; re-apply refreshes (no dup)
+  const d = mkUnit();
+  ailments.attach(d, ailments.poison({ dps: 5, duration: 2 }));
+  ailments.step(d, 1);
+  const de = ailments.step(d, 1.5);
+  check('ailments: duration expires + drops', !ailments.has(d, 'poison') && de.expired.includes('poison'));
+  const rf = mkUnit();
+  ailments.attach(rf, ailments.poison({ duration: 3 }));
+  ailments.step(rf, 2);
+  ailments.attach(rf, ailments.poison({ duration: 3 }));
+  check('ailments: re-apply refreshes, no dup', rf._ail.filter(x => x.kind === 'poison').length === 1 && ailments.get(rf, 'poison').remaining === 3);
+}
+
+{
+  // encounters: field random-encounter director (deterministic, injected rng)
+  const seq = (vals) => { let i = 0; return () => vals[i++ % vals.length]; };
+  const tbl = { f: [{ weight: 1, formation: 'g' }] };
+
+  // higher rate => more encounters over N steps (rng always 0.9; meter must beat it)
+  const countEnc = (rate) => {
+    const enc = encounters.makeEncounters({ rate, tables: tbl, rng: seq([0.9]), grace: 0 });
+    let n = 0;
+    for (let i = 0; i < 100; i++) { if (enc.step('f', 1)) { n++; enc.reset(0); } }
+    return n;
+  };
+  check('encounters: higher rate => more encounters', countEnc(0.3) > countEnc(0.05));
+
+  // grace suppresses an immediate re-encounter after a battle
+  const eg = encounters.makeEncounters({ rate: 5, tables: tbl, rng: seq([0]), grace: 3 });
+  check('encounters: fires when hot', !!eg.step('f', 1));
+  eg.reset();
+  check('encounters: grace step safe', eg.step('f', 1) === null);
+  eg.step('f', 1); eg.step('f', 1);
+  check('encounters: encounters again after grace', !!eg.step('f', 1));
+
+  // weighted pick honours weights (~3:1 across a swept rng)
+  const wt = { f: [{ weight: 3, formation: 'A' }, { weight: 1, formation: 'B' }] };
+  let A = 0, B = 0;
+  for (let k = 0; k < 1000; k++) {
+    const r = (k + 0.5) / 1000;
+    const p = encounters.makeEncounters({ tables: wt, rng: () => r }).pick('f');
+    if (p === 'A') A++; else B++;
+  }
+  check('encounters: weighted pick ~3:1', A > B * 2.5 && A < B * 3.5);
+
+  // minLevel gate filters, but never empties the pool
+  const cave = { c: [{ weight: 1, formation: 'bat' }, { weight: 5, formation: 'ogre', minLevel: 8 }] };
+  const ec = encounters.makeEncounters({ tables: cave, rng: () => 0.99 });
+  check('encounters: minLevel excludes under-level', ec.pick('c', 3) === 'bat');
+  check('encounters: minLevel allows at-level', ec.pick('c', 10) === 'ogre');
+
+  // escapeChance rises with attempts and is clamped 0..1
+  const ee = encounters.makeEncounters({});
+  const a0 = ee.escapeChance({ partySpeed: 40, enemySpeed: 40, attempts: 0 });
+  const a1 = ee.escapeChance({ partySpeed: 40, enemySpeed: 40, attempts: 1 });
+  check('encounters: escape rises with attempts', a1 > a0);
+  check('encounters: escape clamped', ee.escapeChance({ partySpeed: 99, enemySpeed: 1, attempts: 9 }) <= 1);
+  check('encounters: faster party escapes easier',
+    ee.escapeChance({ partySpeed: 80, enemySpeed: 20 }) > ee.escapeChance({ partySpeed: 20, enemySpeed: 80 }));
+
+  // rate 0 is a safe zone; setters retune and chain
+  const safe = encounters.makeEncounters({ rate: 0, tables: tbl, rng: () => 0 });
+  let any = false;
+  for (let i = 0; i < 40; i++) if (safe.step('f', 1)) any = true;
+  check('encounters: rate 0 => no encounters', !any);
+  check('encounters: setRate/danger chain', safe.setRate(0.5).danger(2).rate() === 0.5);
+}
+
+{
+  // --- computeRewards: sums xp/gil/ap, rolls drops by chance -------------------
+  const enemies = [
+    { xp: 100, gil: 50, ap: 2, drops: [{ item: 'potion', chance: 0.5 }, { item: 'ether', chance: 0.01 }] },
+    { xp: 120, gold: 40, ap: 3, drops: [{ item: 'tent', chance: 1 }] },
+  ];
+  const spoilsLo = rewards.computeRewards(enemies, { rng: () => 0.0 });
+  check('rewards: xp sums', spoilsLo.xp === 220);
+  check('rewards: gil sums (gold alias)', spoilsLo.gil === 90);
+  check('rewards: ap sums', spoilsLo.ap === 5);
+  check('rewards: low rng lands all drops', spoilsLo.drops.length === 3 && spoilsLo.drops.includes('tent'));
+  const spoilsHi = rewards.computeRewards(enemies, { rng: () => 0.99 });
+  check('rewards: high rng only guaranteed drop', spoilsHi.drops.length === 1 && spoilsHi.drops[0] === 'tent');
+
+  // --- distribute: even split + level-up at threshold, applied to a fake store -
+  // Fake growth store mimicking progression.makeLevels + a synced stats block.
+  const makeStore = () => {
+    let lvl = 1, bank = 0; const cost = (l) => 100 * l;
+    return {
+      levels: {
+        get level() { return lvl; },
+        add(n) { bank += n; let g = 0; while (bank >= cost(lvl)) { bank -= cost(lvl); lvl++; g++; } return { level: lvl, leveledUp: g > 0, gained: g }; },
+      },
+      stats: { level: 1, maxHp: 100, alive: true, isKO: false, setLevel(n) { this.level = n; this.maxHp = 100 + (n - 1) * 20; return this; } },
+    };
+  };
+  const mk = (id) => { const s = makeStore(); return { id, levels: s.levels, stats: s.stats }; };
+  const party = [mk('terra'), mk('locke'), mk('edgar')];
+  const g = rewards.distribute(300, party);          // 100 each -> level 2
+  check('rewards: even split gives 100 each', g.every((r) => r.gained === 100));
+  check('rewards: all level 1->2', g.every((r) => r.from === 1 && r.to === 2 && r.leveledUp));
+  check('rewards: stats synced to new level', party[0].stats.level === 2 && party[0].stats.maxHp === 120);
+
+  // --- survivors only: KO'd member skipped, pool goes to the living -----------
+  const alive = mk('a');
+  const downed = mk('b'); downed.stats.alive = false; downed.stats.isKO = true;
+  const g2 = rewards.distribute(200, [alive, downed]);
+  check('rewards: KO member excluded', g2.length === 1 && g2[0].id === 'a');
+  check('rewards: survivor takes whole pool', g2[0].gained === 200);
+  const g3 = rewards.distribute(200, [mk('c'), (() => { const m = mk('d'); m.stats.alive = false; return m; })()], { all: true });
+  check('rewards: all:true includes the fallen', g3.length === 2);
+
+  // --- distribute fallback: bare {level} member + injected curve --------------
+  const bare = [{ id: 'x', level: 1, xp: 0 }];
+  const gb = rewards.distribute(250, bare, { curve: (l) => 100 * l });   // level 2, 150 banked
+  check('rewards: curve fallback levels up', gb[0].to === 2 && gb[0].leveledUp && bare[0].level === 2);
+  check('rewards: curve fallback banks remainder', bare[0].xp === 150);
+
+  // --- steal: rate gate then weighted item pick -------------------------------
+  const goblin = { steal: [{ item: 'dagger', chance: 0.9 }, { item: 'elixir', chance: 0.1 }] };
+  const missed = rewards.steal(goblin, () => 0.99, { rate: 0.5 });
+  check('rewards: steal fails above rate', missed.success === false && missed.item === null);
+  const took = rewards.steal(goblin, () => 0.0, { rate: 0.5 });
+  check('rewards: steal succeeds under rate, picks common', took.success === true && took.item === 'dagger');
+
+  // --- lootTable weighted rollOne ---------------------------------------------
+  const tbl = rewards.lootTable([{ item: 'a', chance: 0.75 }, { item: 'b', chance: 0.25 }]);
+  check('rewards: rollOne low -> common', tbl.rollOne(() => 0.1) === 'a');
+  check('rewards: rollOne high -> rare', tbl.rollOne(() => 0.9) === 'b');
+
+  // --- bonusFor + applyBonus ---------------------------------------------------
+  const bonus = rewards.bonusFor({ noDeath: true });
+  check('rewards: noDeath is 1.5x xp', bonus.xp === 1.5 && bonus.tags.includes('noDeath'));
+  const boosted = rewards.applyBonus({ xp: 100, gil: 100, ap: 10 }, bonus);
+  check('rewards: applyBonus scales bag', boosted.xp === 150 && boosted.ap === 15 && boosted.gil === 100);
+  const stacked = rewards.bonusFor({ noDeath: true, quick: true });
+  check('rewards: bonuses stack', Math.abs(stacked.xp - 1.5 * 1.25) < 1e-9);
+  const folded = rewards.computeRewards([{ xp: 100, gil: 100, ap: 0 }], { rng: () => 0.99, bonus: { noDeath: true } });
+  check('rewards: computeRewards folds a conditions bag', folded.xp === 150);
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
