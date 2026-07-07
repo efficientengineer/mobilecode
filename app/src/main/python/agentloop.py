@@ -464,7 +464,8 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                 if errs:
                     repair_left -= 1
                     _emit("verify_failed", which="syntax", detail=_clip(errs, 500))
-                    messages.append({"role": "assistant", "content": final_text})
+                    messages.append({"role": "assistant", "content": final_text,
+                                     "reasoning": r.get("reasoning", "")})
                     messages.append({"role": "user", "content":
                                      "Verification failed — these Python files "
                                      "have syntax errors. Fix them, re-run "
@@ -474,7 +475,8 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                 if ran and not ok:
                     repair_left -= 1
                     _emit("verify_failed", which="tests", detail=_clip(out, 500))
-                    messages.append({"role": "assistant", "content": final_text})
+                    messages.append({"role": "assistant", "content": final_text,
+                                     "reasoning": r.get("reasoning", "")})
                     messages.append({"role": "user", "content":
                                      "Verification failed — the project's tests "
                                      "did not pass. Investigate and fix, then "
@@ -491,7 +493,8 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                 if web_hard:
                     repair_left -= 1
                     _emit("verify_failed", which="web", detail=_clip(web_hard, 500))
-                    messages.append({"role": "assistant", "content": final_text})
+                    messages.append({"role": "assistant", "content": final_text,
+                                     "reasoning": r.get("reasoning", "")})
                     messages.append({"role": "user", "content":
                                      "Verification failed — web files reference "
                                      "local files that do not exist. Create them "
@@ -506,6 +509,7 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
         # (required for extended thinking + tool use).
         messages.append({"role": "assistant", "content": r.get("text", ""),
                          "tool_calls": calls,
+                         "reasoning": r.get("reasoning", ""),
                          "thinking_blocks": r.get("thinking_blocks") or []})
         for tc in calls:
             if _interrupted():

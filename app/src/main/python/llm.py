@@ -420,6 +420,12 @@ def _openai_messages(system, cached_context, messages):
             tcs = m.get("tool_calls") or []
             content = m.get("content") or None
             entry = {"role": "assistant", "content": content}
+            # DeepSeek's thinking mode REQUIRES the assistant's reasoning_content
+            # be passed back on continuation (it 400s without it). Re-attach the
+            # reasoning we captured for this turn; only while thinking is on, so a
+            # thinking-off call doesn't carry a now-disallowed field.
+            if m.get("reasoning") and _thinking_on():
+                entry["reasoning_content"] = m["reasoning"]
             if tcs:
                 entry["tool_calls"] = [
                     {"id": tc["id"], "type": "function",
