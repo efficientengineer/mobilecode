@@ -357,16 +357,30 @@ def _compact_agent_text(text: str) -> str:
     return f"{prefix}Done: {msg}"
 
 
-def _append_discussion(role: str, text: str, run_id: str = "", ctx: str = None) -> None:
+def _append_discussion(role: str, text: str, run_id: str = "", ctx: str = None,
+                       display_only: bool = False) -> None:
     """Record a turn. `text` is the full message shown in chat; `ctx` (optional)
     is a leaner form used only when assembling context — pass it to strip
-    redundancy the model doesn't need to re-read."""
+    redundancy the model doesn't need to re-read. `display_only` turns (the
+    agent's mid-run narration) render as chat bubbles but are EXCLUDED from the
+    model context, so exposing them costs no tokens and can't bloat the prompt."""
     idx = len(_read_discussion())
     ctx_text = text if ctx is None else ctx
     rec = {"id": idx, "role": role, "text": text, "ctx": ctx_text,
            "cave": _caveman(ctx_text), "run_id": run_id}
+    if display_only:
+        rec["display_only"] = True
     with open(_discussion_file(), "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
+
+
+def _say_cb(text: str) -> None:
+    """Persist a mid-run agent message as a display-only turn (chat bubble, no
+    model-context cost). Passed to agentloop.run as on_say."""
+    try:
+        _append_discussion("agent", text, display_only=True)
+    except Exception:
+        pass
 
 
 def _read_discussion() -> list:
@@ -460,7 +474,9 @@ def _compact_discussion(mode: str = "") -> list:
     """
     s = _compact_settings()
     cap = s["codeTurns"] if mode in ("code", "plan") else s["maxTurns"]
-    disc = _read_discussion()
+    # Drop display-only turns (mid-run narration): they're for the chat view, not
+    # the model — filter BEFORE the cap so they don't crowd out real turns.
+    disc = [d for d in _read_discussion() if not d.get("display_only")]
     cave = _caveman_on()
 
     # 1) newest-first, cap the count
@@ -539,10 +555,14 @@ def get_discussion(_=None) -> str:
     turns = []
     for i, d in enumerate(_read_discussion()):
         text = d.get("text", "")
-        raw = d.get("ctx") or _compact_agent_text(text)
-        ctx = _caveman(raw) if cave else raw
+        disp = bool(d.get("display_only"))
+        # display-only turns cost no context — report empty ctx so the UI's
+        # per-message token estimate reads 0 (they never enter the prompt).
+        raw = "" if disp else (d.get("ctx") or _compact_agent_text(text))
+        ctx = _caveman(raw) if (cave and raw) else raw
         turns.append({"id": d.get("id", i), "role": d["role"], "text": text,
-                      "ctx": ctx, "run_id": d.get("run_id", "")})
+                      "ctx": ctx, "run_id": d.get("run_id", ""),
+                      "display_only": disp})
     return json.dumps({"turns": turns})
 
 
@@ -1321,7 +1341,8 @@ def run_task(task: str) -> str:
         extra = ("" if mode == "code" else
                  "If the user's message is a question or discussion that needs "
                  "no file changes, just answer it in plain text without tools.")
-        res = agentloop.run(task, context=context, write=True, extra_system=extra)
+        res = agentloop.run(task, context=context, write=True, extra_system=extra,
+                            on_say=_say_cb)
         run_id = _new_run_id()
         result = _finish_run(task, res, run_id)
         _append_discussion("agent", result,
@@ -1356,7 +1377,7 @@ def execute_plan() -> str:
                 f"{plan.get('task', '')}\n\nPLAN: {plan.get('summary', '')}\n{steps}")
         _auto_refresh_map("code")
         context = _full_context(task, "code").strip()
-        res = agentloop.run(task, context=context, write=True)
+        res = agentloop.run(task, context=context, write=True, on_say=_say_cb)
         run_id = _new_run_id()
         result = _finish_run(task, res, run_id)
         try:
@@ -1382,7 +1403,7 @@ def fix_build(_=None) -> str:
         _append_discussion("user", "Fix the failed cloud build", ctx="Fix the failed cloud build")
         _auto_refresh_map("code")
         context = _full_context(task, "code").strip()
-        res = agentloop.run(task, context=context, write=True)
+        res = agentloop.run(task, context=context, write=True, on_say=_say_cb)
         run_id = _new_run_id()
         result = _finish_run(task, res, run_id)
         _append_discussion("agent", result, run_id=run_id, ctx=_LAST_EDIT_CTX)

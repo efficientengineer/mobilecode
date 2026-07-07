@@ -228,3 +228,9 @@ pre.filebody.diff { font-size: 12px; }
 .home-cta { font-size: 16px; padding: 12px 22px; margin-top: 6px; }
 .home-alt { font-size: 14px; padding: 9px 16px; }
 .gm-ex:active { opacity: .8; }
+
+/* An agent bubble still being streamed live (finalized when the message ends). */
+.bubble.agent.streaming { opacity: .92; }
+.bubble.agent.streaming::after { content: "▍"; margin-left: 1px; opacity: .6;
+  animation: caret 1s steps(1) infinite; }
+@keyframes caret { 50% { opacity: 0; } }

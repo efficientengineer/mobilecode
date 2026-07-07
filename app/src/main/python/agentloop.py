@@ -351,7 +351,7 @@ def _clip(s, n):
 # --- the loop -----------------------------------------------------------------
 
 def run(task: str, context: str = "", write: bool = True, plan: bool = False,
-        extra_system: str = "") -> dict:
+        extra_system: str = "", on_say=None) -> dict:
     """Run the agent loop for one task.
 
     Returns {"text": str, "touched": [paths], "plan": dict|None,
@@ -442,6 +442,18 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             _emit("reason", text=_clip(r["reasoning"], 400))
 
         calls = r.get("tool_calls") or []
+        # The assistant's PROSE for this step (the message that accompanies its
+        # tool calls) is a real chat message, not step noise — surface it as its
+        # own event so the UI shows it as a bubble, and persist it (display-only,
+        # via on_say) so it survives a reload without re-entering model context.
+        say = (r.get("text") or "").strip()
+        if calls and say:
+            _emit("say", text=r.get("text", ""), step=steps)
+            if on_say:
+                try:
+                    on_say(r.get("text", ""))
+                except Exception:
+                    pass
         if not calls:
             final_text = r.get("text", "")
             # Post-run verification: (1) syntax-check touched Python, then

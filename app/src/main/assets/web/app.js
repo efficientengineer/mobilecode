@@ -127,7 +127,10 @@ async function loadHistory() {
     const r = JSON.parse((await call("orch", { fn: "get_discussion" })).text);
     turns = r.turns || [];
     turns.forEach((t) =>
-      bubble(t.text, t.role === "user" ? "user" : "agent", t.run_id || null, t.ctx));
+      // display-only turns (mid-run narration) are agent bubbles that cost no
+      // context, so suppress their per-message token estimate (ctxText=false).
+      bubble(t.text, t.role === "user" ? "user" : "agent", t.run_id || null,
+        t.display_only ? false : t.ctx));
   } catch (e) {}
   if (!turns.length) showHome();
   refreshStats();
@@ -323,18 +326,39 @@ function makeLivePoller(live) {
   const lines = [];
   let stream = "", stepN = 0, lastAct = "";
   let cursor = 0, polling = true, pending = false;
+
+  // The agent's PROSE renders as real chat bubbles (like the user's messages),
+  // inserted ABOVE the steps feed — not merged into the tool log. `msgEl` is the
+  // bubble currently being streamed; it's finalized (left in the chat) at each
+  // message boundary (a `say` event or the next step), and a fresh one starts.
+  let msgEl = null;
+  function ensureMsg() {
+    if (!msgEl) {
+      msgEl = document.createElement("div");
+      msgEl.className = "bubble agent streaming";
+      chat.insertBefore(msgEl, live);
+    }
+    return msgEl;
+  }
+  function finalizeMsg(fullText) {
+    if (msgEl) {
+      if (fullText != null && fullText.trim()) msgEl.innerHTML = renderMarkdown(fullText);
+      if (!msgEl.textContent.trim()) msgEl.remove();   // drop an empty stub
+      else msgEl.classList.remove("streaming");
+    }
+    msgEl = null;
+    stream = "";
+  }
+
   function render() {
-    let now;
-    if (stream) now = "💬 " + stream;
-    else now = [stepN ? "step " + stepN : "", lastAct].filter(Boolean).join(" · ") || "working…";
+    const now = [stepN ? "step " + stepN : "", lastAct].filter(Boolean)
+      .join(" · ") || "working…";
     nowEl.textContent = now.replace(/\s+/g, " ").trim().slice(0, 90);
     // Capture whether the log is pinned to the bottom BEFORE we change its
     // content. Only re-pin if it was — otherwise keep the user's scroll
     // position exactly (never yank while they read back through the steps).
     const logPinned = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
-    let full = lines.join("\n");
-    if (stream) full += (full ? "\n" : "") + "💬 " + stream.slice(-600);
-    logEl.textContent = full;
+    logEl.textContent = lines.join("\n");
     if (live.classList.contains("open") && logPinned) logEl.scrollTop = logEl.scrollHeight;
     maybeScroll();
   }
@@ -344,10 +368,13 @@ function makeLivePoller(live) {
         const r = JSON.parse((await call("orch", { fn: "get_events", arg: String(cursor) })).text);
         cursor = r.cursor;
         (r.events || []).forEach((e) => {
-          if (e.kind === "delta") { stream += e.text || ""; return; }
+          // Assistant text: stream it into a live bubble as it arrives.
+          if (e.kind === "delta") { stream += e.text || ""; ensureMsg().innerHTML = renderMarkdown(stream); maybeScroll(); return; }
+          // Message boundary: lock in the finished message as its own bubble.
+          if (e.kind === "say") { finalizeMsg(e.text || stream); return; }
           if (e.kind === "todos") { renderTodos(e.todos || []); return; }
           if (e.kind === "pending_commit") pending = true;
-          if (e.kind === "step") { stepN = e.n; stream = ""; }
+          if (e.kind === "step") { if (msgEl) finalizeMsg(stream); stepN = e.n; }
           const f = fmtEvent(e);
           if (f) { lines.push(f); if (e.kind !== "step") lastAct = f; }
         });
@@ -356,7 +383,10 @@ function makeLivePoller(live) {
       await new Promise((r) => setTimeout(r, 500));
     }
   })();
-  return { stop() { polling = false; }, pendingCommit: () => pending };
+  // On stop, drop any half-streamed bubble — loadHistory() re-renders the run's
+  // messages (now persisted as turns) authoritatively right after.
+  return { stop() { polling = false; if (msgEl) { msgEl.remove(); msgEl = null; } },
+           pendingCommit: () => pending };
 }
 
 async function runTask(task, mode) {
