@@ -1237,9 +1237,68 @@ async function filesModal(path) {
   };
 }
 
+// A lightweight VS Code-style viewer/editor: line-numbered gutter, an
+// editable code area, and Save (writes back to the workspace file).
 async function showFile(rel) {
   const r = await call("orch", { fn: "read_ws_file", arg: rel });
-  modal(rel, `<pre class="filebody">${escapeHtml(r.text || "(empty)")}</pre>`);
+  const content = r.text || "";
+  let saved = content;   // last-persisted contents (for the dirty flag)
+  modal(rel,
+    `<div class="editor">
+       <div class="editor-toolbar">
+         <span class="editor-meta" id="edMeta"></span>
+         <span class="editor-dirty" id="edDirty"></span>
+       </div>
+       <div class="editor-body">
+         <div class="editor-gutter" id="edGutter"></div>
+         <textarea class="editor-area" id="edArea" spellcheck="false"
+                   autocomplete="off" autocapitalize="off" autocorrect="off"></textarea>
+       </div>
+       <div class="hint" id="edStatus"></div>
+     </div>`,
+    async () => {
+      const area = $("#edArea");
+      const res = await call("py.call", { module: "orchestrator", fn: "write_ws_file", args: [rel, area.value] });
+      $("#edStatus").textContent = res.text || "";
+      if ((res.text || "").startsWith("Saved")) {
+        saved = area.value;
+        setDirty();
+      }
+      return true; // keep the editor open after saving
+    });
+  $("#modalOk").textContent = "Save";
+
+  const area = $("#edArea");
+  const gutter = $("#edGutter");
+  area.value = content;
+
+  function renderGutter() {
+    const lines = area.value.split("\n").length;
+    let s = "";
+    for (let i = 1; i <= lines; i++) s += i + "\n";
+    gutter.textContent = s;
+  }
+  function updateMeta() {
+    const v = area.value;
+    const lines = v.split("\n").length;
+    $("#edMeta").textContent = `${lines} line${lines !== 1 ? "s" : ""} · ${v.length} chars`;
+  }
+  function setDirty() {
+    $("#edDirty").textContent = area.value !== saved ? "● unsaved" : "";
+  }
+  area.addEventListener("input", () => { renderGutter(); updateMeta(); setDirty(); });
+  area.addEventListener("scroll", () => { gutter.scrollTop = area.scrollTop; });
+  // Tab inserts two spaces instead of leaving the field.
+  area.addEventListener("keydown", (ev) => {
+    if (ev.key === "Tab") {
+      ev.preventDefault();
+      const s = area.selectionStart, e = area.selectionEnd;
+      area.value = area.value.slice(0, s) + "  " + area.value.slice(e);
+      area.selectionStart = area.selectionEnd = s + 2;
+      renderGutter(); updateMeta(); setDirty();
+    }
+  });
+  renderGutter(); updateMeta(); setDirty();
 }
 
 function escapeHtml(s) {
