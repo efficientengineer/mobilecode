@@ -35,6 +35,11 @@ import { vehicles } from './engine/control/vehicles.js';
 import { formations } from './engine/control/formations.js';
 import { pathing } from './engine/control/pathing.js';
 import { cameraFx } from './engine/control/camerafx.js';
+import { tweens } from './engine/control/tweens.js';
+import { effects } from './engine/control/effects.js';
+import { particles } from './engine/control/particles.js';
+import { transitions } from './engine/control/transitions.js';
+import { palettes } from './engine/control/palettes.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -933,6 +938,181 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   dz([0, 0, 0], {}, 0.016);
   check('cameraFx deadzone ignores small move', dz([2, 0, 0], {}, 0.016).eye[0] === 0);
   check('cameraFx deadzone follows past edge', Math.abs(dz([5, 0, 0], {}, 0.016).eye[0] - 2) < 1e-9);
+}
+
+
+// ===== Round 4 components: tweens / effects / particles / transitions / palettes =====
+
+// ---- tweens (interpolation + easing) ----
+{ const ap = (a, b, e = 1e-9) => Math.abs(a - b) <= e;
+  check('tweens.lerp number + array', tweens.lerp(0, 10, 0.5) === 5 && JSON.stringify(tweens.lerp([0,0,0],[2,4,6],0.5)) === '[1,2,3]');
+  // damp: two half-steps equal one full step (frame-rate independent)
+  const d2 = tweens.damp(tweens.damp(0, 10, 5, 0.1), 10, 5, 0.1), d1 = tweens.damp(0, 10, 5, 0.2);
+  check('tweens.damp frame-rate independent', ap(d2, d1));
+  check('tweens.pingPongT triangle', tweens.pingPongT(0) === 0 && tweens.pingPongT(1) === 1 && tweens.pingPongT(2) === 0 && tweens.pingPongT(1.5) === 0.5);
+  // every easing lands cleanly on both endpoints
+  let ends = true; for (const k of Object.keys(tweens.ease)) { if (!ap(tweens.ease[k](0), 0) || !ap(tweens.ease[k](1), 1)) ends = false; }
+  check('tweens.ease endpoints exact', ends);
+  check('tweens.ease overshoot curves exceed 1 mid-flight', tweens.ease.easeOutBack(0.7) > 1 && tweens.ease.easeOutElastic(0.13) > 1);
+  check('tweens.ease smoothstep flat at start', tweens.ease.smoothstep(0.001) < 0.001);
+  // tween: raw t monotonic 0..1, value lands on `to`, done latches
+  const tw = tweens.tween(0, 10, 1, 'linear'); let prev = -1, last;
+  for (let i = 0; i < 10; i++) { const s = tw(0.1); if (s.t < prev) prev = NaN; else prev = s.t; last = s.value; }
+  check('tween t monotonic to 1, value -> to', ap(prev, 1) && ap(last, 10));
+  check('tween done latches past end', tw(0.01).done === true);
+  // array tween
+  const tv = tweens.tween([0,0,0], [1,0.5,0], 1)(0.5).value;
+  check('tween interpolates arrays', ap(tv[0], 0.5) && ap(tv[1], 0.25));
+  check('tween zero duration snaps done', (() => { const z = tweens.tween(3, 9, 0)(0); return z.done && z.value === 9; })());
+  // sequence: back-to-back, overall t, long-frame spillover, nesting
+  const seq = tweens.sequence([tweens.tween(0, 10, 1, 'linear'), tweens.tween(10, 20, 1, 'linear')]);
+  seq(0.5); const mid = seq(1.0); const end = seq(0.5);
+  check('sequence spills across segments and finishes', ap(mid.value, 15) && ap(mid.t, 0.75) && ap(end.value, 20) && end.done);
+  const nest = tweens.sequence([tweens.sequence([tweens.tween(0, 1, 1), tweens.tween(1, 2, 1)]), tweens.tween(2, 3, 1)]);
+  check('sequence nests and reports total duration', nest.duration === 3 && ap(nest(2.5).value, 2.5));
+  check('empty sequence is instantly done', tweens.sequence([])(1).done === true);
+}
+
+{
+  // effects: FEEL signal state machines — trigger then step(dt) -> value
+  const sh = effects.screenShake({ mag: 1, duration: 0.4, decay: 6 });
+  check('effects.screenShake idle zero', sh.step(0.016)[0] === 0 && !sh.active);
+  sh.trigger();
+  check('effects.screenShake active', sh.active);
+  let mx = 0;
+  for (let i = 0; i < 30; i++) { const [x, y] = sh.step(0.016); mx = Math.max(mx, Math.abs(x), Math.abs(y)); }
+  check('effects.screenShake offset then settles', mx > 0 && !sh.active);
+  const A = effects.screenShake({ mag: 1 }); A.trigger();
+  const B = effects.screenShake({ mag: 1 }); B.trigger();
+  let same = true;
+  for (let i = 0; i < 20; i++) { const a = A.step(0.02), b = B.step(0.02); if (a[0] !== b[0] || a[1] !== b[1]) same = false; }
+  check('effects.screenShake deterministic', same);
+
+  const hs = effects.hitStop({ duration: 0.06 });
+  check('effects.hitStop normal=1', hs.step(0.016) === 1);
+  hs.trigger();
+  check('effects.hitStop frozen=0', hs.step(0.016) === 0 && hs.active);
+  hs.step(0.05);
+  check('effects.hitStop resumes', hs.step(0.016) === 1 && !hs.active);
+
+  const fl = effects.flash({ color: [1, 0.8, 0.2], duration: 0.2 });
+  check('effects.flash idle 0', fl.step(0.01) === 0);
+  fl.trigger();
+  check('effects.flash color', fl.color[0] === 1 && fl.color[1] === 0.8);
+  const f1 = fl.step(0.05), f2 = fl.step(0.05);
+  check('effects.flash fades', f1 > f2 && f1 <= 1 && f2 >= 0);
+
+  const zp = effects.zoomPunch({ amount: 0.15, duration: 0.25 });
+  check('effects.zoomPunch idle 1', zp.step(0.016) === 1);
+  zp.trigger();
+  let pk = 1;
+  for (let i = 0; i < 20; i++) pk = Math.max(pk, zp.step(0.016));
+  check('effects.zoomPunch spikes in', pk > 1 && pk <= 1.15 + 1e-9);
+  check('effects.zoomPunch back to ~1', Math.abs(zp.step(0.016) - 1) < 1e-6 && !zp.active);
+
+  const vp = effects.vignettePulse({ duration: 0.6, peak: 1 });
+  check('effects.vignettePulse idle 0', vp.step(0.016) === 0);
+  vp.trigger();
+  let prev = vp.step(0.1), mono = prev > 0;
+  for (let i = 0; i < 30; i++) { const v = vp.step(0.05); if (v > prev + 1e-9) mono = false; prev = v; }
+  check('effects.vignettePulse rises then ebbs', mono && !vp.active);
+  const vh = effects.vignettePulse({ duration: 0.4, peak: 1, hold: 1 }); vh.trigger();
+  check('effects.vignettePulse holds peak', vh.step(0.3) === 1 && vh.step(0.3) === 1);
+}
+
+// ---- particles (emitter sim) ----
+{ const sys = particles.makeSystem(); const n = sys.emit(particles.burst({ count: 20 }), { pos: [1, 0, 2], rng: makeRng(1) });
+  check('particles: burst emits count at pos', n === 20 && sys.count === 20 && sys.particles[0].pos[0] === 1 && sys.particles[0].pos[2] === 2);
+  check('particles: particle shape', sys.particles[0].age === 0 && sys.particles[0].life > 0 && sys.particles[0].color.length === 3); }
+{ const sys = particles.makeSystem({ gravity: 0 });
+  for (let i = 0; i < 10; i++) sys.emit((add) => add({ vel: [0, 0, 0], life: 0.5, drag: 0 }), {});
+  check('particles: alive before life', sys.step(0.4) === 10);
+  check('particles: dropped past life', sys.step(0.2) === 0 && sys.count === 0); }
+{ const sys = particles.makeSystem({ gravity: 0 });
+  sys.emit((add) => add({ vel: [2, 0, 0], life: 10, drag: 0 }), { pos: [0, 0, 0] }); sys.step(0.5);
+  check('particles: integrates pos=vel*dt', Math.abs(sys.particles[0].pos[0] - 1) < 1e-9); }
+{ const sys = particles.makeSystem({ gravity: -10 });
+  sys.emit((add) => add({ vel: [0, 0, 0], life: 10, drag: 0 }), {}); sys.step(1);
+  check('particles: gravity accelerates down', Math.abs(sys.particles[0].vel[1] + 10) < 1e-9); }
+{ const sys = particles.makeSystem(); const f = particles.fountain({ rate: 30 }); let total = 0; const rng = makeRng(7);
+  for (let i = 0; i < 10; i++) total += sys.emit(f, { dt: 0.1, rng });
+  check('particles: fountain rate ~ rate*time', total === 30); }
+{ const a = particles.makeSystem(); const b = particles.makeSystem();
+  a.emit(particles.sparks({ count: 8 }), { rng: makeRng(42) }); b.emit(particles.sparks({ count: 8 }), { rng: makeRng(42) });
+  check('particles: deterministic given seed', a.particles.every((p, i) => p.vel[1] === b.particles[i].vel[1])); }
+{ const sys = particles.makeSystem(); sys.emit(particles.trail({ jitter: 0 }), { pos: [5, 1, 5], dt: 0.016, rng: makeRng(2) });
+  check('particles: trail breadcrumb at pos', sys.count === 1 && sys.particles[0].pos[0] === 5 && sys.particles[0].vel[0] === 0); }
+{ const sys = particles.makeSystem({ max: 5 });
+  check('particles: max caps live count', sys.emit(particles.burst({ count: 50 }), { rng: makeRng(9) }) === 5 && sys.count === 5); }
+
+// ---- transitions (scene/screen progress producers) ----
+{ const drain = (step, dt = 0.1, cap = 1000) => { let last = -1, mono = true, r, n = 0;
+    do { r = step(dt); if (r.p < last - 1e-9) mono = false; last = r.p; } while (!r.done && ++n < cap);
+    return { r, mono }; };
+  const f = transitions.fade({ duration: 0.5 });
+  check('transitions.fade starts clear', Math.abs(f(0).alpha) < 1e-9);
+  { const { r, mono } = drain(f); check('transitions.fade reaches black + monotonic', r.done && Math.abs(r.alpha - 1) < 1e-9 && mono); }
+  const fi = transitions.fade({ duration: 0.5, dir: 'in' });
+  check('transitions.fade dir=in starts opaque', Math.abs(fi(0).alpha - 1) < 1e-9);
+  check('transitions.fade delay holds progress', transitions.fade({ duration: 0.5, delay: 0.3 })(0.2).p === 0);
+  check('transitions.wipe passes axis', transitions.wipe({ duration: 0.4, axis: 'y' })(0).axis === 'y');
+  { const sl = transitions.slide({ duration: 0.5, from: 'left' });
+    check('transitions.slide starts off-screen', Math.abs(sl(0).offset[0] + 1) < 1e-9);
+    check('transitions.slide ends centered', drain(sl).r.offset[0] < 1e-9); }
+  { const ir = transitions.iris({ duration: 0.5 });
+    check('transitions.iris opens 0->1', Math.abs(ir(0).radius) < 1e-9 && Math.abs(drain(ir).r.radius - 1) < 1e-9); }
+  check('transitions.iris close starts full', Math.abs(transitions.iris({ duration: 0.5, dir: 'close' })(0).radius - 1) < 1e-9);
+  { const c = transitions.crossfade({ duration: 0.5 }); const m = c(0.25);
+    check('transitions.crossfade weights sum to 1', Math.abs(m.a + m.b - 1) < 1e-9 && Math.abs(drain(c).r.b - 1) < 1e-9); }
+  { const px = transitions.pixelate({ duration: 0.5, max: 64, min: 4 });
+    check('transitions.pixelate starts sharp', Math.abs(px(0).amount) < 1e-9);
+    const r = drain(px).r; check('transitions.pixelate ends coarse', r.done && Math.abs(r.amount - 1) < 1e-9 && r.blocks === 4); }
+  check('transitions.none is an instant cut', transitions.none()(0.016).done);
+  { const g = transitions.fade({ duration: 0.3 }); drain(g); g.replay();
+    check('transitions replay restarts', g.done === false && Math.abs(g(0).alpha) < 1e-9); }
+  { const g = transitions.fade({ duration: 0.3 }); drain(g); g.reverse();
+    let r, last = 2, mono = true; do { r = g(0.1); if (r.p > last + 1e-9) mono = false; last = r.p; } while (!r.done);
+    check('transitions reverse plays back to start', Math.abs(r.p) < 1e-9 && mono); }
+  { let swaps = 0;
+    const p = transitions.pair(transitions.fade({ duration: 0.4, dir: 'out' }),
+                               transitions.fade({ duration: 0.4, dir: 'in' }), { onSwap: () => swaps++ });
+    const seen = []; let r, n = 0; do { r = p(0.1); seen.push(r); } while (!r.done && ++n < 1000);
+    let mono = true, last = -1; for (const s of seen) { if (s.p < last - 1e-9) mono = false; last = s.p; }
+    check('transitions.pair out->in swaps once', swaps === 1);
+    check('transitions.pair blended progress monotonic to done', r.done && Math.abs(r.p - 1) < 1e-9 && mono &&
+      seen.some(s => s.phase === 'out') && seen.some(s => s.phase === 'in')); }
+  check('transitions bundle complete', typeof transitions.ease.smoothstep === 'function' && transitions.clamp01(2) === 1 && transitions.lerp(0, 10, 0.5) === 5);
+}
+
+{
+  const near = (a, b, e = 1e-6) => Math.abs(a - b) <= e;
+  const col = (c) => Array.isArray(c) && c.length === 3 && c.every(v => v >= 0 && v <= 1);
+  for (const [k, p] of Object.entries(palettes.PALETTES)) {
+    check('palettes ' + k + ' shape', p.length >= 5 && p.length <= 7 && p.every(col));
+  }
+  check('palettes palette copy safe', (() => { const p = palettes.palette('lava'); p[0][0] = 9; return palettes.PALETTES.lava[0][0] !== 9; })());
+  check('palettes lerpColor mid', palettes.lerpColor([0,0,0],[1,0.5,0.2],0.5).every((v,i)=>near(v,[0.5,0.25,0.1][i])));
+  check('palettes lerpColor clamps', palettes.lerpColor([0,0,0],[1,1,1],5).every(v=>v===1));
+  check('palettes lighten to white', palettes.lighten([0,0,0],1).every(v=>v===1));
+  check('palettes darken to black', palettes.darken([1,1,1],1).every(v=>v===0));
+  check('palettes grayscale flat', (()=>{const g=palettes.grayscale([0.2,0.7,0.1]);return near(g[0],g[1])&&near(g[1],g[2]);})());
+  check('palettes saturate -1 == gray', (()=>{const g=palettes.saturate([0.2,0.7,0.1],-1),y=palettes.grayscale([0.2,0.7,0.1]);return near(g[0],y[0]);})());
+  check('palettes hueShift 360 identity', (()=>{const c=[0.8,0.2,0.3],s=palettes.hueShift(c,360);return near(s[0],c[0])&&near(s[2],c[2]);})());
+  check('palettes hueShift red->green', (()=>{const s=palettes.hueShift([1,0,0],120);return s[1]>0.9&&s[0]<0.1;})());
+  check('palettes hueShift negative wraps', col(palettes.hueShift([0.3,0.6,0.9],-450)));
+  check('palettes damageFlash t0 white', palettes.damageFlash([0.2,0.3,0.4],0).every(v=>near(v,1)));
+  check('palettes damageFlash t1 base', palettes.damageFlash([0.2,0.3,0.4],1).every((v,i)=>near(v,[0.2,0.3,0.4][i])));
+  check('palettes damageFlash eases down', (()=>{const b=[0.2,0.2,0.2];return palettes.damageFlash(b,0.2)[0] > palettes.damageFlash(b,0.6)[0];})());
+  check('palettes teamColor distinct', (()=>{const a=palettes.teamColor(0),b=palettes.teamColor(1);return !(near(a[0],b[0])&&near(a[1],b[1]));})());
+  check('palettes teamColor wraps', col(palettes.teamColor(99)) && col(palettes.teamColor(-1)));
+  check('palettes gradient endpoints', palettes.gradient('ice',0).every((v,i)=>near(v,palettes.PALETTES.ice[0][i])) && (()=>{const p=palettes.PALETTES.ice,l=p[p.length-1];return palettes.gradient('ice',1).every((v,i)=>near(v,l[i]));})());
+  check('palettes gradient node exact', near(palettes.gradient([[0,0,0],[0.5,0.5,0.5],[1,1,1]],0.5)[0], 0.5));
+  check('palettes pick index wrap', palettes.pick('lava',-1).every((v,i)=>near(v,palettes.PALETTES.lava[palettes.PALETTES.lava.length-1][i])));
+  check('palettes pick rng', palettes.pick('neon',{int:(a,b)=>a}).every((v,i)=>near(v,palettes.PALETTES.neon[0][i])));
+  check('palettes toHex clamps', palettes.toHex([2,-1,0.5])==='#ff0080');
+  check('palettes fromHex roundtrip', palettes.toHex(palettes.fromHex('#ff8000'))==='#ff8000');
+  check('palettes fromHex short+nohash', palettes.fromHex('f00').every((v,i)=>near(v,[1,0,0][i])) && palettes.fromHex('00ff00').every((v,i)=>near(v,[0,1,0][i])));
+  check('palettes fromHex bad -> black', palettes.fromHex('xyz123zz').every(v=>v===0));
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
