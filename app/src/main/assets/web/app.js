@@ -1408,20 +1408,9 @@ async function showFile(rel) {
        <div class="editor-head">
          <button class="pill ghost sm" id="edClose" title="Close">✕</button>
          <span class="eh-name" title="${escAttr(rel)}">${escapeHtml(rel)}</span>
-         <button class="pill sm" id="edSave">Save</button>
-       </div>
-       <div class="editor-toolbar">
-         <span class="editor-meta" id="edMeta"></span>
          <span class="editor-dirty" id="edDirty"></span>
-       </div>
-       <div class="editor-find">
-         <input id="edFindI" class="field" placeholder="Find" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
-         <input id="edReplI" class="field" placeholder="Replace" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
-         <span id="edFindCount" class="editor-find-count">0/0</span>
-         <button class="pill ghost sm" id="edPrev" title="Previous">‹</button>
-         <button class="pill ghost sm" id="edNext" title="Next">›</button>
-         <button class="pill ghost sm" id="edRepl">Replace</button>
-         <button class="pill ghost sm" id="edReplAll">All</button>
+         <button class="pill ghost sm" id="edFindBtn" title="Find & replace">🔍</button>
+         <button class="pill sm" id="edSave">Save</button>
        </div>
        <div class="editor-body">
          <div class="editor-gutter" id="edGutter"></div>
@@ -1429,6 +1418,20 @@ async function showFile(rel) {
            <pre class="editor-hl" id="edHl" aria-hidden="true"></pre>
            <textarea class="editor-area" id="edArea" spellcheck="false"
                      autocomplete="off" autocapitalize="off" autocorrect="off"></textarea>
+           <div class="editor-findpop hidden" id="edFindPop">
+             <div class="fp-row">
+               <input id="edFindI" class="field" placeholder="Find" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+               <span id="edFindCount" class="editor-find-count">0/0</span>
+               <button class="pill ghost sm" id="edPrev" title="Previous">‹</button>
+               <button class="pill ghost sm" id="edNext" title="Next">›</button>
+               <button class="pill ghost sm" id="edFindClose" title="Close">✕</button>
+             </div>
+             <div class="fp-row">
+               <input id="edReplI" class="field" placeholder="Replace" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+               <button class="pill ghost sm" id="edRepl">Replace</button>
+               <button class="pill ghost sm" id="edReplAll">All</button>
+             </div>
+           </div>
          </div>
        </div>
        <div class="hint" id="edStatus"></div>
@@ -1443,6 +1446,12 @@ async function showFile(rel) {
   }
   $("#edSave").onclick = save;
   $("#edClose").onclick = closeEditor;
+  const findPop = $("#edFindPop");
+  $("#edFindBtn").onclick = () => {
+    const hidden = findPop.classList.toggle("hidden");
+    if (!hidden) { const fi = $("#edFindI"); fi.focus(); fi.select(); }
+  };
+  $("#edFindClose").onclick = () => findPop.classList.add("hidden");
 
   function renderGutter() {
     const lines = area.value.split("\n").length;
@@ -1452,8 +1461,10 @@ async function showFile(rel) {
   }
   function renderHl() { hl.innerHTML = highlightCode(area.value, hlOpts); }
   function updateMeta() {
+    const el = $("#edMeta");
+    if (!el) return;
     const v = area.value, lines = v.split("\n").length;
-    $("#edMeta").textContent = `${lines} line${lines !== 1 ? "s" : ""} · ${v.length} chars`;
+    el.textContent = `${lines} line${lines !== 1 ? "s" : ""} · ${v.length} chars`;
   }
   function setDirty() { $("#edDirty").textContent = area.value !== saved ? "● unsaved" : ""; }
   function refresh() { renderGutter(); renderHl(); updateMeta(); setDirty(); findMatches(); }
@@ -1509,7 +1520,12 @@ async function showFile(rel) {
     curMatch = (Math.max(0, curMatch) + dir + matches.length) % matches.length;
     selectCurrent(true);
   }
-  $("#edFindI").addEventListener("input", () => { curMatch = matches.length ? 0 : -1; findMatches(); if (matches.length) selectCurrent(false); });
+  $("#edFindI").addEventListener("input", () => {
+    findMatches();                       // recompute before selecting one
+    curMatch = matches.length ? 0 : -1;
+    updateFindCount();
+    if (matches.length) selectCurrent(false);
+  });
   $("#edNext").onclick = () => gotoMatch(1);
   $("#edPrev").onclick = () => gotoMatch(-1);
   $("#edRepl").onclick = () => {
