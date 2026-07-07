@@ -58,6 +58,8 @@ import { tutorial } from './engine/control/tutorial.js';
 import { tilemap } from './engine/control/tilemap.js';
 import { tilecollision } from './engine/control/tilecollision.js';
 import { rooms } from './engine/control/rooms.js';
+import { interact } from './engine/control/interact.js';
+import { melee } from './engine/control/melee.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -1940,5 +1942,57 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   const opened = w.tryDoor([24, 0, 8]);
   check('rooms: door now open with landing', opened && !opened.locked && opened.needs === null && opened.at[0] === 24 && opened.at[2] === 24);
 }
+
+
+// ===== Round 8 (world layer): interact / melee =====
+
+{
+  const P = [0, 0, 0], F = [0, 1]; // player at origin looking +z
+  const io = interact.makeInteractions();
+  let opened = 0;
+  const chest = { pos: [0, 0, 1], prompt: 'Open', once: true, onInteract: () => { opened++; return 'gold'; } };
+  const behind = { pos: [0, 0, -1], prompt: 'Behind' };
+  const far = { pos: [0, 0, 5], prompt: 'Far' };
+  io.add(chest); io.add(behind); io.add(far);
+  check('interact: nearest picks in-front chest', io.nearest(P, F, { range: 1.5 }).of === chest);
+  check('interact: prompt reflects target', io.prompt() === 'Open');
+  check('interact: behind excluded', io.nearest(P, F).of !== behind);
+  check('interact: far out of range excluded', io.nearest(P, F).of !== far);
+  const io2 = interact.makeInteractions();
+  io2.add({ pos: [0, 0, 1.2], prompt: 'B' });
+  const nearA = { pos: [0, 0, 0.5], prompt: 'A' };
+  io2.add(nearA);
+  check('interact: closest in-front wins', io2.nearest(P, F, { range: 2 }).of === nearA);
+  const r1 = io.trigger();
+  check('interact: trigger fires onInteract', r1 && r1.result === 'gold' && opened === 1);
+  check('interact: once does not refire', io.trigger() === null && opened === 1);
+  check('interact: spent once vanishes', io.nearest(P, F, { range: 1.5 }) === null && io.prompt() === null);
+  const io3 = interact.makeInteractions();
+  let pulls = 0;
+  io3.add({ pos: [0, 0, 1], onInteract: () => { pulls++; } });
+  io3.nearest(P, F); io3.trigger(); io3.trigger();
+  check('interact: lever re-fires', pulls === 2);
+  const io4 = interact.makeInteractions();
+  let hit = 0;
+  io4.add({ pos: [0, 0, 1], onInteract: () => { hit++; } });
+  io4.trigger({ pos: [0, 0, 0], rot: Math.atan2(0, 1) });
+  check('interact: trigger uses player facing', hit === 1);
+  const io5 = interact.makeInteractions();
+  io5.add({ pos: [0, 0, 1], facing: [0, -1], prompt: 'Read' }); // sign front = south side
+  check('interact: sign wrong side excluded', io5.nearest([0, 0, 2], [0, -1]) === null);
+  check('interact: sign front side ok', io5.nearest([0, 0, 0], [0, 1]) !== null);
+  const io6 = interact.makeInteractions();
+  let held = 0;
+  io6.add({ pos: [0, 0, 1], hold: 1.0, onInteract: () => { held++; } });
+  io6.nearest(P, F);
+  check('interact: hold in progress', !io6.hold(null, 0.4).fired && held === 0);
+  io6.hold(null, 0.4);
+  check('interact: hold completes', io6.hold(null, 0.4).fired && held === 1);
+  const io7 = interact.makeInteractions();
+  io7.add({ pos: [0, 0, -1], prompt: 'X' });
+  check('interact: needFacing false ignores direction', io7.nearest(P, F, { needFacing: false }) !== null);
+}
+
+{ const m = melee.arc(); check('melee loads', typeof m.trigger === 'function'); }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
