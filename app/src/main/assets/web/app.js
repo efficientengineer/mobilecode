@@ -161,7 +161,6 @@ async function loadHistory() {
   } catch (e) {}
   _loadingHistory = false;
   refreshStats();
-  renderTree();
 }
 
 // The home screen for an empty session: game-making leads, generic coding is one
@@ -1245,7 +1244,7 @@ async function filesModal(path) {
     el.onclick = () => {
       const e = el.dataset.e;
       if (e.endsWith("/")) filesModal(path + e);
-      else showFile(path + e);
+      else { openTab(path + e); closeSheet("#modal"); }
     };
   });
   $("#modalBody").querySelectorAll("[data-pin]").forEach((el) => {
@@ -1335,12 +1334,21 @@ async function renderTree() {
   });
   el.querySelectorAll("[data-file]").forEach((row) => {
     row.onclick = () => {
-      treeState.active = row.getAttribute("data-file");
-      el.querySelectorAll(".tree-row.active").forEach((x) => x.classList.remove("active"));
-      row.classList.add("active");
-      showFile(treeState.active);
+      openTab(row.getAttribute("data-file"));
+      closeTree();
     };
   });
+}
+function openTree() {
+  const o = $("#treeOverlay"), b = $("#treeBackdrop");
+  if (o) o.classList.remove("hidden");
+  if (b) b.classList.remove("hidden");
+  renderTree();
+}
+function closeTree() {
+  const o = $("#treeOverlay"), b = $("#treeBackdrop");
+  if (o) o.classList.add("hidden");
+  if (b) b.classList.add("hidden");
 }
 
 // --- Syntax highlighting -------------------------------------------------
@@ -1389,37 +1397,102 @@ function highlightCode(code, opts) {
 }
 function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
-// Close the editor and return the main area to its empty state.
-let _editorActive = null;
-function closeEditor() {
-  const pane = $("#editorPane");
+// --- Tabbed, auto-saving editor ------------------------------------------
+// Open files live as tabs to the right of the ☰ Files button. There is no
+// editor chrome: the active tab is the title, its ✕ closes it, edits auto-save
+// (debounced), and find/replace is a floating 🔍 button inside the code.
+const openTabs = [];   // [{ rel, content, saved }]
+let activeTab = null;  // rel of the active tab
+const _saveTimers = {};
+
+function tabBasename(rel) { return rel.includes("/") ? rel.slice(rel.lastIndexOf("/") + 1) : rel; }
+
+function renderTabs() {
+  const c = $("#tabs"); if (!c) return;
+  c.innerHTML = openTabs.map((t) => {
+    const active = t.rel === activeTab ? " active" : "";
+    const dirty = t.content !== t.saved ? "●" : "";
+    return `<div class="tab${active}" data-tab="${escAttr(t.rel)}" title="${escAttr(t.rel)}">
+      <span class="tab-dirty">${dirty}</span>
+      <span class="tab-name">${escapeHtml(tabBasename(t.rel))}</span>
+      <span class="tab-x" data-close="${escAttr(t.rel)}">✕</span></div>`;
+  }).join("");
+  c.querySelectorAll(".tab").forEach((el) => {
+    el.onclick = (e) => { if (!e.target.closest("[data-close]")) setActiveTab(el.getAttribute("data-tab")); };
+  });
+  c.querySelectorAll("[data-close]").forEach((el) => {
+    el.onclick = (e) => { e.stopPropagation(); closeTab(el.getAttribute("data-close")); };
+  });
+}
+function updateActiveTabDirty(dirty) {
+  const d = document.querySelector("#tabs .tab.active .tab-dirty");
+  if (d) d.textContent = dirty ? "●" : "";
+}
+async function openTab(rel) {
+  if (openTabs.some((t) => t.rel === rel)) { setActiveTab(rel); return; }
+  let content = "";
+  try { content = (await call("orch", { fn: "read_ws_file", arg: rel })).text || ""; } catch (e) {}
+  openTabs.push({ rel, content, saved: content });
+  setActiveTab(rel);
+}
+function setActiveTab(rel) {
+  activeTab = rel;
+  treeState.active = rel;
+  renderTabs();
+  renderEditor();
+}
+function closeTab(rel) {
+  flushSave(rel);
+  const i = openTabs.findIndex((t) => t.rel === rel);
+  if (i < 0) return;
+  openTabs.splice(i, 1);
+  if (activeTab === rel) {
+    const next = openTabs[i] || openTabs[i - 1] || null;
+    activeTab = next ? next.rel : null;
+    treeState.active = activeTab || "";
+  }
+  renderTabs();
+  if (activeTab) renderEditor(); else showEditorEmpty();
+}
+function showEditorEmpty() {
+  const pane = $("#editorPane"), empty = $("#editorEmpty"), fab = $("#edFindFab");
   if (pane) { pane.classList.add("hidden"); pane.innerHTML = ""; }
-  const empty = $("#editorEmpty");
   if (empty) empty.classList.remove("hidden");
-  _editorActive = null;
+  if (fab) fab.classList.add("hidden");
 }
 
-// A VS Code-style viewer/editor that fills the main area: syntax highlighting,
-// a line-numbered gutter, find & replace, and Save (writes back to the file).
-async function showFile(rel) {
-  const r = await call("orch", { fn: "read_ws_file", arg: rel });
-  const content = r.text || "";
-  const hlOpts = hlOptsFor(rel);
-  let saved = content;   // last-persisted contents (for the dirty flag)
-  _editorActive = rel;
-  treeState.active = rel;
-  const pane = $("#editorPane");
-  $("#editorEmpty").classList.add("hidden");
+// Debounced auto-save.
+function scheduleSave(rel) {
+  if (_saveTimers[rel]) clearTimeout(_saveTimers[rel]);
+  _saveTimers[rel] = setTimeout(() => saveTab(rel), 800);
+}
+function flushSave(rel) {
+  if (_saveTimers[rel]) { clearTimeout(_saveTimers[rel]); delete _saveTimers[rel]; }
+  saveTab(rel);
+}
+async function saveTab(rel) {
+  const tab = openTabs.find((t) => t.rel === rel);
+  if (!tab || tab.content === tab.saved) return;
+  const pending = tab.content;
+  const res = await call("py.call", { module: "orchestrator", fn: "write_ws_file", args: [rel, pending] });
+  if ((res.text || "").startsWith("Saved")) {
+    tab.saved = pending;
+    if (rel === activeTab && tab.content === tab.saved) updateActiveTabDirty(false);
+    else renderTabs();
+  }
+}
+
+// Render the active tab's file into the (chrome-less) editor pane.
+function renderEditor() {
+  const tab = openTabs.find((t) => t.rel === activeTab);
+  const pane = $("#editorPane"), empty = $("#editorEmpty"), fab = $("#edFindFab");
+  if (!tab) { showEditorEmpty(); return; }
+  empty.classList.add("hidden");
   pane.classList.remove("hidden");
+  fab.classList.remove("hidden");
+  const hlOpts = hlOptsFor(tab.rel);
   pane.innerHTML =
     `<div class="editor">
-       <div class="editor-head">
-         <button class="pill ghost sm" id="edClose" title="Close">✕</button>
-         <span class="eh-name" title="${escAttr(rel)}">${escapeHtml(rel)}</span>
-         <span class="editor-dirty" id="edDirty"></span>
-         <button class="pill ghost sm" id="edFindBtn" title="Find & replace">🔍</button>
-         <button class="pill sm" id="edSave">Save</button>
-       </div>
        <div class="editor-body">
          <div class="editor-code">
            <div class="editor-lines" id="edLines" aria-hidden="true"></div>
@@ -1442,24 +1515,10 @@ async function showFile(rel) {
            </div>
          </div>
        </div>
-       <div class="hint" id="edStatus"></div>
      </div>`;
 
   const area = $("#edArea"), gutter = $("#edLines"), hl = $("#edHl");
-  area.value = content;
-  async function save() {
-    const res = await call("py.call", { module: "orchestrator", fn: "write_ws_file", args: [rel, area.value] });
-    $("#edStatus").textContent = res.text || "";
-    if ((res.text || "").startsWith("Saved")) { saved = area.value; setDirty(); renderTree(); }
-  }
-  $("#edSave").onclick = save;
-  $("#edClose").onclick = closeEditor;
-  const findPop = $("#edFindPop");
-  $("#edFindBtn").onclick = () => {
-    const hidden = findPop.classList.toggle("hidden");
-    if (!hidden) { const fi = $("#edFindI"); fi.focus(); fi.select(); }
-  };
-  $("#edFindClose").onclick = () => findPop.classList.add("hidden");
+  area.value = tab.content;
 
   function renderGutter() {
     const lines = area.value.split("\n").length;
@@ -1468,16 +1527,15 @@ async function showFile(rel) {
     gutter.textContent = s;
   }
   function renderHl() { hl.innerHTML = highlightCode(area.value, hlOpts); }
-  function updateMeta() {
-    const el = $("#edMeta");
-    if (!el) return;
-    const v = area.value, lines = v.split("\n").length;
-    el.textContent = `${lines} line${lines !== 1 ? "s" : ""} · ${v.length} chars`;
+  function refresh() { renderGutter(); renderHl(); findMatches(); }
+  // Any edit updates the tab buffer, flags dirty, and schedules an auto-save.
+  function onEdit() {
+    tab.content = area.value;
+    updateActiveTabDirty(tab.content !== tab.saved);
+    refresh();
+    scheduleSave(tab.rel);
   }
-  function setDirty() { $("#edDirty").textContent = area.value !== saved ? "● unsaved" : ""; }
-  function refresh() { renderGutter(); renderHl(); updateMeta(); setDirty(); findMatches(); }
-
-  area.addEventListener("input", refresh);
+  area.addEventListener("input", onEdit);
   area.addEventListener("scroll", () => {
     gutter.scrollTop = area.scrollTop;
     hl.scrollTop = area.scrollTop;
@@ -1489,11 +1547,17 @@ async function showFile(rel) {
       const s = area.selectionStart, e = area.selectionEnd;
       area.value = area.value.slice(0, s) + "  " + area.value.slice(e);
       area.selectionStart = area.selectionEnd = s + 2;
-      refresh();
+      onEdit();
     }
   });
 
-  // --- Find & replace ---
+  // --- Find & replace (floating 🔍 button toggles the popover) ---
+  const findPop = $("#edFindPop");
+  fab.onclick = () => {
+    const hidden = findPop.classList.toggle("hidden");
+    if (!hidden) { const fi = $("#edFindI"); fi.focus(); fi.select(); }
+  };
+  $("#edFindClose").onclick = () => findPop.classList.add("hidden");
   let matches = [], curMatch = -1;
   function updateFindCount() {
     $("#edFindCount").textContent = `${matches.length ? curMatch + 1 : 0}/${matches.length}`;
@@ -1529,7 +1593,7 @@ async function showFile(rel) {
     selectCurrent(true);
   }
   $("#edFindI").addEventListener("input", () => {
-    findMatches();                       // recompute before selecting one
+    findMatches();
     curMatch = matches.length ? 0 : -1;
     updateFindCount();
     if (matches.length) selectCurrent(false);
@@ -1541,19 +1605,14 @@ async function showFile(rel) {
     if (!q || curMatch < 0 || !matches.length) return;
     const s = matches[curMatch];
     area.value = area.value.slice(0, s) + rep + area.value.slice(s + q.length);
-    renderGutter(); renderHl(); updateMeta(); setDirty();
-    findMatches();
+    onEdit();
     if (matches.length) { curMatch = curMatch % matches.length; selectCurrent(true); }
   };
   $("#edReplAll").onclick = () => {
     const q = $("#edFindI").value, rep = $("#edReplI").value;
     if (!q) return;
-    const before = area.value;
     area.value = area.value.replace(new RegExp(escapeRegExp(q), "gi"), () => rep);
-    renderGutter(); renderHl(); updateMeta(); setDirty();
-    findMatches();
-    const n = before === area.value ? 0 : before.split(new RegExp(escapeRegExp(q), "i")).length - 1;
-    $("#edStatus").textContent = `Replaced ${n} occurrence${n !== 1 ? "s" : ""}.`;
+    onEdit();
   };
 
   refresh();
@@ -1691,34 +1750,6 @@ function openActionsMenu() {
   });
 }
 
-// --- Explorer resize (drag the handle: height in portrait, width in landscape) -
-function wireExplorerResize() {
-  const explorer = $("#explorer"), handle = $("#explorerResize");
-  if (!explorer || !handle) return;
-  const landscape = () => window.matchMedia("(orientation: landscape)").matches;
-  handle.addEventListener("pointerdown", (e) => {
-    e.preventDefault();
-    try { handle.setPointerCapture(e.pointerId); } catch (_) {}
-    const startX = e.clientX, startY = e.clientY;
-    const rect = explorer.getBoundingClientRect();
-    const startW = rect.width, startH = rect.height, ls = landscape();
-    const move = (ev) => {
-      if (ls) {
-        let w = Math.max(140, Math.min(startW + (ev.clientX - startX), window.innerWidth * 0.7));
-        explorer.style.width = w + "px"; explorer.style.height = "";
-      } else {
-        let h = Math.max(80, Math.min(startH + (ev.clientY - startY), window.innerHeight * 0.7));
-        explorer.style.height = h + "px"; explorer.style.width = "";
-      }
-    };
-    const up = () => { handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", up); };
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", up);
-  });
-  // On rotation the axis changes; drop the inline size so the media default applies.
-  window.addEventListener("orientationchange", () => { explorer.style.height = ""; explorer.style.width = ""; });
-}
-
 // --- Wire up -------------------------------------------------------------
 $("#menuFab").onclick = () => { closeFabMenus(); openSheet("#menu"); };
 $("#modelFab").onclick = (e) => { e.stopPropagation(); openModelMenu(); };
@@ -1726,7 +1757,9 @@ $("#actionsFab").onclick = (e) => { e.stopPropagation(); openActionsMenu(); };
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".fab") && !e.target.closest(".fabmenu")) closeFabMenus();
 });
-wireExplorerResize();
+$("#filesBtn").onclick = openTree;
+$("#treeClose").onclick = closeTree;
+$("#treeBackdrop").onclick = closeTree;
 $("#chatFab").onclick = toggleChat;
 $("#chatDrawerClose").onclick = closeChat;
 $("#chatBackdrop").onclick = closeChat;
@@ -1773,11 +1806,6 @@ $("#micBtn").onclick = () => {
 $("#stopBtn").onclick = () => { $("#runlabel").textContent = "Stopping…"; call("orch", { fn: "interrupt" }); };
 const _exRefresh = $("#explorerRefresh");
 if (_exRefresh) _exRefresh.onclick = () => renderTree();
-const _exToggle = $("#explorerToggle");
-if (_exToggle) _exToggle.onclick = () => {
-  const collapsed = $("#explorer").classList.toggle("collapsed");
-  _exToggle.textContent = collapsed ? "▸" : "▾";
-};
 // Boot
 (async function () {
   try { await refreshHeader(); await loadHistory(); } catch (e) {}
