@@ -45,6 +45,11 @@ import { senses } from './engine/control/senses.js';
 import { squad } from './engine/control/squad.js';
 import { dialogue } from './engine/control/dialogue.js';
 import { utility } from './engine/control/utility.js';
+import { save } from './engine/control/save.js';
+import { inventory } from './engine/control/inventory.js';
+import { progression } from './engine/control/progression.js';
+import { quests } from './engine/control/quests.js';
+import { economy } from './engine/control/economy.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -1358,6 +1363,221 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   check('utility.evaluate sorted', rows[0].score >= rows[1].score);
   brain.decide(ent);
   check('utility scratch on e._util', ent._util.action === rows[0].name);
+}
+
+
+// ===== Round 6 components: save / inventory / progression / quests / economy =====
+
+{
+  const { makeSave, autosave, memoryStore } = save;
+  // roundtrip + list + clear through an in-RAM adapter
+  const store = memoryStore();
+  const s = makeSave({ store, version: 1 });
+  check('save load fallback', s.load('a', { hp: 5 }).hp === 5);
+  s.save('a', { hp: 10, name: 'x' });
+  check('save roundtrip', s.load('a').hp === 10 && s.load('a').name === 'x');
+  check('save has', s.has('a') === true);
+  s.save('b', { hp: 1 });
+  check('save list', s.list().length === 2 && s.list().includes('b'));
+  s.clear('a');
+  check('save clear', s.has('a') === false && s.list().length === 1);
+  // serialized, not referenced
+  const src = { arr: [1, 2] }; s.save('c', src); src.arr.push(3);
+  check('save deep copy', s.load('c').arr.length === 2);
+  // version migration v1 -> v2
+  const store2 = memoryStore();
+  makeSave({ store: store2, version: 1 }).save('slot', { gold: 100 });
+  const v2 = makeSave({ store: store2, version: 2, migrate: (old, from) => (from < 2 ? { coins: old.gold } : old) });
+  check('save migrate', v2.load('slot').coins === 100);
+  check('save meta stale', v2.meta('slot').stale === true);
+  // corrupt json -> fallback
+  store2.set('save:bad', '{nope');
+  check('save corrupt fallback', v2.load('bad', 'FB') === 'FB');
+  // autosave on interval
+  let st = { tick: 0 };
+  const as = makeSave({ store: memoryStore(), version: 1 });
+  const step = autosave(() => ({ ...st }), { save: as, slot: 'auto', everyMs: 1000 });
+  check('autosave waits', step(0.5) === false && as.has('auto') === false);
+  st.tick = 1;
+  check('autosave fires', step(0.6) === true && as.load('auto').tick === 1);
+  st.tick = 2; step.flush();
+  check('autosave flush', as.load('auto').tick === 2);
+}
+
+// ---- inventory (slots + stacking, equipment) ----
+{ const bag = inventory.makeInventory({ slots: 3, stackSize: 10 });
+  check('inv: add fits -> 0 leftover', bag.add('potion', 5) === 0 && bag.count('potion') === 5);
+  check('inv: add past stack -> new slot', bag.add('potion', 8) === 0 && bag.count('potion') === 13 && bag.slotsUsed === 2);
+  check('inv: first slot capped', bag.items()[0].qty === 10 && bag.items()[1].qty === 3); }
+{ const bag = inventory.makeInventory({ slots: 2, stackSize: 10 });
+  check('inv: overflow leftover', bag.add('ore', 25) === 5 && bag.count('ore') === 20 && bag.free === 0); }
+{ const bag = inventory.makeInventory({ slots: 5, stackSize: 99, catalog: { sword: { stack: 1 } } });
+  bag.add('sword', 3);
+  check('inv: catalog per-item stack', bag.slotsUsed === 3 && bag.count('sword') === 3); }
+{ const bag = inventory.makeInventory({ slots: 3, stackSize: 10 });
+  bag.add('gem', 15);
+  check('inv: remove returns removed', bag.remove('gem', 12) === 12 && bag.count('gem') === 3);
+  check('inv: remove clamps', bag.remove('gem', 99) === 3 && !bag.has('gem')); }
+{ const bag = inventory.makeInventory({ slots: 4, stackSize: 10 });
+  bag.add('a', 6); bag.add('b', 4);
+  check('inv: move into empty', bag.move(0, 3) && bag.items()[3].id === 'a' && bag.items()[0] === null);
+  check('inv: move swaps different', bag.move(1, 3) && bag.items()[1].id === 'a' && bag.items()[3].id === 'b');
+  const b4 = inventory.makeInventory({ slots: 2, stackSize: 10 });
+  b4.add('y', 10); b4.add('y', 5);
+  check('inv: partial merge leaves overflow', b4.move(0, 1) && b4.items()[1].qty === 10 && b4.items()[0].qty === 5); }
+{ const gear = inventory.makeEquipment({ slots: ['weapon', 'armor', 'trinket'] });
+  check('equip: empty slot returns null', gear.equip({ id: 'sword', slot: 'weapon', stats: { atk: 5 } }) === null);
+  gear.equip({ id: 'mail', slot: 'armor', stats: { def: 3, atk: 1 } });
+  check('equip: stats summed', gear.stats().atk === 6 && gear.stats().def === 3);
+  const old = gear.equip({ id: 'axe', slot: 'weapon', stats: { atk: 9 } });
+  check('equip: swap returns old + resums', old.id === 'sword' && gear.stats().atk === 10);
+  check('equip: unequip drops stats', gear.unequip('armor').id === 'mail' && gear.get('armor') === null && gear.stats().def === undefined);
+  check('equip: invalid slot no-op', gear.equip({ id: 'ring', slot: 'nope' }) === null); }
+
+{
+  // --- levels: single + multi-level overflow ---
+  const L = progression.makeLevels({ curve: progression.linearCurve(100), max: 10 });
+  check('prog: start lvl1 xpToNext100', L.level === 1 && L.xpToNext === 100);
+  const r1 = L.add(100);
+  check('prog: level up to 2', L.level === 2 && r1.gained === 1 && r1.leveledUp && L.xp === 0);
+  const M = progression.makeLevels({ curve: progression.linearCurve(100), max: 10 });
+  const r2 = M.add(350); // lvl1=100 + lvl2=200 = 300 -> lvl3, 50 banked
+  check('prog: multi-level overflow', M.level === 3 && r2.gained === 2 && M.xp === 50);
+  check('prog: progress fraction', Math.abs(M.progress - 50 / 300) < 1e-9);
+
+  // --- curves ---
+  const E = progression.makeLevels({ curve: progression.expCurve(100, 1.5), max: 5 });
+  check('prog: exp lvl1 needs 100', E.needed === 100);
+  E.add(100);
+  check('prog: exp lvl2 needs 150', E.needed === 150);
+  const T = progression.makeLevels({ curve: progression.table([50, 60]), max: 3 });
+  T.add(1000);
+  check('prog: table capped at max, no overflow', T.level === 3 && T.maxed && T.xp === 0 && T.progress === 1);
+  const A = progression.makeLevels({ curve: [30, 40, 50], max: 9 });
+  A.add(30);
+  check('prog: array curve = table', A.level === 2);
+
+  // --- skill tree: gate on prereq + points ---
+  const tree = progression.makeSkillTree(
+    [{ id: 'a', cost: 1 }, { id: 'b', cost: 2, requires: ['a'] }, { id: 'c', cost: 1, requires: ['b'] }],
+    { points: 3 });
+  check('prog: gated unlock blocked', tree.unlock('b') === false && tree.available().join() === 'a');
+  check('prog: unlock a debits points', tree.unlock('a') === true && tree.points === 2);
+  check('prog: b now reachable', tree.unlock('b') === true && tree.canUnlock('c') === false);
+  tree.grant(1);
+  check('prog: c unlockable after grant', tree.unlock('c') === true && tree.spent === 4);
+  const pts = tree.points;
+  tree.respec();
+  check('prog: respec refunds + clears', tree.unlockedList().length === 0 && tree.points === pts + 4);
+
+  // --- prestige ---
+  const PL = progression.makeLevels({ curve: progression.linearCurve(10), max: 2 });
+  const P = progression.prestige({ levels: PL, reward: (t) => t * 5 });
+  check('prog: prestige not ready pre-max', P.ready() === false);
+  PL.add(10);
+  const gain = P.do();
+  check('prog: prestige banks + resets', gain === 5 && P.points === 5 && P.tier === 1 && PL.level === 1);
+}
+
+// --- quests: objective ticking, completion, reward gating -------------------
+{
+  const { makeQuestLog, makeQuest, counterObjective, flagObjective } = quests;
+
+  let completedId = null;
+  const grants = [];
+  const log = makeQuestLog({ onComplete: (q) => { completedId = q.id; }, grant: (r) => grants.push(r) });
+  const hunt = makeQuest('hunt', [
+    counterObjective('wolves', 'enemy-died', 3, { match: (d) => d && d.kind === 'wolf' }),
+    flagObjective('cave', 'zone-entered'),
+  ], { reward: { gold: 100 } });
+
+  check('quests: start returns a view', log.start(hunt).id === 'hunt');
+  check('quests: quest is active', log.active().length === 1);
+
+  log.progress('enemy-died', 1, { kind: 'rat' });          // wrong kind, match filters it out
+  check('quests: match filters event data', log.get('hunt').objectives[0].count === 0);
+  log.progress('enemy-died', 9, { kind: 'wolf' });          // clamps to need
+  check('quests: counter clamps to need', log.get('hunt').objectives[0].count === 3);
+  check('quests: not complete until all required done', log.completed('hunt') === false);
+
+  const finishedNow = log.progress('zone-entered');
+  check('quests: flag objective completes quest', log.completed('hunt') === true);
+  check('quests: progress returns completed ids', finishedNow.length === 1 && finishedNow[0] === 'hunt');
+  check('quests: onComplete fired', completedId === 'hunt');
+
+  check('quests: turnIn gated to complete', log.canTurnIn('hunt') === true);
+  const reward = log.turnIn('hunt');
+  check('quests: reward dispensed', reward && reward.gold === 100);
+  check('quests: grant adapter received reward', grants.length === 1 && grants[0].gold === 100);
+  check('quests: cannot turn in twice', log.turnIn('hunt') === null);
+
+  // requires gating + optional/hidden objectives + persistence
+  const log2 = makeQuestLog();
+  const seq = makeQuest('sequel', [flagObjective('boss', 'boss-died')], { requires: 'hunt' });
+  check('quests: requires blocks start when prereq unmet', log2.start(seq) === null);
+
+  const log3 = makeQuestLog();
+  log3.start(makeQuest('explore', [
+    flagObjective('main', 'flag-main'),
+    flagObjective('secret', 'flag-secret', { hidden: true, optional: true }),
+  ]));
+  check('quests: hidden objective hidden until revealed', log3.get('explore', false).objectives.length === 1);
+  log3.progress('flag-main');
+  check('quests: optional objective does not gate completion', log3.completed('explore') === true);
+
+  const snap = JSON.parse(JSON.stringify(log3.snapshot()));
+  const restored = makeQuestLog().restore(snap, { explore: makeQuest('explore', [flagObjective('main', 'flag-main')]) });
+  check('quests: snapshot/restore keeps completion state', restored.completed('explore') === true);
+}
+
+{
+  // --- economy: wallet / shop / crafting / pricing (self-contained fakes) ---
+  const w = economy.makeWallet({ start: 100 });
+  check('economy wallet start', w.balance === 100);
+  w.earn(50);
+  check('economy wallet earn', w.balance === 150);
+  check('economy canAfford', w.canAfford(150) && !w.canAfford(151));
+  check('economy spend ok', w.spend(150) === true && w.balance === 0);
+  check('economy spend broke no-change', w.spend(1) === false && w.balance === 0);
+
+  // injected signal-like store
+  let sv = 10; const store = { get: () => sv, set: (v) => (sv = v) };
+  const w2 = economy.makeWallet({ store });
+  w2.earn(5);
+  check('economy wallet store', sv === 15 && w2.balance === 15);
+
+  // shop over a plain object-map inventory
+  const bag = { potion: 0 };
+  const shop = economy.makeShop({ stock: [{ id: 'potion', price: 20, qty: 2 }, { id: 'gem', price: 100 }], sellMul: 0.5 });
+  check('economy shop price', shop.price('potion') === 20);
+  const rich = economy.makeWallet({ start: 45 });
+  const b1 = shop.buy('potion', rich, bag);
+  check('economy buy item', b1 && b1.id === 'potion' && b1.price === 20);
+  check('economy buy debits+stocks', rich.balance === 25 && bag.potion === 1 && shop.stockOf('potion') === 1);
+  shop.buy('potion', rich, bag);
+  check('economy buy sold out null', shop.buy('potion', rich, bag) === null && rich.balance === 5);
+  check('economy unlimited stock', shop.inStock('gem'));
+  const bal = rich.balance;
+  const s1 = shop.sell('potion', rich, bag);
+  check('economy sell credits', s1 && s1.price === 10 && rich.balance === bal + 10);
+  check('economy sell pulls+returns', bag.potion === 1 && shop.stockOf('potion') === 1);
+  check('economy sell nothing null', shop.sell('nope', rich, bag) === null);
+  shop.restock();
+  check('economy restock', shop.stockOf('potion') === 2);
+
+  // crafting
+  const bench = economy.makeCrafting([{ id: 'elixir', in: [{ id: 'herb', qty: 2 }, { id: 'water', qty: 1 }] }]);
+  const cbag = { herb: 3, water: 1 };
+  check('economy canCraft', bench.canCraft('elixir', cbag));
+  const made = bench.craft('elixir', cbag);
+  check('economy craft yields', made && made.id === 'elixir' && cbag.elixir === 1);
+  check('economy craft consumes', cbag.herb === 1 && (cbag.water | 0) === 0);
+  check('economy craft short null', !bench.canCraft('elixir', cbag) && bench.craft('elixir', cbag) === null && cbag.herb === 1);
+
+  // dynamic pricing
+  check('economy priceCurve neutral', economy.priceCurve(100, { demand: 0 }) === 100);
+  check('economy priceCurve shortage', economy.priceCurve(100, { demand: 1, elasticity: 0.5 }) === 150);
+  check('economy priceCurve glut', economy.priceCurve(100, { demand: -1, elasticity: 0.5 }) === 50);
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
