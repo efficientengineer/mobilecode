@@ -159,7 +159,12 @@ def current_user() -> str:
 
 
 def create_repo(name: str, private: bool = True) -> str:
-    """Create a repo on GitHub and set it as this workspace's origin."""
+    """Create a repo on GitHub and set it as this workspace's origin.
+
+    Idempotent: if a repo with this name already exists on the account (for
+    example because the button was tapped twice), adopt the existing repo as
+    this workspace's origin instead of reporting an error.
+    """
     try:
         repo = _api("POST", "/user/repos",
                     {"name": name, "private": bool(private), "auto_init": False})
@@ -170,6 +175,19 @@ def create_repo(name: str, private: bool = True) -> str:
         _set_origin(root, full)
         return f"Created {full}"
     except _GitHubApiError as e:
+        if e.code == 422 and "already exists" in (e.detail or ""):
+            try:
+                login = current_user()
+                repo = _api("GET", f"/repos/{login}/{name}")
+                full = repo["full_name"]
+                root = _workspace()
+                if not (root / ".git").exists():
+                    porcelain.init(str(root))
+                _set_origin(root, full)
+                return f"Using existing {full}"
+            except Exception:
+                pass
+            return f"Repo '{name}' already exists on your account."
         if e.code in (403, 401):
             return (
                 "Create repo failed: your GitHub token isn't allowed to "
