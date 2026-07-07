@@ -50,6 +50,11 @@ import { inventory } from './engine/control/inventory.js';
 import { progression } from './engine/control/progression.js';
 import { quests } from './engine/control/quests.js';
 import { economy } from './engine/control/economy.js';
+import { gestures } from './engine/control/gestures.js';
+import { hudkit } from './engine/control/hudkit.js';
+import { menus } from './engine/control/menus.js';
+import { touchlayout } from './engine/control/touchlayout.js';
+import { tutorial } from './engine/control/tutorial.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -1578,6 +1583,252 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   check('economy priceCurve neutral', economy.priceCurve(100, { demand: 0 }) === 100);
   check('economy priceCurve shortage', economy.priceCurve(100, { demand: 1, elasticity: 0.5 }) === 150);
   check('economy priceCurve glut', economy.priceCurve(100, { demand: -1, elasticity: 0.5 }) === 50);
+}
+
+
+// ===== Round 7 components: gestures / hudkit / menus / touchlayout / tutorial =====
+
+// gestures — touch gesture recognition (headless, deterministic)
+{
+  const only = (evs, type) => evs.filter(e => e.type === type);
+
+  // tap
+  let g = gestures.makeRecognizer();
+  g.down(1, 100, 100, 0); g.up(1, 80);
+  let e = g.poll();
+  check('gestures tap', only(e, 'tap').length === 1 && e[0].x === 100 && e[0].y === 100);
+
+  // doubleTap inside window, then two slow taps outside it
+  g = gestures.makeRecognizer();
+  g.down(1, 50, 50, 0); g.up(1, 40);
+  g.down(1, 52, 51, 100); g.up(1, 140);
+  e = g.poll();
+  check('gestures doubleTap', e[0].type === 'tap' && only(e, 'doubleTap').length === 1 && only(e, 'tap').length === 1);
+  g = gestures.makeRecognizer();
+  g.down(1, 50, 50, 0); g.up(1, 40);
+  g.down(1, 50, 50, 500); g.up(1, 540);
+  check('gestures two slow taps', only(g.poll(), 'tap').length === 2);
+
+  // longPress fires only once the clock (poll t) passes holdMs, and suppresses the tap
+  g = gestures.makeRecognizer();
+  g.down(1, 200, 200, 0);
+  check('gestures no early longpress', g.poll(300).length === 0);
+  e = g.poll(450);
+  check('gestures longPress', only(e, 'longPress').length === 1 && e[0].x === 200);
+  g.up(1, 500);
+  check('gestures longpress eats tap', only(g.poll(), 'tap').length === 0);
+
+  // live drag emits cumulative dx/dy per move
+  g = gestures.makeRecognizer();
+  g.down(1, 0, 0, 0); g.move(1, 5, 3, 16); g.move(1, 20, 10, 32);
+  const d = only(g.poll(), 'drag');
+  check('gestures drag live', d.length === 2 && d[1].dx === 20 && d[1].dy === 10);
+
+  // swipe (moderate) vs flick (fast)
+  g = gestures.makeRecognizer();
+  g.down(1, 0, 100, 0); g.move(1, 60, 100, 100); g.up(1, 100);
+  let s = only(g.poll(), 'swipe');
+  check('gestures swipe right', s.length === 1 && s[0].dir === 'right');
+  g = gestures.makeRecognizer();
+  g.down(1, 100, 100, 0); g.move(1, 100, 200, 40); g.up(1, 40);
+  const f = only(g.poll(), 'flick');
+  check('gestures flick down', f.length === 1 && f[0].dir === 'down');
+  g = gestures.makeRecognizer();
+  g.down(1, 0, 0, 0); g.move(1, 30, 0, 900); g.up(1, 1000);
+  check('gestures slow drag no swipe', only(g.poll(), 'swipe').length === 0 && only(g.poll(), 'flick').length === 0);
+
+  // two-finger pinch scale + rotate angle, and no taps from multitouch
+  g = gestures.makeRecognizer();
+  g.down(1, 0, 0, 0); g.down(2, 10, 0, 0); g.move(2, 20, 0, 16);
+  e = g.poll();
+  const p = only(e, 'pinch'), r = only(e, 'rotate');
+  check('gestures pinch scale', p.length === 1 && Math.abs(p[0].scale - 2) < 1e-9 && p[0].center[0] === 10);
+  check('gestures rotate ~0', r.length === 1 && Math.abs(r[0].angle) < 1e-9);
+  g = gestures.makeRecognizer();
+  g.down(1, 0, 0, 0); g.down(2, 10, 0, 0); g.move(2, 0, 10, 16);
+  check('gestures rotate quarter turn', Math.abs(only(g.poll(), 'rotate')[0].angle - Math.PI / 2) < 1e-9);
+  g = gestures.makeRecognizer();
+  g.down(1, 0, 0, 0); g.down(2, 100, 0, 0); g.up(1, 50); g.up(2, 60);
+  check('gestures multitouch no tap', only(g.poll(), 'tap').length === 0);
+
+  // active count + reset
+  g = gestures.makeRecognizer();
+  g.down(1, 0, 0, 0); g.down(2, 5, 5, 0);
+  check('gestures active', g.active() === 2);
+  g.reset();
+  check('gestures reset', g.active() === 0 && g.poll().length === 0);
+}
+
+{
+  // hudkit — HUD widget state/geometry
+  const near = (a, b, e = 1e-6) => Math.abs(a - b) < e;
+
+  // bar eases display toward the true value (juicy drain)
+  const hp = hudkit.bar({ max: 100, smooth: 6 });
+  hp.set(40);
+  check('hudkit bar value snaps', hp.value === 40);
+  check('hudkit bar display lags', hp.display === 100 && hp.draining);
+  for (let i = 0; i < 300; i++) hp.step(0.05);
+  check('hudkit bar settles at target', near(hp.display, 40, 1e-3));
+  check('hudkit bar pct 0..1', near(hp.pct, 0.4, 1e-3));
+
+  // radialCooldown: spend + refill ring
+  const cd = hudkit.radialCooldown({ duration: 2 });
+  check('hudkit cd ready', cd.ready && near(cd.fraction, 1));
+  check('hudkit cd fires', cd.trigger() === true && !cd.ready);
+  check('hudkit cd blocks refire', cd.trigger() === false);
+  cd.step(1); check('hudkit cd half full', near(cd.fraction, 0.5));
+  cd.step(1.1); check('hudkit cd recharged', cd.ready);
+
+  // toastQueue caps + ages out
+  const tq = hudkit.toastQueue({ max: 3, life: 2 });
+  tq.push('a'); tq.push('b'); tq.push('c'); tq.push('d');
+  check('hudkit toast capped', tq.count === 3 && tq.items()[0].msg === 'b');
+  tq.step(2.1);
+  check('hudkit toast expired', tq.count === 0);
+
+  // comboCounter resets after window
+  const cc = hudkit.comboCounter({ window: 2 });
+  cc.hit(); cc.hit();
+  check('hudkit combo counts', cc.count === 2);
+  cc.step(1); check('hudkit combo holds', cc.count === 2 && !cc.broken);
+  cc.step(1.1); check('hudkit combo breaks', cc.count === 0 && cc.broken && cc.best === 2);
+
+  // minimap projects + clamps offscreen blips to the edge
+  const mm = hudkit.minimap({ worldSize: 100, mapSize: 200 });
+  const ctr = mm.project([0, 0, 0]);
+  check('hudkit minimap centers', near(ctr[0], 100) && near(ctr[1], 100));
+  const cl = mm.clampToEdge(mm.project([500, 0, 0]));
+  check('hudkit minimap clamps to edge', near(cl[0], 200) && cl[1] >= 0 && cl[1] <= 200);
+  check('hudkit minimap blip flags off', mm.blip([500, 0, 0]).off === true);
+
+  // timer prints mm:ss and latches done
+  const t = hudkit.timer({ from: 90, dir: 'down' });
+  check('hudkit timer label', t.label === '01:30');
+  t.step(200);
+  check('hudkit timer done at 0', t.seconds === 0 && t.done && t.label === '00:00');
+}
+
+{ const m = menus.makeMenu([
+    { id: 'play', label: 'Play', type: 'button' },
+    { id: 'sound', label: 'Sound', type: 'toggle', value: true },
+    { id: 'vol', label: 'Volume', type: 'slider', value: 0.5, min: 0, max: 1, step: 0.1 },
+    { id: 'diff', label: 'Difficulty', type: 'choice', options: ['easy','normal','hard'], value: 'normal' },
+  ]);
+  check('menus: cursor starts 0 + button activate returns id', m.cursor === 0 && m.activate() === 'play');
+  m.move(-1); check('menus: move up wraps to last', m.cursor === 3);
+  m.move(1);  check('menus: move down wraps to 0', m.cursor === 0);
+  m.move(1);  m.adjust(1);
+  check('menus: toggle flips', m.value('sound') === false);
+  check('menus: activate toggle flips back + returns id', m.activate() === 'sound' && m.value('sound') === true);
+  m.move(1);  // slider
+  m.adjust(1); check('menus: slider steps', Math.abs(m.value() - 0.6) < 1e-9);
+  for (let i = 0; i < 10; i++) m.adjust(1);
+  check('menus: slider clamps to max', m.value() === 1);
+  for (let i = 0; i < 30; i++) m.adjust(-1);
+  check('menus: slider clamps to min + no confirm', m.value() === 0 && m.activate() === null);
+  m.move(1);  // choice
+  check('menus: choice resolves label', m.value() === 'normal');
+  m.adjust(1); m.adjust(1);
+  check('menus: choice cycles + wraps', m.value() === 'easy');
+  const vals = m.values();
+  check('menus: values snapshot omits buttons', !('play' in vals) && vals.diff === 'easy' && vals.sound === true);
+  const m2 = menus.makeMenu([
+    { id: 'a', type: 'button' }, { id: 'b', type: 'button', disabled: true }, { id: 'c', type: 'button' },
+  ]);
+  m2.move(1); check('menus: move skips disabled row', m2.cursor === 2);
+  m2.setDisabled('c', true); check('menus: disabling focused moves off it', m2.cursor === 0);
+  const s = menus.makeScreens('title');
+  s.push('settings'); s.push('audio');
+  check('menus: stack push deepens', s.depth === 3 && s.top() === 'audio');
+  check('menus: pop returns revealed screen', s.pop() === 'settings' && s.depth === 2);
+  s.replace('video'); check('menus: replace swaps in place', s.top() === 'video' && s.depth === 2);
+  s.pop(); check('menus: pop refuses to empty root', s.pop() === 'title' && s.depth === 1);
+  s.reset('menu'); check('menus: reset clears stack', s.depth === 1 && s.top() === 'menu'); }
+
+{
+  const { layout, thumbZone, inZone, place, floatingStick, safeRect } = touchlayout;
+  const inSafe = (p, s) => p.x >= s.left && p.x <= s.right && p.y >= s.top && p.y <= s.bottom;
+  for (const [w, h, tag] of [[390, 844, 'portrait'], [844, 390, 'landscape']]) {
+    for (const hand of ['right', 'left']) {
+      const insets = { top: 47, bottom: 34, left: 0, right: 0 };
+      const L = layout({ w, h, insets, hand });
+      const s = L.safe, j = L.joystick;
+      check(tag + ' ' + hand + ' stick in safe', inSafe({ x: j.cx - j.radius, y: j.cy - j.radius }, s) && inSafe({ x: j.cx + j.radius, y: j.cy + j.radius }, s));
+      check(tag + ' ' + hand + ' stick in thumb zone', inZone(j, L.zone, j.radius));
+      check(tag + ' ' + hand + ' stick on outer side', hand === 'right' ? j.cx > w / 2 : j.cx < w / 2);
+      for (const b of L.buttons) {
+        check(tag + ' ' + hand + ' btn ' + b.id + ' in safe', inSafe({ x: b.cx, y: b.cy }, s));
+        check(tag + ' ' + hand + ' btn ' + b.id + ' in zone', inZone(b, L.zone, b.r));
+      }
+      const cx = L.buttons.reduce((a, b) => a + b.cx, 0) / L.buttons.length;
+      check(tag + ' ' + hand + ' actions bottom-inner of stick', hand === 'right' ? cx < j.cx : cx > j.cx);
+      check(tag + ' topCenter dodges notch', L.anchor('topCenter').y >= insets.top);
+      const bb = L.anchor('bottomBar');
+      check(tag + ' bottomBar clears home bar', bb.y + bb.h <= h - insets.bottom);
+      check(tag + ' unknown anchor falls back to center', L.anchor('nope') === L.anchor('center'));
+    }
+  }
+  const g = place(4, { grid: true, cols: 2, center: [100, 100], r: 20, gap: 50 });
+  check('place grid count + centering', g.length === 4 && Math.abs((g.reduce((a, b) => a + b.cx, 0) / 4) - 100) < 1e-9);
+  const f = place(3, { center: [0, 0], spreadDeg: 90, radius: 100 });
+  check('place fan symmetric', f.length === 3 && Math.abs(f[0].cx + f[2].cx) < 1e-9);
+  const z = thumbZone(390, 844, 'right', { insets: { bottom: 34 } });
+  check('place single on arc stays in zone', inZone(place(1, { zone: z, r: 30 })[0], z, 30));
+  check('inZone rejects the far corner', !inZone({ x: 5, y: 5 }, z));
+  const sr = safeRect(390, 844, { bottom: 34, top: 47 });
+  const fs = floatingStick({ x: 5, y: 840 }, { w: 390, h: 844, radius: 56, insets: { bottom: 34, top: 47 } });
+  check('floatingStick clamps into safe area', fs.cx - fs.radius >= sr.left - 1e-9 && fs.cy + fs.radius <= sr.bottom + 1e-9);
+  const fs2 = floatingStick({ x: 200, y: 400 }, { w: 390, h: 844, radius: 56 });
+  check('floatingStick honors a free touch', fs2.cx === 200 && fs2.cy === 400);
+}
+
+{
+  const { makeTutorial } = tutorial;
+  // event-driven progression + input gating
+  const t = makeTutorial([
+    { id: 'move', text: 'Drag to move', target: 'stick', advanceOn: 'player-moved', gate: ['move'] },
+    { id: 'shoot', text: 'Tap to fire', advanceOn: 'player-fired', gate: true },
+    { id: 'clear', until: (s) => s.enemies === 0 },
+  ]);
+  check('tutorial: starts at first step', t.current().id === 'move' && t.current().first);
+  check('tutorial: gate whitelist allows taught input', t.blocks('move') === false);
+  check('tutorial: gate whitelist blocks others', t.blocks('fire') === true && t.gating() === true);
+  check('tutorial: wrong event is a no-op', t.notify('player-fired') === false && t.current().id === 'move');
+  check('tutorial: right event advances', t.notify('player-moved') === true && t.current().id === 'shoot');
+  check('tutorial: progress 1/3', Math.abs(t.progress - 1 / 3) < 1e-9);
+  check('tutorial: gate true blocks all', t.blocks('anything') === true);
+  check('tutorial: advance to until step', t.notify('player-fired') && t.current().id === 'clear');
+  check('tutorial: until false holds', t.step(0.1, { enemies: 2 }).id === 'clear');
+  check('tutorial: until true finishes', t.step(0.1, { enemies: 0 }) === null && t.done());
+  check('tutorial: current null when done', t.current() === null && t.progress === 1);
+
+  // persistence via injected flag (signal-like)
+  let stored = false;
+  const flag = { get: () => stored, set: (v) => { stored = v; } };
+  const t2 = makeTutorial([{ id: 'a', advanceOn: 'go' }], { flag });
+  t2.notify('go');
+  check('tutorial: flag set once on finish', stored === true && t2.done());
+  const t3 = makeTutorial([{ id: 'a', advanceOn: 'go' }], { flag });
+  check('tutorial: already-done from flag', t3.done() === true && t3.current() === null);
+
+  // optional step drops itself when its condition already holds
+  const t4 = makeTutorial([
+    { id: 'intro', advanceOn: 'ok' },
+    { id: 'dashTip', optional: true, skipIf: (s) => s.dashed, advanceOn: 'dash-evt' },
+    { id: 'end' },
+  ]);
+  t4.notify('ok');
+  t4.step(0.016, { dashed: true });
+  check('tutorial: optional step skipped when satisfied', t4.current().id === 'end');
+
+  // skip / finish / restart / empty
+  const t5 = makeTutorial([{ id: 'a', advanceOn: 'x' }, { id: 'b' }]);
+  check('tutorial: skip advances', t5.skip() && t5.current().id === 'b');
+  check('tutorial: finish ends', t5.finish() && t5.done());
+  t5.restart();
+  check('tutorial: restart returns to start', !t5.done() && t5.current().id === 'a');
+  check('tutorial: empty tutorial is done', makeTutorial([]).done() === true);
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
