@@ -1208,7 +1208,15 @@ const actions = {
        <datalist id="ml"></datalist>
        <label>Voice: silence before it stops (ms)</label><input id="ssm" type="text" inputmode="numeric" value="${s.speechSilenceMs||"7000"}" />
        <label class="checkrow"><input id="scont" type="checkbox" ${s.speechContinuous!=="0"?"checked":""} /> Voice: keep listening through pauses</label>
-       <label>Agent branch (for OTA updates)</label><input id="br" type="text" value="${s.branch||""}" />`,
+       <label>Agent branch (for OTA updates)</label><input id="br" type="text" value="${s.branch||""}" />
+       <div class="group-title">Preferences</div>
+       <div class="grid">
+         <button data-act="autocommit">Autocommit: —</button>
+         <button data-act="speak">Speak replies: —</button>
+         <button data-act="caveman">Caveman: —</button>
+         <button data-act="effort">Effort: —</button>
+         <button data-act="frugal">Frugal: —</button>
+       </div>`,
       async () => {
         await call("settings.save", {
           anthropicKey: $("#ak").value.trim(), deepseekKey: $("#dk").value.trim(),
@@ -1224,6 +1232,15 @@ const actions = {
       const dl = $("#ml");
       if (dl) dl.innerHTML = (agg.models || []).map((m) => `<option value="${m}">`).join("");
     } catch (e) {}
+    // Preference toggles: wire clicks (they cycle state) and show current values.
+    $("#modalBody").querySelectorAll("[data-act]").forEach((b) => {
+      b.onclick = () => (actions[b.dataset.act] || (() => {}))();
+    });
+    try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
+    updateSpeakLabel(autoSpeakOn());
+    try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
+    try { updateEffortLabel((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
+    try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
   },
 };
 
@@ -1920,12 +1937,24 @@ const GITHUB_ITEMS = [
   { label: "Pull", act: "pull" },
   { label: "Push", act: "push" },
   { label: "Merge → open PR", act: "createPR" },
+  { header: "More" },
+  { label: "Diff", act: "diff" },
+  { label: "Start branch", act: "startBranch" },
+  { label: "PR status", act: "prStatus" },
+  { label: "Watch PR", act: "watchPr" },
+  { label: "Build in cloud", act: "cloudBuild" },
+  { label: "Build status", act: "buildStatus" },
+  { label: "Fix CI build", act: "fixBuild" },
+  { label: "Revert last commit", act: "revertLast" },
+  { label: "Force push", act: "forcePush" },
 ];
 function openGithubMenu() {
   const menu = $("#githubMenu");
   if (!menu.classList.contains("hidden")) { menu.classList.add("hidden"); return; }
   closeFabMenus();
-  menu.innerHTML = GITHUB_ITEMS.map((a) => `<div class="fab-item" data-ghact="${a.act}">${a.label}</div>`).join("");
+  menu.innerHTML = GITHUB_ITEMS.map((a) => a.header
+    ? `<div class="fab-head">${escapeHtml(a.header)}</div>`
+    : `<div class="fab-item" data-ghact="${a.act}">${a.label}</div>`).join("");
   positionFabMenu(menu, $("#githubFab"), "left");
   clampFabMenu(menu);
   menu.classList.remove("hidden");

@@ -63,6 +63,8 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
   overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .fab-item:active { background: var(--panel2); }
 .fab-item.muted { color: var(--muted); white-space: normal; }
+.fab-head { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--muted); padding: 8px 12px 4px; margin-top: 4px; border-top: 1px solid var(--border); }
 
 /* Workspace: the file explorer + the main (chat/editor) column. Reorients by
    device orientation — explorer on top in portrait, on the left in landscape.
