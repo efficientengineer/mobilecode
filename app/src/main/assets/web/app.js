@@ -73,6 +73,7 @@ function receiveShared(txt) {
 
 let currentMode = "auto";
 let _loadingHistory = false;
+let _editorSelection = { rel: null, text: "" };
 
 // --- Agent chat drawer (slides in from the right; toggled by the 💬 button) --
 function chatIsOpen() { const d = $("#chatDrawer"); return !!(d && d.classList.contains("open")); }
@@ -1699,8 +1700,10 @@ function renderEditor() {
   area.value = tab.content;
 
   function renderHl() { hl.innerHTML = highlightCode(area.value, hlLang); }
-  // Show the caret's line/column in the tab bar.
+  // Show the caret's line/column in the tab bar, and remember any selection
+  // (so the chat composer can pull it into the message even after focus moves).
   function updatePos() {
+    _editorSelection = { rel: tab.rel, text: area.value.slice(area.selectionStart, area.selectionEnd) };
     const el = $("#cursorPos"); if (!el) return;
     const upto = area.value.slice(0, area.selectionStart);
     const line = upto.split("\n").length;
@@ -1927,15 +1930,17 @@ async function askEphemeral(q) {
 
 // --- Floating controls (menu / model picker / actions catch-all) ---------
 function closeFabMenus() {
-  const mm = $("#modelMenu"), am = $("#actionsMenu"), cm = $("#chatActionsMenu"), gm = $("#githubMenu");
+  const mm = $("#modelMenu"), am = $("#actionsMenu"), cm = $("#chatActionsMenu"), gm = $("#githubMenu"), xm = $("#ctxMenu");
   if (mm) mm.classList.add("hidden");
   if (am) am.classList.add("hidden");
   if (cm) cm.classList.add("hidden");
   if (gm) gm.classList.add("hidden");
+  if (xm) xm.classList.add("hidden");
 }
-function positionFabMenu(menu, fab, align) {
+function positionFabMenu(menu, fab, align, vertical) {
   const r = fab.getBoundingClientRect();
-  menu.style.top = (r.bottom + 6) + "px";
+  if (vertical === "up") { menu.style.bottom = (window.innerHeight - r.top + 6) + "px"; menu.style.top = "auto"; }
+  else { menu.style.top = (r.bottom + 6) + "px"; menu.style.bottom = "auto"; }
   if (align === "right") { menu.style.right = (window.innerWidth - r.right) + "px"; menu.style.left = "auto"; }
   else { menu.style.left = r.left + "px"; menu.style.right = "auto"; }
 }
@@ -2031,6 +2036,37 @@ function openChatActionsMenu() {
     el.onclick = () => { menu.classList.add("hidden"); (actions[el.getAttribute("data-chatact")] || (() => {}))(); };
   });
 }
+// Composer context button: quick-attach editor files or the selection.
+async function attachCtxFiles(rels) {
+  const uniq = [...new Set(rels)].filter(Boolean);
+  for (const r of uniq) { try { await call("orch", { fn: "add_context_file", arg: r }); } catch (e) {} }
+  refreshAttachBar(); refreshStats();
+  bubble(`Attached ${uniq.length} file${uniq.length !== 1 ? "s" : ""} to context.`, "sys");
+}
+function insertSelectionIntoMessage() {
+  const box = $("#input"); if (!box) return;
+  const sel = _editorSelection;
+  const ref = sel.rel ? `// from ${sel.rel}\n` : "";
+  box.value = (box.value ? box.value + "\n\n" : "") + "```\n" + ref + sel.text + "\n```\n";
+  box.dispatchEvent(new Event("input"));
+  box.focus();
+}
+function openCtxMenu() {
+  const menu = $("#ctxMenu");
+  if (!menu.classList.contains("hidden")) { menu.classList.add("hidden"); return; }
+  closeFabMenus();
+  const items = [];
+  if (activeTab) items.push({ label: "Attach current file", fn: () => attachCtxFiles([activeTab]) });
+  if (openTabs.length > 1) items.push({ label: `Attach all open files (${openTabs.length})`, fn: () => attachCtxFiles(openTabs.map((t) => t.rel)) });
+  if (_editorSelection.text && _editorSelection.text.trim()) items.push({ label: "Insert selection into message", fn: insertSelectionIntoMessage });
+  items.push({ label: "Browse & pin files…", fn: () => actions.contextFiles() });
+  menu.innerHTML = items.map((it, i) => `<div class="fab-item" data-ci="${i}">${escapeHtml(it.label)}</div>`).join("");
+  positionFabMenu(menu, $("#ctxBtn"), "left", "up");
+  clampFabMenu(menu);
+  menu.classList.remove("hidden");
+  menu.querySelectorAll("[data-ci]").forEach((el, idx) => { el.onclick = () => { menu.classList.add("hidden"); items[idx].fn(); }; });
+}
+
 // GitHub actions, opened from the top-bar GitHub button.
 const GITHUB_ITEMS = [
   { label: "New repository", act: "newRepo" },
@@ -2142,9 +2178,11 @@ $("#playFab").onclick = async () => {
 $("#modelLead").onclick = (e) => { e.stopPropagation(); openModelMenu("orchestrator", e.currentTarget); };
 $("#modelImpl").onclick = (e) => { e.stopPropagation(); openModelMenu("implementer", e.currentTarget); };
 $("#chatActionsBtn").onclick = (e) => { e.stopPropagation(); openChatActionsMenu(); };
+$("#ctxBtn").onclick = (e) => { e.stopPropagation(); openCtxMenu(); };
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".fab") && !e.target.closest(".fabmenu") &&
-      !e.target.closest("#chatActionsBtn") && !e.target.closest("#modelLead") && !e.target.closest("#modelImpl")) closeFabMenus();
+      !e.target.closest("#chatActionsBtn") && !e.target.closest("#modelLead") &&
+      !e.target.closest("#modelImpl") && !e.target.closest("#ctxBtn")) closeFabMenus();
 });
 $("#filesBtn").onclick = openTree;
 $("#treeClose").onclick = closeTree;
