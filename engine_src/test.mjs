@@ -40,6 +40,11 @@ import { effects } from './engine/control/effects.js';
 import { particles } from './engine/control/particles.js';
 import { transitions } from './engine/control/transitions.js';
 import { palettes } from './engine/control/palettes.js';
+import { fsm } from './engine/control/fsm.js';
+import { senses } from './engine/control/senses.js';
+import { squad } from './engine/control/squad.js';
+import { dialogue } from './engine/control/dialogue.js';
+import { utility } from './engine/control/utility.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -1113,6 +1118,246 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   check('palettes fromHex roundtrip', palettes.toHex(palettes.fromHex('#ff8000'))==='#ff8000');
   check('palettes fromHex short+nohash', palettes.fromHex('f00').every((v,i)=>near(v,[1,0,0][i])) && palettes.fromHex('00ff00').every((v,i)=>near(v,[0,1,0][i])));
   check('palettes fromHex bad -> black', palettes.fromHex('xyz123zz').every(v=>v===0));
+}
+
+
+// ===== Round 5 components: fsm / senses / squad / dialogue / utility =====
+
+{
+  // fsm: layered idle->alert->attack->flee->search state machine over a fake entity.
+  const brain = fsm.makeFsm({
+    initial: 'idle',
+    states: {
+      idle:   { enter: (e) => { e._entered = true; },
+                update: fsm.when((e, dt, ctx) => ctx.dist < 10, 'alert') },
+      alert:  { update: fsm.after(0.5, 'attack') },
+      attack: { update: fsm.any([
+                  (e) => { e.acted = (e.acted || 0) + 1; return null; },   // action leg
+                  fsm.when((e) => e.hp < 30, 'flee'),
+                  fsm.when((e, dt, ctx) => ctx.dist > 15, 'search'),
+                ]) },
+      flee:   { enter: (e) => { e.fleeing = true; },
+                exit:  (e) => { e.fleeing = false; },
+                update: fsm.when((e) => e.hp > 60, 'idle') },
+      search: { update: fsm.after(1, 'idle') },
+    },
+  });
+  const e = { hp: 100 };
+
+  brain(e, 0.1, { dist: 5 });
+  check('fsm lazy initial enter fired', e._entered === true);
+  check('fsm idle->alert on proximity', fsm.is(e, 'alert'));
+  check('fsm timer resets on enter', fsm.elapsed(e) === 0);
+
+  brain(e, 0.3, { dist: 5 });
+  check('fsm alert holds before timer', fsm.is(e, 'alert'));
+  brain(e, 0.3, { dist: 5 });                 // 0.6s total in alert
+  check('fsm alert->attack after 0.5s', fsm.is(e, 'attack'));
+
+  brain(e, 0.1, { dist: 5 });
+  brain(e, 0.1, { dist: 5 });
+  check('fsm action leg runs each step', e.acted === 2);
+  check('fsm stays in attack while healthy+near', fsm.is(e, 'attack'));
+
+  brain(e, 0.1, { dist: 20 });
+  check('fsm attack->search when target flees', fsm.is(e, 'search'));
+  brain(e, 0.6, { dist: 20 });
+  check('fsm search holds before timer', fsm.is(e, 'search'));
+  brain(e, 0.6, { dist: 20 });
+  check('fsm search->idle after 1s', fsm.is(e, 'idle'));
+
+  brain(e, 0.1, { dist: 5 });                 // idle->alert
+  brain(e, 0.6, { dist: 5 });                 // alert->attack
+  e.hp = 10;
+  brain(e, 0.1, { dist: 5 });                 // attack->flee (guard fires after action leg)
+  check('fsm attack->flee on low hp', fsm.is(e, 'flee'));
+  check('fsm flee enter set flag', e.fleeing === true);
+  e.hp = 80;
+  brain(e, 0.1, { dist: 5 });                 // flee->idle
+  check('fsm flee->idle on heal', fsm.is(e, 'idle'));
+  check('fsm flee exit cleared flag', e.fleeing === false);
+
+  // one transition per step: huge dt still only steps idle->alert, not through to attack.
+  fsm.reset(e);
+  check('fsm reset clears state', e._fsm.state === null);
+  brain(e, 5.0, { dist: 5 });
+  check('fsm one transition per step', fsm.is(e, 'alert'));
+
+  // determinism: identical drive over two entities yields identical state.
+  const mk = () => fsm.makeFsm({ initial: 'a', states: { a: fsm.after(1, 'b'), b: fsm.after(1, 'c'), c: {} } });
+  const run = (x) => { const b = mk(); b(x, 0.5, {}); b(x, 0.6, {}); b(x, 1.0, {}); return x._fsm.state; };
+  const x1 = {}, x2 = {};
+  check('fsm deterministic', run(x1) === 'c' && run(x2) === 'c');
+
+  // bare-function state shorthand.
+  const b2 = fsm.makeFsm({ initial: 's0', states: { s0: fsm.when(() => true, 's1'), s1: {} } });
+  const y = {};
+  b2(y, 0, {});
+  check('fsm bare-fn state shorthand', y._fsm.state === 's1');
+}
+
+{
+  const eye = senses.vision({ fov: 90, range: 10 });
+  check('senses: sees straight ahead', eye.canSee([0,0,0], 0, [0,0,5]));
+  check('senses: out of range', !eye.canSee([0,0,0], 0, [0,0,20]));
+  check('senses: behind not seen', !eye.canSee([0,0,0], 0, [0,0,-5]));
+  check('senses: off-side outside 90 cone', !eye.canSee([0,0,0], 0, [5,0,0]));
+  check('senses: rotated facing +x', senses.vision({fov:90,range:10}).canSee([0,0,0], Math.PI/2, [5,0,0]));
+  check('senses: 360 sees behind', senses.vision({fov:360,range:10}).canSee([0,0,0], 0, [0,0,-5]));
+  const wall = (x) => x > 2 && x < 3;
+  check('senses: LOS blocked by wall', !eye.canSee([0,0,0], Math.PI/2, [5,0,0], wall));
+  check('senses: lineOfSight clear no sampler', senses.lineOfSight([0,0,0],[5,0,5]));
+  check('senses: lineOfSight blocked', !senses.lineOfSight([0,0,0],[5,0,0], wall, 0.5));
+  const ear = senses.hearing({ radius: 8 });
+  check('senses: hears close', ear.heard([0,0,0],[0,0,5]));
+  check('senses: too far to hear', !ear.heard([0,0,0],[0,0,20]));
+  check('senses: loud carries', ear.heard([0,0,0],[0,0,12], 2));
+  check('senses: quiet muffled', !ear.heard([0,0,0],[0,0,5], 0.5));
+  check('senses: level mid 0.5', Math.abs(ear.level([0,0,0],[0,0,4]) - 0.5) < 1e-9);
+  check('senses: proximity in', senses.proximity([0,0,0],[1,0,1],2));
+  check('senses: proximity out', !senses.proximity([0,0,0],[3,0,3],2));
+  const mem = senses.memory({ forget: 3 });
+  const e = { pos: [0,0,0] };
+  mem.see(e, [5,0,5], 0.1);
+  check('senses: remembers sighting', mem.remembers(e) && mem.lastKnown(e)[0] === 5);
+  check('senses: visible flag true', mem.visible(e));
+  mem.see(e, null, 1.5);
+  check('senses: still remembers mid-decay', mem.remembers(e) && !mem.visible(e));
+  check('senses: freshness halved', Math.abs(mem.freshness(e) - 0.5) < 1e-9);
+  mem.see(e, null, 2);
+  check('senses: forgotten after timeout', !mem.remembers(e) && mem.lastKnown(e) === null);
+  mem.see(e, [1,0,2], 0);
+  check('senses: re-sight revives', mem.remembers(e) && mem.lastKnown(e)[0] === 1);
+  mem.clear(e);
+  check('senses: clear wipes', !mem.remembers(e));
+}
+
+{
+  const ent = (x, z, hp = 10) => ({ kind: 'grunt', pos: [x, 0, z], vel: [0, 0, 0], hp, dead: false });
+  // centroid
+  const c = squad.centroid([ent(0, 0), ent(4, 0), ent(2, 6)]);
+  check('squad.centroid averages living members', Math.abs(c[0] - 2) < 1e-9 && Math.abs(c[2] - 2) < 1e-9);
+  check('squad.centroid empty -> origin', squad.centroid([])[0] === 0);
+  // focusTarget: lowestHp is unanimous; nearest follows the majority
+  const weak = ent(-20, 0, 5), strong = ent(20, 0, 30);
+  check('squad.focusTarget lowestHp finishes the weak', squad.focusTarget([ent(0, 0), ent(1, 1)], [strong, weak], 'lowestHp') === weak);
+  check('squad.focusTarget null on no candidates', squad.focusTarget([ent(0, 0)], [], 'lowestHp') === null);
+  const cluster = [ent(18, 0), ent(19, 1), ent(21, 0), ent(-19, 0)];
+  check('squad.focusTarget nearest follows majority', squad.focusTarget(cluster, [strong, weak], 'nearest') === strong);
+  // assignRoles: farthest become flankers on opposite sides, pressers get angle 0
+  const pk = [ent(1, 0), ent(2, 0), ent(8, 0), ent(9, 0)];
+  const rr = squad.assignRoles(pk, { flankers: 0.5, spreadDeg: 60, target: ent(0, 0, 100) });
+  check('squad.assignRoles splits 2/2', rr.flankers === 2 && rr.pressers === 2);
+  const fl = pk.filter(e => e._squad.role === 'flank');
+  check('squad.assignRoles flankers are farthest', fl.every(e => Math.abs(e.pos[0]) >= 8));
+  check('squad.assignRoles flanks mirror sides', fl[0]._squad.angle === -fl[1]._squad.angle && fl[0]._squad.angle !== 0);
+  check('squad.assignRoles pressers angle 0', pk.filter(e => e._squad.role === 'press').every(e => e._squad.angle === 0));
+  // makeSquad update: staggered engage cap + slot stand-off + spacing separation
+  const sq = squad.makeSquad({ maxAttackers: 2, engageRange: 2, waitRange: 8, spacing: 3 });
+  const gr = [ent(3, 0), ent(0, 3), ent(-3, 0), ent(0, -3), ent(10, 10)];
+  gr.forEach(g => sq.join(g));
+  const player = ent(0, 0, 40);
+  check('squad.update returns focused target', sq.update(gr, player, 0.016) === player);
+  const eng = gr.filter(g => g._squad.engage);
+  check('squad staggers to maxAttackers', eng.length === 2 && eng.every(g => Math.hypot(g.pos[0], g.pos[2]) < 5));
+  check('squad engaged slots stand off at engageRange', eng.every(g => Math.abs(Math.hypot(g._squad.slot[0], g._squad.slot[2]) - 2) < 1e-6));
+  check('squad benched slots circle at waitRange', gr.filter(g => !g._squad.engage).every(g => Math.abs(Math.hypot(g._squad.slot[0], g._squad.slot[2]) - 8) < 1e-6));
+  const a = ent(0, 0), b = ent(0.5, 0);
+  squad.makeSquad({ spacing: 3 }).update([a, b], ent(50, 0), 0.016);
+  check('squad spacing pushes stacked bodies apart', a._squad.spacing[0] < 0 && b._squad.spacing[0] > 0);
+  const rg = [ent(0, 0), ent(6, 0)];
+  check('squad no-target regroups on centroid', squad.makeSquad().update(rg, null, 0.016) === null && Math.abs(rg[0]._squad.slot[0] - 3) < 1e-9 && !rg[0]._squad.engage);
+  sq.leave(gr[0]);
+  check('squad.leave clears the order', gr[0]._squad === undefined);
+}
+
+{
+  const { run, set, has, missing, gte, all, inc } = dialogue;
+  const tree = {
+    start: {
+      speaker: 'Elder', text: 'Will you help us?', effect: set('met'),
+      choices: [
+        { label: 'Yes', next: 'quest', effect: set('accepted') },
+        { label: 'No', next: 'refuse' },
+        { label: 'Reward', cond: has('doneQuest'), next: 'reward' },
+      ],
+    },
+    quest: { text: 'Bring me 3 herbs.', next: 'start' },
+    refuse: { text: 'A pity.' },
+    reward: { text: (v) => `Gold: ${v.gold}`, effect: (v) => { v.gold = (v.gold || 0) + 100; } },
+  };
+  const d = run(tree, { start: 'start', vars: {} });
+  check('dialogue: entry effect fired', d.vars.met === true);
+  check('dialogue: cond gates hidden choice', d.node().choices.length === 2);
+  check('dialogue: not done at branch', d.done() === false);
+  check('dialogue: choose runs effect', d.choose(0) === true && d.vars.accepted === true);
+  check('dialogue: followed next to linear node', d.id() === 'quest');
+  check('dialogue: advance walks linear line', d.advance() === true && d.id() === 'start');
+  d.vars.doneQuest = true;
+  check('dialogue: choice unlocks on flag', d.node().choices.length === 3);
+  check('dialogue: out-of-range choose is no-op', d.choose(9) === false);
+  d.choose(2);
+  check('dialogue: effect mutated vars', d.vars.gold === 100);
+  check('dialogue: dynamic text reads vars', d.node().text === 'Gold: 100');
+  check('dialogue: leaf node is an ending', d.done() === true && d.advance() === false);
+  const d2 = run(tree, { vars: {} });
+  d2.choose(1);
+  check('dialogue: reached leaf ending', d2.id() === 'refuse' && d2.done() === true);
+  check('dialogue: cond helpers', has('x')({ x: 1 }) && missing('x')({}) && gte('n', 3)({ n: 5 }) && all(has('a'), has('b'))({ a: 1, b: 1 }));
+  const v = {}; inc('c', 2)(v); inc('c', 2)(v);
+  check('dialogue: inc helper accumulates', v.c === 4);
+}
+
+{
+  const { makeReasoner, inverse, threshold, bell, expo, combine, linearC, dist } = utility;
+  check('utility.linearC clamps', linearC(2) === 1 && linearC(-1) === 0);
+  check('utility.inverse', inverse(0) === 1 && inverse(1) === 0);
+  check('utility.threshold hard gate', threshold(0.5)(0.4) === 0 && threshold(0.5)(0.6) === 1);
+  check('utility.threshold soft midpoint', Math.abs(threshold(0.5, 0.5)(0.5) - 0.5) < 1e-9);
+  check('utility.bell peaks at center', bell(0.5, 0.5)(0.5) === 1 && bell(0.5, 0.5)(0) < 0.1);
+  check('utility.expo urgency', expo(2)(0.5) > 0.5);
+  check('utility.combine mult veto', combine([1, 0.01], 'mult') < 0.02);
+  check('utility.combine avg', Math.abs(combine([1, 0], 'avg') - 0.5) < 1e-9);
+  check('utility.combine max', combine([0.2, 0.9], 'max') === 0.9);
+  check('utility.combine min', combine([0.2, 0.9], 'min') === 0.2);
+
+  const brain = makeReasoner([
+    { name: 'flee', score: (e) => inverse(e.hp / e.maxHp) },
+    { name: 'attack', considerations: [
+        (e) => threshold(0.4)(e.hp / e.maxHp),
+        (e) => inverse(dist(e, e.target) / 12),
+    ] },
+    { name: 'idle', score: () => 0.05 },
+  ]);
+  const near = { pos: [0, 0, 0] };
+  const far = { pos: [0, 0, 30] };
+  check('utility low hp -> flee', brain.decide({ hp: 10, maxHp: 100, pos: [0,0,0], target: near }) === 'flee');
+  check('utility full+near -> attack', brain.decide({ hp: 100, maxHp: 100, pos: [0,0,0], target: near }) === 'attack');
+  check('utility full+far -> idle', brain.decide({ hp: 100, maxHp: 100, pos: [0,0,0], target: far }) === 'idle');
+
+  const e = { hp: 100, maxHp: 100, pos: [0,0,0], target: near };
+  check('utility starts attack', brain.decide(e) === 'attack');
+  e.hp = 5;
+  check('utility flips to flee', brain.decide(e) === 'flee');
+
+  const tie = makeReasoner([{ name: 'a', score: () => 0.5 }, { name: 'b', score: () => 0.5 }]);
+  check('utility tie-break by order', tie.decide({}) === 'a');
+
+  let ran = null;
+  const acter = makeReasoner([{ name: 'go', score: () => 1, run: (x) => { ran = x.id; } }]);
+  acter.act({ id: 7 });
+  check('utility.act fires run()', ran === 7);
+
+  const hys = makeReasoner([{ name: 'x', score: () => 0.50 }, { name: 'y', score: () => 0.52 }], { commit: 0.1 });
+  const he = {};
+  hys.decide(he);
+  check('utility commit holds pick', hys.decide(he) === 'y');
+
+  const ent = { hp: 100, maxHp: 100, pos: [0,0,0], target: near };
+  const rows = brain.evaluate(ent);
+  check('utility.evaluate sorted', rows[0].score >= rows[1].score);
+  brain.decide(ent);
+  check('utility scratch on e._util', ent._util.action === rows[0].name);
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
