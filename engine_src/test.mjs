@@ -30,6 +30,11 @@ import { patterns } from './engine/control/patterns.js';
 import { targeting } from './engine/control/targeting.js';
 import { statuses } from './engine/control/statuses.js';
 import { damage } from './engine/control/damage.js';
+import { abilities } from './engine/control/abilities.js';
+import { vehicles } from './engine/control/vehicles.js';
+import { formations } from './engine/control/formations.js';
+import { pathing } from './engine/control/pathing.js';
+import { cameraFx } from './engine/control/camerafx.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -681,6 +686,253 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
     check('damage compose flattens + skips falsy', damage.resolve(10, damage.compose([damage.armor({ flat: 1 })], false, damage.armor({ flat: 1 })), {}).amount === 8);
     check('damage resolve accepts a raw mod array', damage.resolve(10, [damage.armor({ flat: 3 })], {}).amount === 7); }
   check('damage bundle complete', ['resolve', 'compose', 'crit', 'armor', 'knockback', 'falloff', 'lifesteal', 'pierce'].every(k => typeof damage[k] === 'function'));
+}
+
+
+// ===== Round 3 components: abilities / vehicles / formations / pathing / cameraFx =====
+
+// --- abilities: cooldown + duration lifecycle ---
+{
+  const mkE = () => ({ pos: [0, 0, 0], vel: [0, 0, 0], rot: 0 });
+
+  // dash: burst of velocity + cooldown lockout
+  const d = abilities.dash({ distance: 6, cd: 1, dashTime: 0.15 });
+  const e1 = mkE();
+  check('dash ready initially', d.ready());
+  check('dash fires when ready', d.trigger(e1, [0, 1]) === true);
+  check('dash sets velocity along dir', e1.vel[2] > 0);
+  check('dash locked after fire', !d.ready() && d.trigger(e1, [0, 1]) === false);
+  let ds;
+  for (let i = 0; i < 25; i++) ds = d.tick(e1, 0.05);
+  check('dash recharges after cd', d.ready() && ds.ready && !ds.active);
+
+  // dodgeRoll: opens e.invuln i-frame window
+  const r = abilities.dodgeRoll({ distance: 5, iframes: 0.4, cd: 0.8 });
+  const e2 = mkE();
+  r.trigger(e2, [1, 0]);
+  check('roll opens invuln window', e2.invuln > 0.39);
+  for (let i = 0; i < 5; i++) r.tick(e2, 0.1);
+  check('roll invuln decays away', (e2.invuln || 0) <= 0.0001);
+
+  // blink: instant teleport, no velocity
+  const b = abilities.blink({ range: 8, cd: 3 });
+  const e3 = mkE();
+  b.trigger(e3, [1, 0]);
+  check('blink teleports by range', Math.abs(e3.pos[0] - 8) < 1e-6 && e3.vel[0] === 0);
+
+  // shieldAbility: e.shield timer
+  const sh = abilities.shieldAbility({ duration: 3, cd: 6 });
+  const e4 = mkE();
+  sh.trigger(e4);
+  check('shield timer set on trigger', e4.shield > 2.9);
+  let ss;
+  for (let i = 0; i < 35; i++) ss = sh.tick(e4, 0.1);
+  check('shield expires', (e4.shield || 0) < 0.0001 && !ss.active);
+
+  // groundPound: shockwave request surfaced exactly once
+  const gp = abilities.groundPound({ cd: 2, radius: 5 });
+  const e5 = mkE(); e5.pos = [3, 0, 4];
+  gp.trigger(e5);
+  const gs1 = gp.tick(e5, 0.016);
+  check('groundPound emits shockwave once', gs1.shockwave && gs1.shockwave.radius === 5);
+  check('shockwave cleared next tick', !gp.tick(e5, 0.016).shockwave);
+
+  // timeSlow: reports a timescale the loop reads
+  const ts = abilities.timeSlow({ factor: 0.4, duration: 2, cd: 8 });
+  const e6 = mkE();
+  ts.trigger(e6);
+  check('timeSlow reports factor while active', ts.tick(e6, 0.1).timescale === 0.4);
+  let tss;
+  for (let i = 0; i < 25; i++) tss = ts.tick(e6, 0.1);
+  check('timeSlow returns to 1', tss.timescale === 1 && !tss.active);
+}
+
+{
+  const ent = () => ({ pos: [0,0,0], vel: [0,0,0], rot: 0 });
+  const noI = { move: [0,0], aim: [0,0], jump: false };
+  const run = (u, e, input, n = 60, dt = 1/60) => { for (let i=0;i<n;i++){ u(e, input, dt); e.pos[0]+=e.vel[0]*dt; e.pos[1]+=e.vel[1]*dt; e.pos[2]+=e.vel[2]*dt; } };
+
+  check('vehicles bundle complete', ['car','boat','hover','flyer','heavyTank'].every(k => typeof vehicles[k] === 'function'));
+
+  // car: throttle drives +Z, top speed capped, no steer while stopped, drifts when turning
+  { const u=vehicles.car({topSpeed:10}); const e=ent(); run(u,e,{move:[0,-1],aim:[0,0]},120);
+    check('car drives forward', e.pos[2]>1);
+    check('car respects top speed', Math.hypot(e.vel[0],e.vel[2])<=10+1e-6); }
+  { const u=vehicles.car(); const e=ent(); u(e,{move:[1,0],aim:[0,0]},1/60); check('car no steer at standstill', Math.abs(e.rot)<1e-9); }
+  { const u=vehicles.car({grip:2}); const e=ent(); run(u,e,{move:[1,-1],aim:[0,0]},120); check('car steers under throttle', Math.abs(e.rot)>0.1); }
+
+  // boat: momentum then water drag glides it back down
+  { const u=vehicles.boat(); const e=ent(); run(u,e,{move:[0,-1],aim:[0,0]},60); const s0=Math.hypot(e.vel[0],e.vel[2]); check('boat gains momentum',s0>0.5); run(u,e,noI,300); check('boat drags to stop', Math.hypot(e.vel[0],e.vel[2])<s0*0.3); }
+
+  // hover: omni-directional, faces travel
+  { const u=vehicles.hover(); const e=ent(); run(u,e,{move:[1,0],aim:[0,0]},30); check('hover thrusts +x', e.pos[0]>0.5 && Math.abs(e.pos[2])<1e-6); check('hover faces travel', Math.abs(e.rot-Math.PI/2)<0.05); }
+
+  // flyer: aim climbs, move[1] thrusts forward, move[0] banks heading
+  { const u=vehicles.flyer(); const e=ent(); run(u,e,{move:[0,-1],aim:[0,-1]},30); check('flyer climbs on aim', e.pos[1]>0.5); check('flyer thrusts forward', e.pos[2]>0.5); }
+  { const u=vehicles.flyer(); const e=ent(); u(e,{move:[1,0],aim:[0,0]},1/60); check('flyer banks heading', e.rot>0 && e._veh.bank<0); }
+
+  // heavyTank: pivots in place stopped, slow inertial stop
+  { const u=vehicles.heavyTank(); const e=ent(); u(e,{move:[1,0],aim:[0,0]},1/60); check('tank pivots in place', e.rot>0); }
+  { const u=vehicles.heavyTank(); const e=ent(); run(u,e,{move:[0,-1],aim:[0,0]},60); const s0=Math.hypot(e.vel[0],e.vel[2]); check('tank builds speed',s0>0.3); run(u,e,noI,180); check('tank grinds to stop', Math.hypot(e.vel[0],e.vel[2])<s0*0.3); }
+
+  // node-safe: finite state, ground vehicles keep vel[1]=0
+  { for (const k of ['car','boat','hover','heavyTank']){ const e=ent(); const u=vehicles[k](); run(u,e,{move:[0.5,-0.7],aim:[0.3,0.2]},60); check('finite state '+k, Number.isFinite(e.pos[0])&&Number.isFinite(e.rot)); check('grounded '+k, e.vel[1]===0); } }
+}
+
+{
+  const near = (a, b, e = 1e-6) => Math.abs(a - b) <= e;
+  const L = [10, 0, 20];
+
+  // line: centered on leader, symmetric spread, no forward offset
+  const ln = formations.line({ gap: 2 });
+  const l0 = ln(0, 3, L, 0), l1 = ln(1, 3, L, 0), l2 = ln(2, 3, L, 0);
+  check('formations line middle slot on leader', near(l1[0], 10) && near(l1[2], 20));
+  check('formations line symmetric flanks', near(l0[0], 8) && near(l2[0], 12));
+  check('formations line target y is 0', l0[1] === 0);
+
+  // column: single file straight back at rot=0
+  const col = formations.column({ gap: 2 });
+  const c0 = col(0, 4, L, 0), c2 = col(2, 4, L, 0);
+  check('formations column slot0 one gap back', near(c0[0], 10) && near(c0[2], 18));
+  check('formations column deepens', near(c2[2], 14));
+  // rotation: facing +x (rot=90deg) => behind is -x
+  const cr = col(0, 4, L, Math.PI / 2);
+  check('formations column rotates with leader', near(cr[0], 8) && near(cr[2], 20));
+
+  // wedge: alternating flanks, deepening, all behind tip
+  const wd = formations.wedge({ gap: 2, angleDeg: 45 });
+  const w0 = wd(0, 4, L, 0), w1 = wd(1, 4, L, 0), w3 = wd(3, 4, L, 0);
+  check('formations wedge slot0 left of tip', w0[0] < 10);
+  check('formations wedge slot1 right of tip', w1[0] > 10);
+  check('formations wedge mirrors x', near(w0[0] - 10, -(w1[0] - 10)));
+  check('formations wedge behind tip and deepens', w0[2] < 20 && w3[2] < w1[2]);
+
+  // circle: all on ring, slot0 at front
+  const ci = formations.circle({ radius: 4 });
+  let onRing = true;
+  for (let i = 0; i < 4; i++) { const s = ci(i, 4, L, 0); if (!near(Math.hypot(s[0]-10, s[2]-20), 4)) onRing = false; }
+  check('formations circle all on ring', onRing);
+  const ci0 = ci(0, 4, L, 0);
+  check('formations circle slot0 at front', near(ci0[0], 10) && near(ci0[2], 24));
+
+  // grid: centered columns trailing back
+  const gr = formations.grid({ cols: 3, gap: 2 });
+  const g0 = gr(0, 6, L, 0), g2 = gr(2, 6, L, 0), g3 = gr(3, 6, L, 0);
+  check('formations grid row0 centered', near(g0[0], 8) && near(g2[0], 12) && near(g0[2], 20));
+  check('formations grid row1 trails back', near(g3[0], 8) && near(g3[2], 18));
+
+  // echelon: diagonal stagger
+  const ec = formations.echelon({ gap: 2 });
+  const e0 = ec(0, 3, L, 0), e1 = ec(1, 3, L, 0);
+  check('formations echelon diagonal', near(e0[0], 12) && near(e0[2], 18));
+  check('formations echelon extends diagonally', near(e1[0], 14) && near(e1[2], 16));
+}
+
+// --- pathing.js ---
+{
+  const ent = (x, z) => ({ pos: [x, 0, z], vel: [0, 0, 0], rot: 0 });
+
+  // followPath: drives toward wp0, advances near it, parks at end (no loop)
+  const fp = pathing.followPath({ points: [[10, 0], [10, 10]], loop: false, speed: 4 });
+  const e1 = ent(0, 0);
+  const v1 = fp(e1, 0.1);
+  check('followPath drives +x', v1[0] > 3.9 && Math.abs(v1[2]) < 1e-6);
+  check('followPath writes vel', e1.vel[0] === v1[0]);
+  e1.pos = [10, 0, 0]; const v1b = fp(e1, 0.1);
+  check('followPath advances waypoint', v1b[2] > 3.9);
+  e1.pos = [10, 0, 10]; fp(e1, 0.1); const v1c = fp(e1, 0.1);
+  check('followPath parks at end', v1c[0] === 0 && v1c[2] === 0 && e1._path.done);
+
+  // followPath loop wraps to start
+  const fpl = pathing.followPath({ points: [[5, 0], [5, 5]], loop: true, speed: 2 });
+  const el = ent(5, 5); fpl(el, 0.1);
+  check('followPath loops to 0', el._path.i === 0);
+
+  // pingPong bounces off the far end
+  const pp = pathing.pingPong({ points: [[0, 0], [10, 0]], speed: 5 });
+  const ep = ent(0, 0); pp(ep, 0.1);
+  check('pingPong advances forward', ep._path.dir === 1 && ep._path.i === 1);
+  ep.pos = [10, 0, 0]; pp(ep, 0.1);
+  check('pingPong reverses at end', ep._path.dir === -1 && ep._path.i === 0);
+
+  // patrolPath halts and waits at each stop
+  const pa = pathing.patrolPath({ points: [[3, 0], [3, 6]], wait: 1, speed: 3 });
+  const ea = ent(3, 0);
+  const va = pa(ea, 0.1);
+  check('patrol halts on arrival', va[0] === 0 && va[2] === 0 && ea._path.wait > 0);
+  pa(ea, 0.5); check('patrol still waiting', ea._path.wait > 0);
+  pa(ea, 0.6); const vam = pa(ea, 0.1);
+  check('patrol moves after wait', vam[2] > 2.9);
+
+  // lerpTo eases toward moving goal and settles when close
+  const lt = pathing.lerpTo({ speed: 5 });
+  const vl = lt(ent(0, 0), [10, 0, 0], 0.1);
+  check('lerpTo moves toward goal', vl[0] > 0 && vl[0] < 100);
+  const vls = lt(ent(0, 0), [0.01, 0, 0], 0.1);
+  check('lerpTo settles near goal', vls[0] === 0 && vls[2] === 0);
+
+  // gridNav: pure greedy planner avoids blocked cells and returns cell centers
+  const nav = pathing.gridNav({ cell: 1, passable: (cx, cz) => !(cx === 1 && cz !== 2) });
+  const gn = nav.stepToward([0.5, 0, 0.5], [4.5, 0, 0.5]);
+  check('gridNav avoids blocked cell', !(Math.floor(gn[0]) === 1 && Math.floor(gn[1]) === 0));
+  check('gridNav returns cell center', Math.abs((gn[0] % 1) - 0.5) < 1e-9);
+  const navOpen = pathing.gridNav({ cell: 1, passable: () => true });
+  check('gridNav arrived returns goal', (() => { const n = navOpen.stepToward([2.5, 0, 2.5], [2.7, 0, 2.4]); return n[0] === 2.5 && n[1] === 2.5; })());
+  const navBox = pathing.gridNav({ cell: 1, passable: (cx, cz) => cx === 0 && cz === 0 });
+  check('gridNav boxed holds position', (() => { const n = navBox.stepToward([0.5, 0, 0.5], [9, 0, 9]); return n[0] === 0.5 && n[1] === 0.5; })());
+}
+
+{
+  // fake base camera: eye above/behind focus, target at focus, carries metadata
+  const base = (f) => ({ eye: [f[0], 20, f[2] + 10], target: [f[0], 0, f[2]], up: [0, 0, -1], projection: 'ortho', orthoSize: 12 });
+
+  // metadata + array passthrough
+  const sm = cameraFx.smooth(base);
+  const r = sm([1, 0, 1], {}, 0.016);
+  check('cameraFx smooth returns eye/target arrays', Array.isArray(r.eye) && r.eye.length === 3 && Array.isArray(r.target));
+  check('cameraFx passes metadata through', r.projection === 'ortho' && r.orthoSize === 12 && r.up[2] === -1);
+
+  // shake: idle == base; trigger offsets deterministically; decays
+  const idle = cameraFx.shake(base, { mag: 1 })([0, 0, 0], {}, 0.016);
+  check('cameraFx shake idle == base', idle.eye[0] === 0 && idle.eye[2] === 10);
+  const c1 = cameraFx.shake(base, { mag: 1, decay: 5 });
+  const c2 = cameraFx.shake(base, { mag: 1, decay: 5 });
+  c1.trigger(1); c2.trigger(1);
+  const a1 = c1([0, 0, 0], {}, 0.016), a2 = c2([0, 0, 0], {}, 0.016);
+  check('cameraFx shake offsets eye', a1.eye[0] !== 0 || a1.eye[2] !== 10);
+  check('cameraFx shake deterministic', a1.eye[0] === a2.eye[0] && a1.eye[2] === a2.eye[2]);
+  const c3 = cameraFx.shake(base, { mag: 1, decay: 100 }); c3.trigger(1); c3([0, 0, 0], {}, 1);
+  const rest = c3([0, 0, 0], {}, 0.016);
+  check('cameraFx shake decays to rest', rest.eye[0] === 0 && rest.eye[2] === 10);
+  const e = { shake: 1 };
+  const es = cameraFx.shake(base, { mag: 1 })([0, 0, 0], e, 0.016);
+  check('cameraFx shake consumes entity.shake', e.shake === 0 && (es.eye[0] !== 0 || es.eye[2] !== 10));
+
+  // smooth: latch then ease then converge
+  const s = cameraFx.smooth(base, { stiffness: 8 });
+  check('cameraFx smooth latches frame 1', s([0, 0, 0], {}, 0.016).eye[0] === 0);
+  const s1 = s([10, 0, 0], {}, 0.016);
+  check('cameraFx smooth eases partway', s1.eye[0] > 0 && s1.eye[0] < 10);
+  let last; for (let i = 0; i < 500; i++) last = s([10, 0, 0], {}, 0.016);
+  check('cameraFx smooth converges', Math.abs(last.eye[0] - 10) < 0.01);
+
+  // lookAhead: leads by vel*lead
+  const la = cameraFx.lookAhead(base, { lead: 2 })([0, 0, 0], { vel: [3, 0, -1] }, 0.016);
+  check('cameraFx lookAhead leads target', Math.abs(la.target[0] - 6) < 1e-9 && Math.abs(la.target[2] + 2) < 1e-9);
+  check('cameraFx lookAhead no-vel == base', cameraFx.lookAhead(base)([0, 0, 0], {}, 0.016).target[0] === 0);
+
+  // zoom: scales eye distance, clamps, target fixed
+  const z = cameraFx.zoom(base, { min: 1, max: 2, on: (en) => en.t });
+  check('cameraFx zoom t=0 unchanged', Math.abs(z([0, 0, 0], { t: 0 }, 0.016).eye[2] - 10) < 1e-9);
+  const z1 = z([0, 0, 0], { t: 1 }, 0.016);
+  check('cameraFx zoom t=1 doubles distance', Math.abs(z1.eye[2] - 20) < 1e-9 && z1.target[2] === 0);
+  check('cameraFx zoom clamps t>1', Math.abs(z([0, 0, 0], { t: 5 }, 0.016).eye[2] - 20) < 1e-9);
+
+  // deadzone: ignore within box, follow past edge
+  const dz = cameraFx.deadzone(base, { radius: 3 });
+  dz([0, 0, 0], {}, 0.016);
+  check('cameraFx deadzone ignores small move', dz([2, 0, 0], {}, 0.016).eye[0] === 0);
+  check('cameraFx deadzone follows past edge', Math.abs(dz([5, 0, 0], {}, 0.016).eye[0] - 2) < 1e-9);
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
