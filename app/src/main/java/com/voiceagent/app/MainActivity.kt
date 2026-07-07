@@ -377,7 +377,8 @@ class MainActivity : AppCompatActivity() {
         "git.buildStatus" -> withContext(Dispatchers.IO) { text(py("git_ops").callAttr("latest_build").toString()) }
         "git.createRepo" -> withContext(Dispatchers.IO) {
             val r = py("git_ops").callAttr("create_repo", arg.getString("name"), true).toString()
-            if (r.startsWith("Created ")) sessions.setActiveRepo(sessions.activeId(), r.removePrefix("Created ").trim())
+            val prefix = listOf("Created ", "Using existing ").firstOrNull { r.startsWith(it) }
+            if (prefix != null) sessions.setActiveRepo(sessions.activeId(), r.removePrefix(prefix).trim())
             text(r)
         }
         "git.listRepos" -> withContext(Dispatchers.IO) {
