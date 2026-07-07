@@ -662,21 +662,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     // --- Speech -----------------------------------------------------------
-    // Continuous dictation: the recognizer is auto-restarted after each pause so
-    // a short silence never ends the session (Android often ignores the silence
-    // extras below, so restarting is the reliable path). Mic is a start/stop
-    // toggle driven from the web layer via the "listen" action {on: bool}.
+    // Naive single-shot dictation: one recognizer session per Speak press,
+    // ended by the trailing-silence window (default 7s). The old auto-restart
+    // loop kept re-triggering the mic and raced the toggle (you often had to
+    // press twice), so it's gone — the session ends when you stop talking.
 
     private var dictating = false
     private var speechIntent: Intent? = null
-    private val speechHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private fun silenceMs(): Int =
         getSharedPreferences("keys", MODE_PRIVATE)
             .getString("SPEECH_SILENCE_MS", "")?.toIntOrNull()?.coerceIn(500, 60000) ?: SPEECH_SILENCE_MS
-
-    private fun continuousDictation(): Boolean =
-        getSharedPreferences("keys", MODE_PRIVATE).getString("SPEECH_CONTINUOUS", "1") != "0"
 
     private fun buildSpeechIntent(): Intent =
         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -704,23 +700,15 @@ class MainActivity : AppCompatActivity() {
                         val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             ?.firstOrNull()?.trim().orEmpty()
                         if (t.isNotEmpty()) event("speech-final", t)
-                        restartListening()   // keep going through the pause
+                        // Single shot: the session is over — reset the toggle.
+                        dictating = false
+                        event("status", "")
+                        event("dictation", "off")
                     }
                     override fun onError(error: Int) {
-                        // A pause shows up as NO_MATCH / SPEECH_TIMEOUT / BUSY —
-                        // just restart. Stop only on a real (e.g. permission) error.
-                        if (dictating && error in intArrayOf(
-                                SpeechRecognizer.ERROR_NO_MATCH,
-                                SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
-                                SpeechRecognizer.ERROR_RECOGNIZER_BUSY)) {
-                            restartListening()
-                        } else if (!dictating) {
-                            event("status", "")
-                        } else {
-                            dictating = false
-                            event("status", "")
-                            event("dictation", "off")   // tell the UI to reset the mic
-                        }
+                        dictating = false
+                        event("status", "")
+                        event("dictation", "off")   // tell the UI to reset the mic
                     }
                     override fun onReadyForSpeech(params: Bundle?) { event("status", "Listening…") }
                     override fun onEndOfSpeech() {}
@@ -737,32 +725,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
         speechIntent = buildSpeechIntent()
+        // Cancel any lingering session first — a busy recognizer silently ignores
+        // startListening, which is why the button sometimes needed two presses.
+        try { speech?.cancel() } catch (_: Throwable) {}
         try { speech?.startListening(speechIntent) } catch (_: Throwable) {}
-    }
-
-    private fun restartListening() {
-        if (!dictating) return
-        if (!continuousDictation()) {
-            // Single-shot mode: end after this segment.
-            dictating = false
-            event("dictation", "off")
-            return
-        }
-        speechHandler.postDelayed({
-            if (dictating) try { speech?.startListening(speechIntent ?: buildSpeechIntent()) } catch (_: Throwable) {}
-        }, 250)
     }
 
     private fun stopDictation() {
         dictating = false
-        speechHandler.removeCallbacksAndMessages(null)
         try { speech?.cancel() } catch (_: Throwable) {}
         event("status", "")
     }
 
     override fun onDestroy() {
         dictating = false
-        speechHandler.removeCallbacksAndMessages(null)
         speech?.destroy()
         tts?.shutdown()
         super.onDestroy()

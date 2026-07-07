@@ -97,11 +97,17 @@
 
     <div id="attachBar" class="hidden"></div>
 
+    <!-- Floating message box: opened by Send/Speak, shared by typing + voice. -->
+    <div id="composeBox" class="hidden">
+      <button id="composeClose" title="Cancel">✕</button>
+      <textarea id="input" rows="2" placeholder="Type or dictate a task…"></textarea>
+    </div>
+
     <footer id="composer">
       <button id="ctxBtn" class="icon" title="Attach context">📎</button>
-      <textarea id="input" rows="1" placeholder="Type or dictate a task…"></textarea>
       <button id="askBtn" class="icon" title="Ask (not saved to context)">❓</button>
-      <button id="sendBtn" class="pill">Send</button>
+      <span class="c-spacer"></span>
+      <button id="sendBtn" class="pill sm">Send</button>
       <button id="micBtn" class="txtbtn">Speak</button>
     </footer>
   </aside>

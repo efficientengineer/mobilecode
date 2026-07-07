@@ -38,15 +38,16 @@ function stopDictation() {
 window.nativeEvent = (type, payload) => {
   const box = $("#input");
   if (type === "speech-partial") {
+    composeOpen(false);   // dictation streams into the shared floating box
     box.value = _dictBase + (_dictBase ? " " : "") + (payload || "");
     box.dispatchEvent(new Event("input"));
   } else if (type === "speech-final") {
-    // Commit the utterance into the box; do NOT submit. Keep dictating.
+    // Commit the utterance into the box; do NOT submit — Send sends it.
     if (payload && payload.trim()) {
+      composeOpen(false);
       box.value = _dictBase + (_dictBase ? " " : "") + payload.trim();
       _dictBase = box.value;
       box.dispatchEvent(new Event("input"));
-      box.focus();
     }
     if (!_dictating) setStatus("");
   } else if (type === "dictation" && payload === "off") {
@@ -64,6 +65,7 @@ window.nativeEvent = (type, payload) => {
 // Text/URL shared into the app from another app — drop it into the composer.
 function receiveShared(txt) {
   if (!txt) return;
+  composeOpen(false);
   const box = $("#input");
   box.value = (box.value ? box.value + "\n" : "") + txt;
   box.dispatchEvent(new Event("input"));
@@ -1163,7 +1165,6 @@ const actions = {
        <label>Fallback model (used if the primary provider fails)</label><input id="fm" type="text" list="ml" value="${s.fallbackModel||""}" placeholder="e.g. deepseek/deepseek-chat" />
        <datalist id="ml"></datalist>
        <label>Voice: silence before it stops (ms)</label><input id="ssm" type="text" inputmode="numeric" value="${s.speechSilenceMs||"7000"}" />
-       <label class="checkrow"><input id="scont" type="checkbox" ${s.speechContinuous!=="0"?"checked":""} /> Voice: keep listening through pauses</label>
        <label>Agent branch (for OTA updates)</label><input id="br" type="text" value="${s.branch||""}" />
        <div class="group-title">Preferences</div>
        <div class="grid">
@@ -1178,7 +1179,7 @@ const actions = {
           anthropicKey: $("#ak").value.trim(), deepseekKey: $("#dk").value.trim(),
           githubToken: $("#gt").value.trim(), leadModel: $("#lm").value.trim(),
           workerModel: $("#wm").value.trim(), fallbackModel: $("#fm").value.trim(),
-          speechSilenceMs: $("#ssm").value.trim(), speechContinuous: $("#scont").checked,
+          speechSilenceMs: $("#ssm").value.trim(),
           branch: $("#br").value.trim(),
         });
         refreshHeader();
@@ -2007,6 +2008,7 @@ async function attachCtxFiles(rels) {
 }
 function insertSelectionIntoMessage() {
   const box = $("#input"); if (!box) return;
+  composeOpen(false);
   const sel = _editorSelection;
   const ref = sel.rel ? `// from ${sel.rel}\n` : "";
   box.value = (box.value ? box.value + "\n\n" : "") + "```\n" + ref + sel.text + "\n```\n";
@@ -2164,20 +2166,38 @@ document.querySelectorAll("[data-act]").forEach((b) => {
 document.querySelectorAll("[data-close]").forEach((b) => {
   b.onclick = (e) => e.target.closest(".sheet").classList.add("hidden");
 });
+// --- Floating compose box (shared by Send / Speak / ❓) --------------------
+// The bottom bar has no inline text field. First Send/Speak press opens the
+// box; Send again submits its text; the ✕ cancels the message.
+function composeOpen(focus) {
+  const b = $("#composeBox");
+  if (b) b.classList.remove("hidden");
+  if (focus !== false) { const i = $("#input"); if (i) i.focus(); }
+}
+function composeReset() {
+  const i = $("#input");
+  if (i) { i.value = ""; i.style.height = "auto"; }
+  const b = $("#composeBox");
+  if (b) b.classList.add("hidden");
+}
+$("#composeClose").onclick = () => { stopDictation(); composeReset(); };
 $("#sendBtn").onclick = () => {
-  stopDictation();
   const t = $("#input").value.trim();
-  if (t) { $("#input").value = ""; submit(t); }
+  if (!t) { composeOpen(true); return; }   // nothing pending → open the box
+  stopDictation();
+  composeReset();
+  submit(t);
 };
 $("#askBtn").onclick = () => {
   const t = $("#input").value.trim();
-  if (!t) { setStatus("Type a question first"); return; }
-  $("#input").value = ""; $("#input").style.height = "auto";
+  if (!t) { composeOpen(true); setStatus("Type a question, then tap ❓ again"); return; }
+  stopDictation();
+  composeReset();
   askEphemeral(t);
 };
 $("#input").addEventListener("input", (e) => {
   e.target.style.height = "auto";
-  e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
+  e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px";
 });
 const _usageChip = $("#usage");
 if (_usageChip) _usageChip.onclick = showUsageDetail;
@@ -2190,6 +2210,7 @@ $("#micBtn").onclick = () => {
   _dictating = !_dictating;
   $("#micBtn").textContent = _dictating ? "◼ Stop" : "Speak";
   if (_dictating) {
+    composeOpen(false);   // voice shares the same box; no keyboard while talking
     _dictBase = $("#input").value.trim();
     setStatus("Listening… (tap ◼ to stop)");
     call("listen", { on: true });

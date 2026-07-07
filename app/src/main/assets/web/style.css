@@ -201,12 +201,21 @@ pre.small { white-space: pre-wrap; word-wrap: break-word; background: var(--bg);
   border-radius: 16px; padding: 9px 16px; font-weight: 700; margin: 2px 0; }
 .approve:active { opacity: .85; }
 
-#composer { display: flex; align-items: flex-end; gap: 8px; padding: 8px;
+/* One-line bottom bar: 📎 ❓ … Send Speak. The text box itself is the floating
+   #composeBox above it, opened by Send/Speak and shared by typing + voice. */
+#composer { display: flex; align-items: center; gap: 8px; padding: 8px;
   background: var(--panel); border-top: 1px solid var(--border); }
-#input { flex: 1; resize: none; max-height: 120px; background: var(--panel2);
-  color: var(--text); border: 1px solid var(--border); border-radius: 18px;
-  padding: 10px 14px; font: inherit; }
-#input:focus { outline: none; border-color: var(--accent); }
+.c-spacer { flex: 1; }
+#composeBox { position: absolute; bottom: 62px; left: 10px; right: 10px; z-index: 8;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 14px;
+  padding: 10px 40px 10px 12px; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
+#composeBox.hidden { display: none; }
+#composeBox textarea { width: 100%; display: block; resize: none; max-height: 40vh;
+  background: transparent; color: var(--text); border: 0; outline: none; font: inherit; }
+#composeClose { position: absolute; top: 6px; right: 6px; width: 28px; height: 28px;
+  border-radius: 14px; background: var(--panel); color: var(--muted); font-size: 13px;
+  display: flex; align-items: center; justify-content: center; }
+#composeClose:active { background: var(--border); color: #f87171; }
 
 .sheet { position: fixed; inset: 0; background: rgba(0,0,0,.5);
   display: flex; align-items: flex-end; z-index: 80; }
