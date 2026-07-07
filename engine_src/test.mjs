@@ -55,6 +55,7 @@ import { hudkit } from './engine/control/hudkit.js';
 import { menus } from './engine/control/menus.js';
 import { touchlayout } from './engine/control/touchlayout.js';
 import { tutorial } from './engine/control/tutorial.js';
+import { tilemap } from './engine/control/tilemap.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -1829,6 +1830,39 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   t5.restart();
   check('tutorial: restart returns to start', !t5.done() && t5.current().id === 'a');
   check('tutorial: empty tutorial is done', makeTutorial([]).done() === true);
+}
+
+
+// ===== Round 8 (world layer): tilemap =====
+{
+  const rows = ["#####", "#..~#", "#.@.#", "#####"];
+  const legend = { "#": { solid: true }, ".": 0, "~": { water: true }, "@": { type: 'spawn' } };
+  const map = tilemap.fromStrings(rows, legend, { tileSize: 2 });
+  check('tilemap dims', map.w === 5 && map.h === 4 && map.tileSize === 2);
+  check('tilemap corner solid', map.isSolid(0, 0) === true);
+  check('tilemap floor open', map.isSolid(1, 1) === false);
+  check('tilemap oob solid (walled world)', map.isSolid(-1, 0) === true && map.isSolid(99, 99) === true);
+  check('tilemap water flag', map.flag(3, 1, 'water') === true);
+  check('tilemap spawn type', map.flag(2, 2, 'type') === 'spawn');
+  check('tilemap inBounds', map.inBounds(4, 3) && !map.inBounds(5, 3));
+  check('tilemap tileToWorld center', JSON.stringify(map.tileToWorld(0, 0)) === JSON.stringify([1, 0, 1]));
+  check('tilemap worldToTile floor', JSON.stringify(map.worldToTile([3.9, 0, 2.1])) === JSON.stringify([1, 1]));
+  check('tilemap coord roundtrip', (() => { const w = map.tileToWorld(3, 2); const [tx, tz] = map.worldToTile(w); return tx === 3 && tz === 2; })());
+  const at = map.tileAtWorld(map.tileToWorld(3, 1));
+  check('tilemap tileAtWorld', at.tx === 3 && at.tz === 1 && at.v && at.v.water === true);
+  check('tilemap passable predicate', map.passable(1, 1) === true && map.passable(0, 0) === false);
+  map.set(1, 1, { solid: true });
+  check('tilemap mutate solid', map.isSolid(1, 1) === true);
+  check('tilemap set oob no-op', map.set(-1, -1, 5) === false);
+  let solids = 0; map.forEach((v) => { if (v && v.solid) solids++; });
+  check('tilemap forEach', solids === 15);
+  const back = tilemap.fromStrings(rows, legend).toStrings();
+  check('tilemap toStrings roundtrip', JSON.stringify(back) === JSON.stringify(rows));
+  const decor = map.layer('decor'); decor.set(2, 1, 7);
+  check('tilemap layer isolated', decor.get(2, 1) === 7 && map.get(2, 1) === 0);
+  check('tilemap layer idempotent', map.layer('decor').get(2, 1) === 7);
+  const blank = tilemap.makeTilemap({ w: 3, h: 3, fill: 0 });
+  check('tilemap blank defaults', blank.isSolid(1, 1) === false && blank.get(1, 1) === 0);
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
