@@ -1014,6 +1014,27 @@ const actions = {
       el.onclick = () => { closeSheet("#modal"); confirmClone(el.dataset.repo); };
     });
   },
+  async deleteRepo() {
+    bubble("Loading repos…", "sys");
+    const r = await call("git.listRepos");
+    const repos = r.repos || [];
+    if (!repos.length) { bubble("No repos found (check GitHub token).", "sys"); return; }
+    modal("Delete repository",
+      `<div class="hint danger">Deletes a repo on GitHub permanently — this cannot be undone.</div>` +
+      repos.map((f) => `<div class="list-item" data-del="${escAttr(f)}"><span>${escapeHtml(f)}</span><span class="sub">delete</span></div>`).join(""));
+    $("#modalBody").querySelectorAll("[data-del]").forEach((el) => {
+      el.onclick = () => {
+        const full = el.getAttribute("data-del");
+        modal("Delete " + full + "?",
+          `<div class="hint danger">Permanently delete <b>${escapeHtml(full)}</b> on GitHub? This cannot be undone.</div>`,
+          async () => {
+            bubble("Deleting " + full + "…", "sys");
+            const res = await call("py.call", { module: "git_ops", fn: "delete_repo", args: [full] });
+            bubble(res.text || "done", "sys");
+          });
+      };
+    });
+  },
   // The app's headline action: describe a game, we spin up a fresh project on
   // OUR engine and hand your description to the agent, which picks a view +
   // movement from the CONTRACTS recipe and glues game/ together (asking at most
@@ -1892,7 +1913,9 @@ function openChatActionsMenu() {
 }
 // GitHub actions, opened from the top-bar GitHub button.
 const GITHUB_ITEMS = [
+  { label: "New repository", act: "newRepo" },
   { label: "Switch repository", act: "switchRepo" },
+  { label: "Delete repository", act: "deleteRepo" },
   { label: "Commit (AI message)", act: "commit" },
   { label: "Pull", act: "pull" },
   { label: "Push", act: "push" },
@@ -1927,6 +1950,11 @@ $("#filesBtn").onclick = openTree;
 $("#treeClose").onclick = closeTree;
 $("#treeBackdrop").onclick = closeTree;
 $("#newFileBtn").onclick = newFile;
+const _advToggle = $("#advToggle");
+if (_advToggle) _advToggle.onclick = () => {
+  const hidden = $("#advSection").classList.toggle("hidden");
+  _advToggle.textContent = hidden ? "Advanced ▾" : "Advanced ▴";
+};
 $("#chatFab").onclick = toggleChat;
 $("#chatDrawerClose").onclick = closeChat;
 $("#chatBackdrop").onclick = closeChat;

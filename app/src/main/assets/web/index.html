@@ -110,64 +110,52 @@
     <div class="sheet-inner">
       <div class="sheet-title">Menu</div>
 
-      <div class="group-title">Project</div>
       <div class="grid">
         <button data-act="makeGame">🎮 Make a game</button>
         <button data-act="newProject">Blank project</button>
         <button data-act="sessions">Projects</button>
-        <button data-act="models">Models</button>
-        <button data-act="files">Files</button>
-        <button data-act="guidelines">Guidelines</button>
         <button data-act="bestPractices">Best practices</button>
-        <button data-act="contextFiles">Attach files</button>
-        <button data-act="refreshMap">Refresh map</button>
-        <button data-act="run">Run app</button>
-        <button data-act="checkWeb">Check web</button>
-      </div>
-
-      <div class="group-title">Git</div>
-      <div class="grid">
-        <button data-act="diff">Diff</button>
-        <button data-act="commit">Commit</button>
-        <button data-act="push">Push</button>
-        <button data-act="pull">Pull</button>
-        <button data-act="revertLast">Revert last</button>
-        <button data-act="autocommit">Autocommit: —</button>
-        <button data-act="newRepo">New repo</button>
-        <button data-act="switchRepo">Switch repo</button>
-        <button data-act="forcePush">Force push</button>
-      </div>
-
-      <div class="group-title">Branch &amp; PR</div>
-      <div class="grid">
-        <button data-act="startBranch">Start branch</button>
-        <button data-act="createPR">Open PR</button>
-        <button data-act="prStatus">PR status</button>
-        <button data-act="cloudBuild">Build in cloud</button>
-        <button data-act="buildStatus">Build status</button>
-        <button data-act="fixBuild">Fix CI build</button>
-        <button data-act="watchPr">Watch PR</button>
-      </div>
-
-      <div class="group-title">Context</div>
-      <div class="grid">
-        <button data-act="viewContext">View</button>
-        <button data-act="previewContext">Preview payload</button>
-        <button data-act="trimContext">Trim</button>
-        <button data-act="clearContext">Clear</button>
-        <button data-act="compaction">Compaction</button>
-        <button data-act="caveman">Caveman: —</button>
-        <button data-act="effort">Effort: —</button>
-        <button data-act="frugal">Frugal: —</button>
-      </div>
-
-      <div class="group-title">System</div>
-      <div class="grid">
-        <button data-act="balance">Balance</button>
-        <button data-act="battery">Battery</button>
-        <button data-act="speak">Speak replies: —</button>
+        <button data-act="guidelines">Guidelines</button>
         <button data-act="settings">Settings</button>
-        <button data-act="updateApp">Update app</button>
+      </div>
+
+      <button id="advToggle" class="adv-toggle">Advanced ▾</button>
+      <div id="advSection" class="hidden">
+        <div class="group-title">Project</div>
+        <div class="grid">
+          <button data-act="refreshMap">Refresh map</button>
+          <button data-act="checkWeb">Check web</button>
+        </div>
+
+        <div class="group-title">Git &amp; PR</div>
+        <div class="grid">
+          <button data-act="diff">Diff</button>
+          <button data-act="revertLast">Revert last</button>
+          <button data-act="autocommit">Autocommit: —</button>
+          <button data-act="forcePush">Force push</button>
+          <button data-act="startBranch">Start branch</button>
+          <button data-act="prStatus">PR status</button>
+          <button data-act="cloudBuild">Build in cloud</button>
+          <button data-act="buildStatus">Build status</button>
+          <button data-act="fixBuild">Fix CI build</button>
+          <button data-act="watchPr">Watch PR</button>
+        </div>
+
+        <div class="group-title">Context</div>
+        <div class="grid">
+          <button data-act="trimContext">Trim context</button>
+          <button data-act="compaction">Compaction</button>
+          <button data-act="caveman">Caveman: —</button>
+          <button data-act="effort">Effort: —</button>
+          <button data-act="frugal">Frugal: —</button>
+        </div>
+
+        <div class="group-title">System</div>
+        <div class="grid">
+          <button data-act="battery">Battery</button>
+          <button data-act="speak">Speak replies: —</button>
+          <button data-act="updateApp">Update app</button>
+        </div>
       </div>
 
       <button class="close" data-close>Close</button>
