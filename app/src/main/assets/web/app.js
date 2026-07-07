@@ -72,6 +72,22 @@ function receiveShared(txt) {
 }
 
 let currentMode = "auto";
+let _loadingHistory = false;
+
+// --- Agent chat drawer (slides in from the right; toggled by the 💬 button) --
+function chatIsOpen() { const d = $("#chatDrawer"); return !!(d && d.classList.contains("open")); }
+function setChatUnread(on) { const u = $("#chatUnread"); if (u) u.classList.toggle("hidden", !on); }
+function openChat() {
+  const d = $("#chatDrawer"); if (!d) return;
+  d.classList.add("open");
+  const b = $("#chatBackdrop"); if (b) b.classList.remove("hidden");
+  setChatUnread(false);
+  const c = $("#chat"); if (c) setTimeout(() => { c.scrollTop = c.scrollHeight; }, 60);
+}
+function closeChat() {
+  const d = $("#chatDrawer"); if (d) d.classList.remove("open");
+  const b = $("#chatBackdrop"); if (b) b.classList.add("hidden");
+}
 
 // --- DOM helpers ---------------------------------------------------------
 const $ = (s) => document.querySelector(s);
@@ -103,6 +119,8 @@ function bubble(text, kind, runId, ctxText) {
     chat.appendChild(t);
   }
   chat.scrollTop = chat.scrollHeight;
+  // New agent reply while the drawer is closed → flag it on the 💬 button.
+  if (kind === "agent" && !_loadingHistory && !chatIsOpen()) setChatUnread(true);
   return d;
 }
 
@@ -122,6 +140,7 @@ async function refreshHeader() {
 
 async function loadHistory() {
   chat.innerHTML = "";
+  _loadingHistory = true;
   let turns = [];
   try {
     const r = JSON.parse((await call("orch", { fn: "get_discussion" })).text);
@@ -132,6 +151,7 @@ async function loadHistory() {
       bubble(t.text, t.role === "user" ? "user" : "agent", t.run_id || null,
         t.display_only ? false : t.ctx));
   } catch (e) {}
+  _loadingHistory = false;
   refreshStats();
   renderTree();
 }
@@ -1361,15 +1381,35 @@ function highlightCode(code, opts) {
 }
 function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
-// A VS Code-style viewer/editor: syntax highlighting, a line-numbered gutter,
-// find & replace, and Save (writes back to the workspace file).
+// Close the editor and return the main area to its empty state.
+let _editorActive = null;
+function closeEditor() {
+  const pane = $("#editorPane");
+  if (pane) { pane.classList.add("hidden"); pane.innerHTML = ""; }
+  const empty = $("#editorEmpty");
+  if (empty) empty.classList.remove("hidden");
+  _editorActive = null;
+}
+
+// A VS Code-style viewer/editor that fills the main area: syntax highlighting,
+// a line-numbered gutter, find & replace, and Save (writes back to the file).
 async function showFile(rel) {
   const r = await call("orch", { fn: "read_ws_file", arg: rel });
   const content = r.text || "";
   const hlOpts = hlOptsFor(rel);
   let saved = content;   // last-persisted contents (for the dirty flag)
-  modal(rel,
+  _editorActive = rel;
+  treeState.active = rel;
+  const pane = $("#editorPane");
+  $("#editorEmpty").classList.add("hidden");
+  pane.classList.remove("hidden");
+  pane.innerHTML =
     `<div class="editor">
+       <div class="editor-head">
+         <button class="pill ghost sm" id="edClose" title="Close">✕</button>
+         <span class="eh-name" title="${escAttr(rel)}">${escapeHtml(rel)}</span>
+         <button class="pill sm" id="edSave">Save</button>
+       </div>
        <div class="editor-toolbar">
          <span class="editor-meta" id="edMeta"></span>
          <span class="editor-dirty" id="edDirty"></span>
@@ -1392,17 +1432,17 @@ async function showFile(rel) {
          </div>
        </div>
        <div class="hint" id="edStatus"></div>
-     </div>`,
-    async () => {
-      const res = await call("py.call", { module: "orchestrator", fn: "write_ws_file", args: [rel, area.value] });
-      $("#edStatus").textContent = res.text || "";
-      if ((res.text || "").startsWith("Saved")) { saved = area.value; setDirty(); renderTree(); }
-      return true; // keep the editor open after saving
-    });
-  $("#modalOk").textContent = "Save";
+     </div>`;
 
   const area = $("#edArea"), gutter = $("#edGutter"), hl = $("#edHl");
   area.value = content;
+  async function save() {
+    const res = await call("py.call", { module: "orchestrator", fn: "write_ws_file", args: [rel, area.value] });
+    $("#edStatus").textContent = res.text || "";
+    if ((res.text || "").startsWith("Saved")) { saved = area.value; setDirty(); renderTree(); }
+  }
+  $("#edSave").onclick = save;
+  $("#edClose").onclick = closeEditor;
 
   function renderGutter() {
     const lines = area.value.split("\n").length;
@@ -1663,6 +1703,9 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".fab") && !e.target.closest(".fabmenu")) closeFabMenus();
 });
 wireExplorerResize();
+$("#chatFab").onclick = openChat;
+$("#chatDrawerClose").onclick = closeChat;
+$("#chatBackdrop").onclick = closeChat;
 document.querySelectorAll("[data-act]").forEach((b) => {
   b.onclick = () => { closeSheet("#menu"); (actions[b.dataset.act] || (() => {}))(); };
 });

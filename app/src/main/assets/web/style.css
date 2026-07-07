@@ -238,8 +238,38 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   max-height: 60vh; overflow: auto; }
 .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
 
+/* Main area: editor pane fills it; an empty-state shows when nothing is open. */
+#editorEmpty { flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; color: var(--muted); padding: 24px; gap: 8px; }
+#editorEmpty.hidden { display: none; }
+.ee-title { font-size: 18px; font-weight: 700; color: var(--text); }
+.ee-sub { font-size: 13px; line-height: 1.6; }
+#editorPane { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 8px 10px 10px; }
+#editorPane.hidden { display: none; }
+
+/* Floating chat button + agent drawer (slides in from the right). */
+#chatFab { position: fixed; z-index: 50; right: 14px; bottom: 16px; width: 56px; height: 56px;
+  border-radius: 28px; background: var(--accent); color: #fff; font-size: 24px; border: none;
+  display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(0,0,0,.5); }
+#chatFab:active { opacity: .85; }
+#chatFab .unread { position: absolute; top: 8px; right: 10px; width: 12px; height: 12px;
+  border-radius: 6px; background: #f87171; border: 2px solid var(--accent); }
+#chatFab .unread.hidden { display: none; }
+#chatBackdrop { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 55; }
+#chatBackdrop.hidden { display: none; }
+#chatDrawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 60;
+  width: min(440px, 92vw); background: var(--panel); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; transform: translateX(100%);
+  transition: transform .22s ease; box-shadow: -6px 0 24px rgba(0,0,0,.4); }
+#chatDrawer.open { transform: translateX(0); }
+#chatDrawer-head { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-bottom: 1px solid var(--border); font-weight: 700; }
+
 /* File viewer / editor (VS Code style: highlighting + gutter + find/replace) */
-.editor { display: flex; flex-direction: column; gap: 8px; }
+.editor { flex: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.editor-head { display: flex; align-items: center; gap: 8px; }
+.editor-head .eh-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-weight: 600; font-size: 14px; }
 .editor-toolbar { display: flex; align-items: center; justify-content: space-between;
   gap: 8px; font-size: 12px; color: var(--muted); }
 .editor-dirty { color: #fbbf24; font-weight: 600; }
@@ -249,7 +279,7 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   min-width: 34px; text-align: center; }
 .pill.sm { padding: 6px 11px; font-size: 13px; }
 .editor-body { display: flex; background: var(--bg); border: 1px solid var(--border);
-  border-radius: 10px; overflow: hidden; height: 56vh; }
+  border-radius: 10px; overflow: hidden; flex: 1; min-height: 0; }
 .editor-gutter { flex-shrink: 0; overflow: hidden; padding: 10px 8px 10px 10px;
   text-align: right; color: var(--muted); opacity: .6; background: var(--panel2);
   border-right: 1px solid var(--border); font-family: monospace; font-size: 12.5px;
