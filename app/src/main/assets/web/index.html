@@ -34,35 +34,53 @@
     </aside>
 
     <div id="mainCol">
-      <main id="chat"></main>
-
-      <div id="todos" class="hidden">
-        <div id="todos-head">
-          <span id="todos-now"></span>
-          <span id="todos-count"></span>
-          <span id="todos-chev">▸</span>
-        </div>
-        <div id="todos-body"></div>
+      <div id="editorEmpty">
+        <div class="ee-title">No file open</div>
+        <div class="ee-sub">Pick a file from the explorer to edit it here,<br>or tap 💬 to chat with the agent.</div>
       </div>
-
-      <div id="status"></div>
-
-      <div id="runbar" class="hidden">
-        <span id="runlabel">Working…</span>
-        <div id="queueChips"></div>
-        <button id="stopBtn" class="pill stop">Stop</button>
-      </div>
-
-      <div id="attachBar" class="hidden"></div>
-
-      <footer id="composer">
-        <textarea id="input" rows="1" placeholder="Type or dictate a task…"></textarea>
-        <button id="askBtn" class="icon" title="Ask (not saved to context)">❓</button>
-        <button id="sendBtn" class="pill">Send</button>
-        <button id="micBtn" class="txtbtn">Speak</button>
-      </footer>
+      <div id="editorPane" class="hidden"></div>
     </div>
   </div>
+
+  <!-- Floating chat button (opens the agent drawer) -->
+  <button id="chatFab" title="Agent chat">💬<span id="chatUnread" class="unread hidden"></span></button>
+
+  <!-- Agent chat drawer (slides in from the right) -->
+  <div id="chatBackdrop" class="hidden"></div>
+  <aside id="chatDrawer">
+    <div id="chatDrawer-head">
+      <span>Agent</span>
+      <button id="chatDrawerClose" class="txtbtn xs" title="Close">✕</button>
+    </div>
+
+    <main id="chat"></main>
+
+    <div id="todos" class="hidden">
+      <div id="todos-head">
+        <span id="todos-now"></span>
+        <span id="todos-count"></span>
+        <span id="todos-chev">▸</span>
+      </div>
+      <div id="todos-body"></div>
+    </div>
+
+    <div id="status"></div>
+
+    <div id="runbar" class="hidden">
+      <span id="runlabel">Working…</span>
+      <div id="queueChips"></div>
+      <button id="stopBtn" class="pill stop">Stop</button>
+    </div>
+
+    <div id="attachBar" class="hidden"></div>
+
+    <footer id="composer">
+      <textarea id="input" rows="1" placeholder="Type or dictate a task…"></textarea>
+      <button id="askBtn" class="icon" title="Ask (not saved to context)">❓</button>
+      <button id="sendBtn" class="pill">Send</button>
+      <button id="micBtn" class="txtbtn">Speak</button>
+    </footer>
+  </aside>
 
   <!-- Slide-up menu -->
   <div id="menu" class="sheet hidden">
