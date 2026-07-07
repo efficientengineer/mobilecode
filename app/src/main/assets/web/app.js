@@ -161,6 +161,7 @@ async function loadHistory() {
   } catch (e) {}
   _loadingHistory = false;
   refreshStats();
+  refreshOpenTabs();   // pick up any files the agent just edited
 }
 
 // The home screen for an empty session: game-making leads, generic coding is one
@@ -1479,6 +1480,25 @@ async function saveTab(rel) {
     tab.saved = pending;
     if (rel === activeTab && tab.content === tab.saved) updateActiveTabDirty(false);
     else renderTabs();
+  }
+}
+
+// Re-read open tabs from disk so agent edits show up. A tab with unsaved local
+// edits (dirty) is left alone so we never clobber what you're typing.
+async function refreshOpenTabs() {
+  for (const tab of openTabs) {
+    if (tab.content !== tab.saved) continue; // don't overwrite unsaved edits
+    let disk;
+    try { disk = (await call("orch", { fn: "read_ws_file", arg: tab.rel })).text || ""; }
+    catch (e) { continue; }
+    if (disk === tab.saved) continue;         // unchanged on disk
+    tab.content = disk;
+    tab.saved = disk;
+    if (tab.rel === activeTab) {
+      const prev = $("#edArea"), st = prev ? prev.scrollTop : 0;
+      renderEditor();
+      const a = $("#edArea"); if (a) { a.scrollTop = st; a.dispatchEvent(new Event("scroll")); }
+    }
   }
 }
 
