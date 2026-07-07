@@ -7,9 +7,6 @@
   <title>Voice Agent</title>
 </head>
 <body>
-  <!-- Thin balance strip across the very top -->
-  <div id="topbalance"><span id="balance" class="balmini">—</span></div>
-
   <!-- Floating controls -->
   <button id="actionsFab" class="fab" title="Actions">⋯</button>
   <button id="menuFab" class="fab" title="Menu">☰</button>
@@ -18,6 +15,7 @@
   <!-- Floating dropdown panels -->
   <div id="modelMenu" class="fabmenu hidden"></div>
   <div id="actionsMenu" class="fabmenu hidden"></div>
+  <div id="chatActionsMenu" class="fabmenu hidden"></div>
 
   <div id="workspace">
     <div id="tabbar">
@@ -38,9 +36,20 @@
   <!-- Explorer tree (opened from the ☰ Files button) -->
   <div id="treeBackdrop" class="hidden"></div>
   <div id="treeOverlay" class="hidden">
+    <div id="githubBar">
+      <button id="githubBtn" class="gh-toggle">GitHub <span class="gh-chev">▾</span></button>
+      <div id="githubMenu" class="hidden">
+        <button data-ghact="switchRepo">Switch repository</button>
+        <button data-ghact="commit">Commit (AI message)</button>
+        <button data-ghact="pull">Pull</button>
+        <button data-ghact="push">Push</button>
+        <button data-ghact="createPR">Merge → open PR</button>
+      </div>
+    </div>
     <div id="treeOverlay-head">
       <span>Explorer</span>
       <span class="to-actions">
+        <button id="newFileBtn" class="txtbtn xs" title="New file">＋ New</button>
         <button id="explorerRefresh" class="txtbtn xs" title="Refresh files">⟳</button>
         <button id="treeClose" class="txtbtn xs" title="Close">✕</button>
       </span>
@@ -56,7 +65,10 @@
   <aside id="chatDrawer">
     <div id="chatDrawer-head">
       <span class="cd-title">Agent</span>
-      <button id="chatDrawerClose" class="txtbtn xs" title="Close">✕</button>
+      <span class="cd-head-actions">
+        <button id="chatActionsBtn" class="txtbtn xs" title="Chat actions">⋯</button>
+        <button id="chatDrawerClose" class="txtbtn xs" title="Close">✕</button>
+      </span>
     </div>
     <div id="chatDrawer-models">
       <div class="modelcol">
@@ -68,6 +80,7 @@
         <button id="modelImpl" class="modelbtn"><span id="implName">…</span> ▾</button>
       </div>
     </div>
+    <div id="chatDrawer-balance"><span class="db-label">DeepSeek balance</span><span id="balance" class="balmini">—</span></div>
 
     <main id="chat"></main>
 

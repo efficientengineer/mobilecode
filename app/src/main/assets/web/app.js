@@ -1214,8 +1214,8 @@ function confirmClone(full) {
   body.innerHTML += `<div class="row" style="margin-top:12px">
     <button class="pill" id="cloneBtn">Clone</button>
     <button class="pill ghost" id="pointBtn">Point at it</button></div>`;
-  $("#cloneBtn").onclick = async () => { closeSheet("#modal"); await runText("Clone", "git.clone", { full }); refreshHeader(); };
-  $("#pointBtn").onclick = async () => { closeSheet("#modal"); await runText("Set repo", "git.setActiveRepo", { full }); refreshHeader(); };
+  $("#cloneBtn").onclick = async () => { closeSheet("#modal"); await runText("Clone", "git.clone", { full }); await onRepoChanged(); };
+  $("#pointBtn").onclick = async () => { closeSheet("#modal"); await runText("Set repo", "git.setActiveRepo", { full }); await onRepoChanged(); };
 }
 
 async function filesModal(path) {
@@ -1352,6 +1352,42 @@ function closeTree() {
   const o = $("#treeOverlay"), b = $("#treeBackdrop");
   if (o) o.classList.add("hidden");
   if (b) b.classList.add("hidden");
+  const gm = $("#githubMenu"); if (gm && !gm.classList.contains("hidden")) toggleGithubMenu();
+}
+function toggleGithubMenu() {
+  const m = $("#githubMenu"), b = $("#githubBtn");
+  if (!m) return;
+  const hidden = m.classList.toggle("hidden");
+  const chev = b && b.querySelector(".gh-chev");
+  if (chev) chev.textContent = hidden ? "▾" : "▴";
+}
+// Create a new empty file from the explorer and open it in a tab for editing.
+function newFile() {
+  modal("New file",
+    `<label>File path (relative to project root)</label>
+     <input id="nfName" type="text" placeholder="src/newfile.js" autocapitalize="off" autocorrect="off" spellcheck="false" />
+     <div class="hint">Creates an empty file and opens it for editing.</div>`,
+    async () => {
+      const name = ($("#nfName").value || "").trim().replace(/^\/+/, "");
+      if (!name) return;
+      const res = await call("py.call", { module: "orchestrator", fn: "write_ws_file", args: [name, ""] });
+      if ((res.text || "").startsWith("Saved")) {
+        closeTree();
+        await openTab(name);
+        const a = $("#edArea"); if (a) a.focus();
+      } else {
+        bubble(res.text || "Could not create file.", "sys");
+      }
+    });
+}
+// After the active repo/session changes, the workspace is different: drop open
+// tabs and let the tree re-read on next open.
+async function onRepoChanged() {
+  openTabs.length = 0;
+  activeTab = null;
+  showEditorEmpty();
+  renderTabs();
+  await refreshHeader();
 }
 
 // --- Syntax highlighting -------------------------------------------------
@@ -1370,13 +1406,19 @@ const HL_KEYWORDS = {
        "continue","in","is","not","and","or","None","True","False","self","raise",
        "global","nonlocal","assert","del","print"],
 };
-function hlOptsFor(rel) {
+function hlLangFor(rel) {
   const ext = (rel.split(".").pop() || "").toLowerCase();
-  if (["py","pyw","sh","bash","yaml","yml","toml","rb","cfg","ini"].includes(ext))
-    return { keywords: HL_KEYWORDS.py, hash: true };
-  return { keywords: HL_KEYWORDS.c, hash: false };
+  if (["html", "htm", "xml", "svg", "vue"].includes(ext)) return "html";
+  if (["css", "scss", "less"].includes(ext)) return "css";
+  if (["py", "pyw", "sh", "bash", "yaml", "yml", "toml", "rb", "cfg", "ini"].includes(ext)) return "py";
+  return "c";
 }
-function highlightCode(code, opts) {
+function highlightCode(code, lang) {
+  if (lang === "html") return highlightHtml(code);
+  if (lang === "css") return highlightCss(code);
+  return highlightGeneric(code, { keywords: lang === "py" ? HL_KEYWORDS.py : HL_KEYWORDS.c, hash: lang === "py" });
+}
+function highlightGeneric(code, opts) {
   const kwRe = opts.keywords.length ? new RegExp("^(?:" + opts.keywords.join("|") + ")$") : null;
   const comment = opts.hash ? "#[^\\n]*" : "//[^\\n]*|/\\*[\\s\\S]*?\\*/";
   const re = new RegExp(
@@ -1396,7 +1438,48 @@ function highlightCode(code, opts) {
     last = re.lastIndex;
   }
   out += escapeHtml(code.slice(last));
-  return out + "\n"; // trailing newline keeps the layer's height in sync
+  return out + "\n";
+}
+// HTML/XML: colors comments, tag names, and quoted attribute values.
+function highlightHtml(code) {
+  const re = /(<!--[\s\S]*?-->)|(<\/?)([A-Za-z][\w:-]*)?|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(>|\/>)/g;
+  let out = "", last = 0, m;
+  while ((m = re.exec(code))) {
+    out += escapeHtml(code.slice(last, m.index));
+    if (m[1]) out += '<span class="tk-c">' + escapeHtml(m[1]) + "</span>";
+    else if (m[2] !== undefined && m[2] !== "") {
+      out += '<span class="tk-p">' + escapeHtml(m[2]) + "</span>";
+      if (m[3]) out += '<span class="tk-k">' + escapeHtml(m[3]) + "</span>";
+    } else if (m[4]) out += '<span class="tk-s">' + escapeHtml(m[4]) + "</span>";
+    else if (m[5]) out += '<span class="tk-p">' + escapeHtml(m[5]) + "</span>";
+    else out += escapeHtml(m[0]);
+    last = re.lastIndex;
+  }
+  out += escapeHtml(code.slice(last));
+  return out + "\n";
+}
+// CSS: colors comments, strings, hex colors, numbers/units, at-rules, and
+// property names (identifiers immediately followed by a colon).
+function highlightCss(code) {
+  const re = /(\/\*[\s\S]*?\*\/)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(#[0-9a-fA-F]{3,8}\b)|(-?\d[\d.]*(?:px|em|rem|%|vh|vw|vmin|vmax|s|ms|deg|fr|pt|ch|ex)?\b)|(@[\w-]+)|([A-Za-z_-][\w-]*)/g;
+  let out = "", last = 0, m;
+  while ((m = re.exec(code))) {
+    out += escapeHtml(code.slice(last, m.index));
+    if (m[1]) out += '<span class="tk-c">' + escapeHtml(m[1]) + "</span>";
+    else if (m[2]) out += '<span class="tk-s">' + escapeHtml(m[2]) + "</span>";
+    else if (m[3]) out += '<span class="tk-n">' + escapeHtml(m[3]) + "</span>";
+    else if (m[4]) out += '<span class="tk-n">' + escapeHtml(m[4]) + "</span>";
+    else if (m[5]) out += '<span class="tk-k">' + escapeHtml(m[5]) + "</span>";
+    else if (m[6]) {
+      // Property name if the next non-space char is a colon.
+      const rest = code.slice(re.lastIndex);
+      const isProp = /^\s*:/.test(rest);
+      out += isProp ? '<span class="tk-p">' + escapeHtml(m[6]) + "</span>" : escapeHtml(m[6]);
+    } else out += escapeHtml(m[0]);
+    last = re.lastIndex;
+  }
+  out += escapeHtml(code.slice(last));
+  return out + "\n";
 }
 function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
@@ -1512,7 +1595,7 @@ function renderEditor() {
   empty.classList.add("hidden");
   pane.classList.remove("hidden");
   fab.classList.remove("hidden");
-  const hlOpts = hlOptsFor(tab.rel);
+  const hlLang = hlLangFor(tab.rel);
   pane.innerHTML =
     `<div class="editor">
        <div class="editor-body">
@@ -1548,7 +1631,7 @@ function renderEditor() {
     for (let i = 1; i <= lines; i++) s += i + "\n";
     gutter.textContent = s;
   }
-  function renderHl() { hl.innerHTML = highlightCode(area.value, hlOpts); }
+  function renderHl() { hl.innerHTML = highlightCode(area.value, hlLang); }
   function refresh() { renderGutter(); renderHl(); findMatches(); }
   // Any edit updates the tab buffer, flags dirty, and schedules an auto-save.
   function onEdit() {
@@ -1708,9 +1791,10 @@ async function askEphemeral(q) {
 
 // --- Floating controls (menu / model picker / actions catch-all) ---------
 function closeFabMenus() {
-  const mm = $("#modelMenu"), am = $("#actionsMenu");
+  const mm = $("#modelMenu"), am = $("#actionsMenu"), cm = $("#chatActionsMenu");
   if (mm) mm.classList.add("hidden");
   if (am) am.classList.add("hidden");
+  if (cm) cm.classList.add("hidden");
 }
 function positionFabMenu(menu, fab, align) {
   const r = fab.getBoundingClientRect();
@@ -1791,18 +1875,44 @@ function openActionsMenu() {
     el.onclick = () => { menu.classList.add("hidden"); (actions[el.getAttribute("data-fabact")] || (() => {}))(); };
   });
 }
+// Chat-relevant actions (context + guidelines), opened from the drawer's ⋯.
+const CHAT_ACTION_ITEMS = [
+  { label: "Clear context", act: "clearContext" },
+  { label: "Guidelines", act: "guidelines" },
+  { label: "View context", act: "viewContext" },
+  { label: "Preview payload", act: "previewContext" },
+  { label: "Attach files", act: "contextFiles" },
+];
+function openChatActionsMenu() {
+  const menu = $("#chatActionsMenu");
+  if (!menu.classList.contains("hidden")) { menu.classList.add("hidden"); return; }
+  closeFabMenus();
+  menu.innerHTML = CHAT_ACTION_ITEMS.map((a) => `<div class="fab-item" data-chatact="${a.act}">${a.label}</div>`).join("");
+  positionFabMenu(menu, $("#chatActionsBtn"), "right");
+  menu.classList.remove("hidden");
+  menu.querySelectorAll("[data-chatact]").forEach((el) => {
+    el.onclick = () => { menu.classList.add("hidden"); (actions[el.getAttribute("data-chatact")] || (() => {}))(); };
+  });
+}
 
 // --- Wire up -------------------------------------------------------------
 $("#menuFab").onclick = () => { closeFabMenus(); openSheet("#menu"); };
 $("#actionsFab").onclick = (e) => { e.stopPropagation(); openActionsMenu(); };
 $("#modelLead").onclick = (e) => { e.stopPropagation(); openModelMenu("orchestrator", e.currentTarget); };
 $("#modelImpl").onclick = (e) => { e.stopPropagation(); openModelMenu("implementer", e.currentTarget); };
+$("#chatActionsBtn").onclick = (e) => { e.stopPropagation(); openChatActionsMenu(); };
 document.addEventListener("click", (e) => {
-  if (!e.target.closest(".fab") && !e.target.closest(".fabmenu")) closeFabMenus();
+  if (!e.target.closest(".fab") && !e.target.closest(".fabmenu") &&
+      !e.target.closest("#chatActionsBtn") && !e.target.closest("#modelLead") && !e.target.closest("#modelImpl")) closeFabMenus();
 });
 $("#filesBtn").onclick = openTree;
 $("#treeClose").onclick = closeTree;
 $("#treeBackdrop").onclick = closeTree;
+$("#newFileBtn").onclick = newFile;
+$("#githubBtn").onclick = toggleGithubMenu;
+document.querySelectorAll("#githubMenu [data-ghact]").forEach((b) => {
+  b.onclick = () => { closeTree(); (actions[b.dataset.ghact] || (() => {}))(); };
+});
 $("#chatFab").onclick = toggleChat;
 $("#chatDrawerClose").onclick = closeChat;
 $("#chatBackdrop").onclick = closeChat;
