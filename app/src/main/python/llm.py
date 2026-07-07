@@ -618,6 +618,7 @@ def chat_text(model, system, user, max_tokens=4000, on_delta=None):
     AGENT_FALLBACK_MODEL if the primary provider fails after retries.
     """
     messages = [{"role": "user", "content": user}]
+    used = model  # track the model that actually served the response
     try:
         r = chat(model, system, messages, max_tokens=max_tokens, on_delta=on_delta)
     except Exception:
@@ -625,12 +626,19 @@ def chat_text(model, system, user, max_tokens=4000, on_delta=None):
         if not fb or fb == model:
             raise
         r = chat(fb, system, messages, max_tokens=max_tokens, on_delta=on_delta)
+        used = fb
     text, reasoning = r["text"], r["reasoning"]
     if r["stop"] == "max_tokens":
         messages.append({"role": "assistant", "content": text})
         messages.append({"role": "user", "content":
                          "Continue exactly where you left off. Do not repeat anything."})
-        r2 = chat(model, system, messages, max_tokens=max_tokens, on_delta=on_delta)
-        text += r2["text"]
-        reasoning += r2["reasoning"]
+        # Continue with the model that produced this reply (not the primary that
+        # may have just failed) — else the continuation raises and discards the
+        # good partial answer, or splices a different model's text.
+        try:
+            r2 = chat(used, system, messages, max_tokens=max_tokens, on_delta=on_delta)
+            text += r2["text"]
+            reasoning += r2["reasoning"]
+        except Exception:
+            pass  # keep the partial answer we already have
     return text, reasoning

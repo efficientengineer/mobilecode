@@ -536,14 +536,19 @@ def _full_context(task_hint: str = "", mode: str = "") -> str:
     mem_name, mem = _memory(root)
     if mem:
         parts.append(f"PROJECT GUIDELINES ({mem_name}):\n" + mem)
-    bp = _best_practices_section(task_hint, root)
-    if bp:
-        parts.append("BEST PRACTICES (apply these by default; the user's own "
-                     "take priority over the built-ins):\n" + bp)
+    # The chat/ask path is a deliberately lightweight single shot where the model
+    # can't edit, so skip the build-oriented BEST PRACTICES and DEPENDENCY MAP
+    # (pure build guidance) — keep only guidelines + outline + attached + disc.
+    is_chat = mode == "chat"
+    if not is_chat:
+        bp = _best_practices_section(task_hint, root)
+        if bp:
+            parts.append("BEST PRACTICES (apply these by default; the user's own "
+                         "take priority over the built-ins):\n" + bp)
     outline = _outline_file(root)
     if outline.exists():
         parts.append("PROJECT OUTLINE:\n" + outline.read_text(encoding="utf-8"))
-    dep = _depgraph_section(root)
+    dep = _depgraph_section(root) if not is_chat else ""
     if dep:
         parts.append(
             "DEPENDENCY MAP (path → files it imports; to understand a feature, "
@@ -896,14 +901,34 @@ def _outline_manifest_path(root: Path = None) -> Path:
     return _agent_dir(root) / "outline_manifest.json"
 
 
-def _file_hashes(root: Path, files: list) -> dict:
-    """sha1 of each readable file's content, keyed by path."""
+def _manifest_hash(v):
+    """Extract the content hash from a manifest value (old str or new dict form)."""
+    return v if isinstance(v, str) else (v or {}).get("h")
+
+
+def _file_hashes(root: Path, files: list, prev: dict = None) -> dict:
+    """Per-file {'h': sha1, 'mt': mtime, 'sz': size}, keyed by path.
+
+    Reuses the previous entry (skipping the read+sha1) for any file whose
+    (mtime, size) is unchanged — so a no-change build no longer re-reads every
+    file just to detect that nothing moved."""
     import hashlib
+    prev = prev or {}
     out = {}
     for f in files:
+        try:
+            st = (root / f).stat()
+            mt, sz = int(st.st_mtime), st.st_size
+        except Exception:
+            mt = sz = None
+        pv = prev.get(f)
+        if mt is not None and isinstance(pv, dict) and pv.get("mt") == mt and pv.get("sz") == sz and pv.get("h"):
+            out[f] = pv
+            continue
         c = _read_file(root, f)
         if c is not None:
-            out[f] = hashlib.sha1(c.encode("utf-8", "replace")).hexdigest()
+            out[f] = {"h": hashlib.sha1(c.encode("utf-8", "replace")).hexdigest(),
+                      "mt": mt or 0, "sz": sz or 0}
     return out
 
 
@@ -915,7 +940,6 @@ def build_outline(_=None) -> str:
     try:
         root = _workspace()
         files = _list_repo_files(root, max_files=120)
-        hashes = _file_hashes(root, files)
 
         prev = ""
         of = _outline_file(root)
@@ -933,7 +957,9 @@ def build_outline(_=None) -> str:
             except Exception:
                 manifest = {}
 
-        changed = [f for f in files if hashes.get(f) != manifest.get(f)]
+        # Hash with the prior manifest so unchanged files skip the read+sha1.
+        hashes = _file_hashes(root, files, manifest)
+        changed = [f for f in files if _manifest_hash(hashes.get(f)) != _manifest_hash(manifest.get(f))]
         deleted = [f for f in manifest if f not in hashes]
 
         def snippets_for(paths):

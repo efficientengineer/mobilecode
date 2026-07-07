@@ -58,6 +58,27 @@ def _resolve(rel: str) -> Path:
     return fp
 
 
+def _atomic_write(fp: Path, content: str) -> None:
+    """Write via a sibling temp file + rename so a kill mid-write can't leave the
+    destination truncated (Android backgrounds/kills the process freely)."""
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    tmp = fp.with_name(fp.name + ".tmp~")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(str(tmp), str(fp))
+
+
+def _read_strict(fp: Path):
+    """Read as UTF-8 without lossy replacement. Returns (text, None) or
+    (None, error) so an edit refuses rather than round-tripping a binary/latin-1
+    file through U+FFFD and corrupting bytes outside the edited span."""
+    try:
+        return fp.read_bytes().decode("utf-8"), None
+    except UnicodeDecodeError:
+        return None, (f"(refused — {fp.name} is not valid UTF-8 (binary or a "
+                      "non-UTF-8 encoding). Editing it here would corrupt bytes "
+                      "outside your change.)")
+
+
 def _need_path(path, tool):
     """Return an error string if `path` is unusable, else None. Guards the
     common failure where a model omits/renames the path arg and it defaults to
@@ -127,6 +148,16 @@ def _iter_files(root: Path):
             yield p
 
 
+def _looks_binary(p: Path) -> bool:
+    """A NUL byte in the first chunk is a reliable binary signal — skip these so
+    grep doesn't fill the match budget with U+FFFD noise from PNGs/fonts/blobs."""
+    try:
+        with open(p, "rb") as f:
+            return b"\x00" in f.read(2048)
+    except Exception:
+        return True
+
+
 # --- inspection --------------------------------------------------------------
 
 def t_read_file(path="", start_line=0, end_line=0, **_):
@@ -146,9 +177,19 @@ def t_read_file(path="", start_line=0, end_line=0, **_):
     e = int(end_line or 0) or len(lines)
     picked = lines[s - 1:e]
     cap = _read_cap()
+    truncated = ""
     if len(picked) > cap:
-        picked = picked[:cap] + [f"…({len(lines)} lines total; request a range for more)"]
-    return "\n".join(f"{i + s}\t{l}" for i, l in enumerate(picked)) or "(empty file)"
+        picked = picked[:cap]
+        truncated = f"\n…({len(lines)} lines total; request a range for more)"
+    # Clip very long individual lines (e.g. a minified bundle is one giant line
+    # under the line cap) so a single read can't dump megabytes into context.
+    line_clip = 2000
+    out = []
+    for i, l in enumerate(picked):
+        if len(l) > line_clip:
+            l = l[:line_clip] + f"…[+{len(l) - line_clip} chars clipped]"
+        out.append(f"{i + s}\t{l}")
+    return ("\n".join(out) + truncated) or "(empty file)"
 
 
 def t_list_files(pattern="", **_):
@@ -180,6 +221,8 @@ def t_grep(pattern="", glob="", **_):
     for p in _iter_files(root):
         rel = str(p.relative_to(root))
         if glob and not fnmatch.fnmatch(rel, glob):
+            continue
+        if _looks_binary(p):
             continue
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
@@ -256,7 +299,10 @@ def t_web_fetch(url="", max_chars=20000, **_):
         limit = int(max_chars)
     except Exception:
         limit = 20000
-    limit = max(1000, min(limit, 100000))
+    # Cap below the 30000-char per-tool-result transport limit in llm.py, so a
+    # larger request isn't silently re-truncated (and the full body isn't
+    # decoded/stored only to be cut every step).
+    limit = max(1000, min(limit, 28000))
     clipped = len(body) > limit
     return (f"URL: {url}\n\n" + body[:limit] +
             (f"\n\n…[truncated at {limit} chars of {len(body)}]" if clipped else ""))
@@ -277,8 +323,7 @@ def t_write_file(path="", content="", **_):
                 "tag (or an ESM import map) to your HTML and use it at runtime — "
                 "the library then never enters the workspace.)")
     fp = _resolve(path)
-    fp.parent.mkdir(parents=True, exist_ok=True)
-    fp.write_text(content, encoding="utf-8")
+    _atomic_write(fp, content)
     TOUCHED.add(str(path))
     nlines = content.count("\n") + 1
     warn = ""
@@ -299,7 +344,9 @@ def t_str_replace(path="", old="", new="", replace_all=False, **_):
     fp = _resolve(path)
     if not fp.exists():
         return f"(no such file: {path} — use write_file to create it)"
-    text = fp.read_text(encoding="utf-8", errors="replace")
+    text, rerr = _read_strict(fp)
+    if rerr:
+        return rerr
     if old == "":
         return "(old must be non-empty; use write_file for full rewrites)"
     count = text.count(old)
@@ -310,7 +357,7 @@ def t_str_replace(path="", old="", new="", replace_all=False, **_):
         return (f"({count} matches in {path} — make `old` more specific or set "
                 "replace_all)")
     text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
-    fp.write_text(text, encoding="utf-8")
+    _atomic_write(fp, text)
     TOUCHED.add(str(path))
     return f"replaced {count if replace_all else 1} occurrence(s) in {path}"
 

@@ -24,11 +24,19 @@ REPAIR_ROUNDS = 2
 
 # --- events / interrupt (same file + flag the orchestrator uses) -----------
 
+_AGENT_DIR_CACHE = {}
+
+
 def _agent_dir() -> Path:
     ws = os.environ.get("AGENT_WORKSPACE") or os.path.join(
         os.environ.get("HOME", "/tmp"), "workspace")
-    d = Path(ws) / ".agent"
-    d.mkdir(parents=True, exist_ok=True)
+    d = _AGENT_DIR_CACHE.get(ws)
+    if d is None:
+        # mkdir once per workspace, not on every event — _emit flushes a delta
+        # every ~160 chars, so a long response fired hundreds of syscalls here.
+        d = Path(ws) / ".agent"
+        d.mkdir(parents=True, exist_ok=True)
+        _AGENT_DIR_CACHE[ws] = d
     return d
 
 

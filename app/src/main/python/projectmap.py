@@ -54,16 +54,20 @@ def _lang(rel: str) -> str:
 
 
 def _src_files(root: Path, max_files: int = 250) -> list:
+    # os.walk with in-place dir pruning so we never descend into node_modules/.git
+    # (rglob would materialize + sort every path first, including those trees).
+    skip = {".git", ".agent", "node_modules", "__pycache__"}
     out = []
-    for p in sorted(root.rglob("*")):
-        if any(x in p.parts for x in (".git", ".agent", "node_modules")):
-            continue
-        if p.name in ("meta.json", "transcript.jsonl"):
-            continue
-        if p.is_file() and p.suffix.lower() in _SRC_EXT:
-            out.append(str(p.relative_to(root)))
-        if len(out) >= max_files:
-            break
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in skip)
+        for name in sorted(filenames):
+            if name in ("meta.json", "transcript.jsonl"):
+                continue
+            p = Path(dirpath) / name
+            if p.suffix.lower() in _SRC_EXT:
+                out.append(str(p.relative_to(root)))
+                if len(out) >= max_files:
+                    return out
     return out
 
 
