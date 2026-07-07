@@ -69,6 +69,7 @@ import { party } from './engine/control/party.js';
 import { ailments } from './engine/control/ailments.js';
 import { encounters } from './engine/control/encounters.js';
 import { rewards } from './engine/control/rewards.js';
+import { commands } from './engine/control/commands.js';
 
 let pass = 0;
 const check = (name, cond) => { if (!cond) { console.error('  FAIL:', name); process.exit(1); } console.log('  ok:', name); pass++; };
@@ -2529,6 +2530,60 @@ const sim = (ctx) => { initMovement(ctx); initAI(ctx); initFire(ctx); initSpawn(
   check('rewards: bonuses stack', Math.abs(stacked.xp - 1.5 * 1.25) < 1e-9);
   const folded = rewards.computeRewards([{ xp: 100, gil: 100, ap: 0 }], { rng: () => 0.99, bonus: { noDeath: true } });
   check('rewards: computeRewards folds a conditions bag', folded.xp === 150);
+}
+
+// ===== FF6 Round 10: commands (per-character battle menus) =====
+{
+  // commands — FF6 per-character battle command sets (authored test)
+  const fx = { physical: ({ atk = 0, def = 0, power = 0 }) => ({ amount: Math.max(1, atk - def + power), crit: false, missed: false }) };
+  const set = commands.makeCommandSet(commands.baseCommands([commands.steal()]));
+  check('commands: baseCommands is Fight/Magic/Item', commands.baseCommands().map((c) => c.name).join(',') === 'Fight,Magic,Item');
+  check('commands: set get/has', set.has('Fight') && !!set.get('Steal') && set.get('Nope') === null);
+
+  const user = { hp: 100, mp: 20, vigor: 10, magic: 8, level: 5 };
+  const enemy = { hp: 50, defense: 2, level: 3 };
+  const res = set.run('Fight', user, [enemy], { formulas: fx, rng: () => 0.5, weapon: { power: 5 } });
+  check('commands: Fight deals damage via injected formulas', res.length === 1 && res[0].amount > 0 && enemy.hp < 50);
+
+  // list drops a command disabled for this unit (e.g. sealed by a status)
+  const sealed = { name: 'Sealed', kind: 'skill', enabled: (u) => !u.silenced, resolve: () => [] };
+  const s2 = commands.makeCommandSet([commands.attack(), sealed]);
+  check('commands: list hides a disabled command', s2.list({ silenced: true }).length === 1 && s2.list({}).length === 2);
+
+  // the run() gate: mp-gated command blocked when short, spends when affordable
+  const bigSet = commands.makeCommandSet([{ name: 'Big', kind: 'skill', mp: 10, resolve: () => [{ target: null, amount: 99 }] }]);
+  const poor = { hp: 100, mp: 5 };
+  const r2 = bigSet.run('Big', poor, [], {});
+  check('commands: mp-gated command blocked when short', r2.ok === false && r2.reason === 'mp' && r2.length === 0);
+  const rich = { hp: 100, mp: 50 };
+  const r3 = bigSet.run('Big', rich, [], {});
+  check('commands: mp command runs + spends when affordable', r3.length === 1 && rich.mp === 40);
+  check('commands: run refuses an unknown command', bigSet.run('Nope', rich, [], {}).ok === false);
+
+  // Steal (Locke): rng-gated grab from target.steal
+  const thief = { level: 5 }, mark = { hp: 30, level: 3, steal: { common: 'Potion' } };
+  const rsY = commands.steal({ chance: 0.5 }).resolve(thief, [mark], { rng: () => 0.1 });
+  check('commands: steal succeeds on a low roll', rsY[0].success === true && rsY[0].item === 'Potion');
+  const rsN = commands.steal({ chance: 0.5 }).resolve(thief, [mark], { rng: () => 0.99 });
+  check('commands: steal fails on a high roll', rsN[0].success === false);
+
+  // Blitz (Sabin): fires only on the right directional input
+  const blz = commands.blitz({ input: ['down', 'right'], power: 60 });
+  const bad = blz.resolve(user, [{ hp: 80 }], { formulas: fx, rng: () => 0.5, input: ['up'] });
+  check('commands: blitz botches on wrong input', bad.landed === false && bad.length === 0);
+  const foe = { hp: 80, defense: 0, level: 1 };
+  const good = blz.resolve(user, [foe], { formulas: fx, rng: () => 0.5, input: ['down', 'right'] });
+  check('commands: blitz connects on the right input', good.length === 1 && foe.hp < 80);
+
+  // SwdTech (Cyan): chargeable tiers, top tier sweeps the enemy side
+  const st = commands.swdTech();
+  const a = { hp: 300, defense: 0, level: 1 }, b = { hp: 300, defense: 0, level: 1 };
+  const t0 = st.resolve(user, [a], { formulas: fx, rng: () => 0.5, tier: 0 });
+  check('commands: swdTech tier 0 hits one (Dispatch)', t0.length === 1 && t0.tier === 'Dispatch');
+  const t3 = st.resolve(user, [a], { formulas: fx, rng: () => 0.5, tier: 3, enemies: [a, b] });
+  check('commands: swdTech QuadraSlam sweeps all enemies', t3.length === 2 && t3.tier === 'QuadraSlam');
+
+  check('commands bundle exposes the verbs', ['makeCommandSet', 'baseCommands', 'attack', 'magic', 'item', 'steal', 'blitz', 'swdTech', 'tools', 'lore', 'hurl'].every((k) => typeof commands[k] === 'function'));
 }
 
 console.log('\nENGINE: ALL ' + pass + ' CHECKS PASSED');
