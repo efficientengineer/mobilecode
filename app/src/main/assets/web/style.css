@@ -245,6 +245,11 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   border: 1px solid var(--border); border-radius: 10px; padding: 12px; font-size: 12.5px;
   max-height: 60vh; overflow: auto; }
 .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+.hint.danger { color: #f87171; }
+.adv-toggle { width: 100%; background: var(--panel2); color: var(--muted); border-radius: 12px;
+  padding: 12px; margin-top: 14px; font-weight: 700; font-size: 13px; }
+.adv-toggle:active { background: var(--border); }
+#advSection.hidden { display: none; }
 
 /* Main area: editor pane fills it; an empty-state shows when nothing is open. */
 #editorEmpty { flex: 1; display: flex; flex-direction: column; align-items: center;

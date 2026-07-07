@@ -203,6 +203,31 @@ def create_repo(name: str, private: bool = True) -> str:
         return "Create repo failed:\n" + traceback.format_exc()
 
 
+def delete_repo(full: str) -> str:
+    """Delete a GitHub repo (owner/name, or just name for the current user)."""
+    full = (full or "").strip().strip("/")
+    if not full:
+        return "Delete repo failed: no repository given."
+    try:
+        if "/" not in full:
+            full = f"{current_user()}/{full}"
+        _api("DELETE", f"/repos/{full}")
+        return f"Deleted {full}"
+    except _GitHubApiError as e:
+        if e.code in (403, 401):
+            return (
+                f"Delete repo failed: your GitHub token isn't allowed to delete "
+                f"'{full}'.\n\nGive the token the \"delete_repo\" scope (classic) "
+                "and make sure you own the repo, then try again.\n\n"
+                f"(GitHub said: {e.message or e.detail})"
+            )
+        if e.code == 404:
+            return f"Delete repo failed: '{full}' not found (or no access)."
+        return f"Delete repo failed: GitHub returned HTTP {e.code}.\n\n{e.message or e.detail}"
+    except Exception:
+        return "Delete repo failed:\n" + traceback.format_exc()
+
+
 def list_repos() -> str:
     """JSON array of the user's repo full names (most recently pushed first)."""
     try:
