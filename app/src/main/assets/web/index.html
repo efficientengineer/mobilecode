@@ -33,6 +33,7 @@
         <div class="ee-sub">Tap <b>☰ Files</b> to browse the project,<br>or tap 💬 to chat with the agent.</div>
       </div>
       <div id="editorPane" class="hidden"></div>
+      <button id="edDiffFab" class="hidden" title="Toggle diff (vs last commit)">±</button>
       <button id="edFindFab" class="hidden" title="Find &amp; replace">🔍</button>
     </div>
   </div>
@@ -127,33 +128,15 @@
           <button data-act="checkWeb">Check web</button>
         </div>
 
-        <div class="group-title">Git &amp; PR</div>
-        <div class="grid">
-          <button data-act="diff">Diff</button>
-          <button data-act="revertLast">Revert last</button>
-          <button data-act="autocommit">Autocommit: —</button>
-          <button data-act="forcePush">Force push</button>
-          <button data-act="startBranch">Start branch</button>
-          <button data-act="prStatus">PR status</button>
-          <button data-act="cloudBuild">Build in cloud</button>
-          <button data-act="buildStatus">Build status</button>
-          <button data-act="fixBuild">Fix CI build</button>
-          <button data-act="watchPr">Watch PR</button>
-        </div>
-
         <div class="group-title">Context</div>
         <div class="grid">
           <button data-act="trimContext">Trim context</button>
           <button data-act="compaction">Compaction</button>
-          <button data-act="caveman">Caveman: —</button>
-          <button data-act="effort">Effort: —</button>
-          <button data-act="frugal">Frugal: —</button>
         </div>
 
         <div class="group-title">System</div>
         <div class="grid">
           <button data-act="battery">Battery</button>
-          <button data-act="speak">Speak replies: —</button>
           <button data-act="updateApp">Update app</button>
         </div>
       </div>

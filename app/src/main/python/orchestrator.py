@@ -690,6 +690,18 @@ def read_ws_file(path="") -> str:
     return ""
 
 
+def head_file(path="") -> str:
+    """A workspace file's contents at HEAD (last commit); '' if untracked/new.
+
+    Used by the editor's inline diff view to compare the working buffer against
+    what's committed.
+    """
+    rel = str(path).strip()
+    if not rel:
+        return ""
+    return _head_file(_workspace(), rel) or ""
+
+
 def write_ws_file(path="", content="") -> str:
     """Save the editor's contents to a workspace file (creates it if new).
 

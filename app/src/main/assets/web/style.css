@@ -63,6 +63,8 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
   overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .fab-item:active { background: var(--panel2); }
 .fab-item.muted { color: var(--muted); white-space: normal; }
+.fab-head { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--muted); padding: 8px 12px 4px; margin-top: 4px; border-top: 1px solid var(--border); }
 
 /* Workspace: the file explorer + the main (chat/editor) column. Reorients by
    device orientation — explorer on top in portrait, on the left in landscape.
@@ -108,12 +110,25 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 
 
 /* Floating find button inside the editor. */
-#edFindFab { position: absolute; z-index: 15; top: 8px; right: 10px; width: 40px; height: 40px;
+#edFindFab, #edDiffFab { position: absolute; z-index: 15; top: 8px; width: 40px; height: 40px;
   border-radius: 20px; background: var(--panel2); color: var(--text); border: 1px solid var(--border);
   font-size: 17px; display: flex; align-items: center; justify-content: center;
   box-shadow: 0 2px 8px rgba(0,0,0,.45); }
-#edFindFab.hidden { display: none; }
-#edFindFab:active { background: var(--border); }
+#edFindFab { right: 10px; }
+#edDiffFab { right: 56px; font-weight: 700; }
+#edDiffFab.active { background: var(--accent); color: #fff; border-color: transparent; }
+#edFindFab.hidden, #edDiffFab.hidden { display: none; }
+#edFindFab:active, #edDiffFab:active { background: var(--border); }
+
+/* Inline diff view (working buffer vs last commit), overlays the code. */
+.editor-diff { position: absolute; inset: 0; margin: 0; padding: 8px 10px; overflow: auto;
+  font-family: monospace; font-size: 12.5px; line-height: 1.5; white-space: pre;
+  z-index: 3; background: var(--bg); }
+.editor-diff.hidden { display: none; }
+.di-add { background: rgba(34,197,94,.16); color: #a6e3a1; display: block; }
+.di-del { background: rgba(239,68,68,.16); color: #f38ba8; display: block; }
+.di-ctx { color: var(--muted); display: block; }
+.di-empty { color: var(--muted); }
 
 /* Tree rows */
 .tree-row { display: flex; align-items: center; gap: 5px; padding: 5px 12px;
