@@ -15,7 +15,7 @@
       <div id="stats"></div>
     </div>
     <div id="quick">
-      <button class="txtbtn" data-act="files">Files</button>
+      <button class="txtbtn" data-act="code">Code</button>
       <button class="txtbtn" data-act="commit">Commit</button>
       <button class="txtbtn" data-act="push">Push</button>
     </div>
@@ -53,6 +53,27 @@
     <button id="micBtn" class="txtbtn">Speak</button>
   </footer>
 
+  <!-- VS Code-like file viewer -->
+  <div id="code" class="panel hidden">
+    <header class="code-top">
+      <button id="codeTreeToggle" class="txtbtn" title="Toggle file tree">☰</button>
+      <div class="code-repo" id="codeRepo">—</div>
+      <button id="codeRefresh" class="txtbtn" title="Reload files">⟳</button>
+      <button id="codeClose" class="txtbtn" title="Close">✕</button>
+    </header>
+    <div class="code-body">
+      <aside id="codeTree" class="code-tree"></aside>
+      <div id="codeTreeScrim" class="code-scrim hidden"></div>
+      <section class="code-main">
+        <div id="codeTabs" class="code-tabs"></div>
+        <div id="codeCrumb" class="code-crumb hidden"></div>
+        <div id="codeView" class="code-view">
+          <div class="code-empty">Select a file from the tree to view it.</div>
+        </div>
+      </section>
+    </div>
+  </div>
+
   <!-- Slide-up menu -->
   <div id="menu" class="sheet hidden">
     <div class="sheet-inner">
@@ -62,7 +83,7 @@
       <div class="grid">
         <button data-act="sessions">Projects</button>
         <button data-act="models">Models</button>
-        <button data-act="files">Files</button>
+        <button data-act="code">Code viewer</button>
         <button data-act="guidelines">Guidelines</button>
         <button data-act="contextFiles">Attach files</button>
         <button data-act="buildOutline">Build outline</button>
@@ -74,6 +95,8 @@
         <button data-act="commit">Commit</button>
         <button data-act="push">Push</button>
         <button data-act="pull">Pull</button>
+        <button data-act="createPR">Create PR</button>
+        <button data-act="listPRs">Pull requests</button>
         <button data-act="newRepo">New repo</button>
         <button data-act="switchRepo">Switch repo</button>
         <button data-act="cloudBuild">Build in cloud</button>

@@ -311,12 +311,36 @@ class MainActivity : AppCompatActivity() {
         "git.cloudBuild" -> withContext(Dispatchers.IO) { text(py("git_ops").callAttr("cloud_build").toString()) }
         "git.buildStatus" -> withContext(Dispatchers.IO) { text(py("git_ops").callAttr("latest_build").toString()) }
         "git.createRepo" -> withContext(Dispatchers.IO) {
-            val r = py("git_ops").callAttr("create_repo", arg.getString("name"), true).toString()
+            val r = py("git_ops").callAttr(
+                "create_repo", arg.getString("name"),
+                arg.optBoolean("private", true), arg.optString("description")
+            ).toString()
             if (r.startsWith("Created ")) sessions.setActiveRepo(sessions.activeId(), r.removePrefix("Created ").trim())
             text(r)
         }
         "git.listRepos" -> withContext(Dispatchers.IO) {
             JSONObject().put("repos", JSONArray(py("git_ops").callAttr("list_repos").toString()))
+        }
+        "git.reposDetailed" -> withContext(Dispatchers.IO) {
+            JSONObject().put("repos", JSONArray(py("git_ops").callAttr("list_repos_detailed").toString()))
+        }
+        "git.repoInfo" -> withContext(Dispatchers.IO) {
+            JSONObject(py("git_ops").callAttr("repo_info").toString())
+        }
+        "git.branches" -> withContext(Dispatchers.IO) {
+            JSONObject().put("branches", JSONArray(py("git_ops").callAttr("list_branches").toString()))
+        }
+        "git.pushBranch" -> withContext(Dispatchers.IO) {
+            text(py("git_ops").callAttr("push_branch", arg.optString("branch")).toString())
+        }
+        "git.createPR" -> withContext(Dispatchers.IO) {
+            text(py("git_ops").callAttr(
+                "create_pull_request", arg.optString("title"), arg.optString("body"),
+                arg.optString("head"), arg.optString("base")
+            ).toString())
+        }
+        "git.listPRs" -> withContext(Dispatchers.IO) {
+            JSONObject().put("prs", JSONArray(py("git_ops").callAttr("list_prs").toString()))
         }
         "git.clone" -> withContext(Dispatchers.IO) {
             val full = arg.getString("full")

@@ -156,3 +156,76 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   border: 1px solid var(--border); border-radius: 10px; padding: 12px; font-size: 12.5px;
   max-height: 60vh; overflow: auto; }
 .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+/* --- VS Code-like file viewer ------------------------------------------- */
+.panel { position: fixed; inset: 0; z-index: 30; background: var(--bg);
+  display: flex; flex-direction: column; }
+.panel.hidden { display: none; }
+.code-top { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  background: var(--panel); border-bottom: 1px solid var(--border); }
+.code-repo { flex: 1; min-width: 0; font-size: 13px; font-weight: 600;
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.code-body { flex: 1; display: flex; min-height: 0; position: relative; }
+
+/* Tree acts as an in-panel drawer on narrow screens. */
+.code-tree { width: 78%; max-width: 340px; flex-shrink: 0; overflow: auto;
+  background: var(--panel); border-right: 1px solid var(--border);
+  padding: 6px 0 40px; position: absolute; inset: 0 auto 0 0; z-index: 2;
+  transform: translateX(-102%); transition: transform .18s ease; }
+.code-tree.open { transform: translateX(0); }
+.code-scrim { position: absolute; inset: 0; background: rgba(0,0,0,.45); z-index: 1; }
+.code-scrim.hidden { display: none; }
+.tree-row { display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+  font-size: 13.5px; white-space: nowrap; }
+.tree-row:active { background: var(--panel2); }
+.tree-row.dir { font-weight: 600; }
+.tree-row .twig { color: var(--muted); width: 12px; text-align: center; flex-shrink: 0; }
+.tree-row .tname { overflow: hidden; text-overflow: ellipsis; }
+.tree-row.file.pinned .tname::before { content: "📎 "; }
+.tree-row.active { background: var(--panel2); color: var(--accent); }
+
+.code-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.code-tabs { display: flex; gap: 2px; overflow-x: auto; background: var(--panel);
+  border-bottom: 1px solid var(--border); min-height: 0; }
+.code-tabs:empty { display: none; }
+.code-tab { display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 12px;
+  font-size: 12.5px; color: var(--muted); border-right: 1px solid var(--border);
+  white-space: nowrap; background: var(--panel); }
+.code-tab.active { color: var(--text); background: var(--bg); border-bottom: 2px solid var(--accent); }
+.code-tab b { color: var(--muted); font-size: 14px; padding: 0 2px; }
+.code-tab b:active { color: #f87171; }
+
+.code-crumb { padding: 6px 12px; font-size: 11.5px; color: var(--muted);
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px; overflow-x: auto; white-space: nowrap; }
+.code-crumb.hidden { display: none; }
+.code-crumb .pinbtn { padding: 3px 8px; }
+
+.code-view { flex: 1; overflow: auto; background: var(--bg); }
+.code-empty { color: var(--muted); font-size: 13px; padding: 24px; text-align: center; }
+.code-scroll { display: flex; min-height: 100%; font-family: ui-monospace, "SF Mono",
+  "Roboto Mono", Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; }
+.code-gutter { flex-shrink: 0; text-align: right; padding: 10px 8px 40px; color: var(--muted);
+  opacity: .55; user-select: none; background: var(--bg); border-right: 1px solid var(--border);
+  white-space: pre; position: sticky; left: 0; }
+.code-src { flex: 1; padding: 10px 12px 40px; white-space: pre; tab-size: 4;
+  -moz-tab-size: 4; }
+.code-src, .code-gutter { font: inherit; margin: 0; }
+.code-src.wrap { white-space: pre-wrap; word-break: break-word; }
+.code-binary { color: var(--muted); padding: 24px; text-align: center; font-size: 13px; }
+
+/* Syntax token colors (dark) */
+.hl-c { color: #6b7280; font-style: italic; }
+.hl-s { color: #7ee787; }
+.hl-k { color: #79c0ff; }
+.hl-n { color: #f0883e; }
+.hl-t { color: #d2a8ff; }
+
+.pr-badge { font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 8px;
+  background: #14532d; color: #4ade80; }
+.pr-badge.priv { background: #3a2a14; color: #fbbf24; }
+.pr-badge.draft { background: var(--panel2); color: var(--muted); }
+.repo-lang { font-size: 11px; color: var(--muted); }
+.seg { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.seg button { flex: 1; background: var(--panel2); color: var(--muted); padding: 9px; font-weight: 600; font-size: 13px; }
+.seg button.on { background: var(--accent); color: #fff; }

@@ -367,9 +367,232 @@ function modal(title, bodyHtml, onOk) {
   openSheet("#modal");
 }
 
+// --- VS Code-like file viewer -------------------------------------------
+// State: the flat file list, current pins, expanded folders, and the set of
+// open editor tabs. All rendering is derived from this object.
+const CV = { files: [], pinned: [], expanded: new Set(), open: [], active: -1, wrap: false };
+
+const CV_KW = {
+  js: "abstract async await break case catch class const continue debugger default delete do else export extends finally for from function get if import in instanceof let new of return set static super switch this throw try typeof var void while yield null true false undefined",
+  ts: "abstract any as async await boolean break case catch class const continue declare default delete do else enum export extends finally for from function get if implements import in instanceof interface let new number of private protected public readonly return set static string super switch this throw try type typeof var void while yield null true false undefined",
+  py: "and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield None True False match case self",
+  kt: "as break by class companion const continue data do else enum false for fun if import in init interface internal is lateinit null object open override package private protected public return sealed super suspend this throw true try typealias val var when while",
+  java: "abstract boolean break byte case catch char class const continue default do double else enum extends final finally float for if implements import instanceof int interface long native new package private protected public return short static super switch synchronized this throw throws transient try void volatile while true false null",
+  go: "break case chan const continue default defer else fallthrough for func go goto if import interface map package range return select struct switch type var true false nil",
+  rs: "as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self static struct super trait true type unsafe use where while",
+  c: "auto break case char const continue default do double else enum extern float for goto if int long register return short signed sizeof static struct switch typedef union unsigned void volatile while true false NULL",
+  css: "important media keyframes import from to and not only supports",
+  sh: "if then else elif fi for while until do done case esac function in return export local echo",
+};
+
+function langFor(path) {
+  const ext = (path.split(".").pop() || "").toLowerCase();
+  const m = {
+    js: "js", jsx: "js", mjs: "js", cjs: "js", ts: "ts", tsx: "ts",
+    py: "py", kt: "kt", kts: "kt", gradle: "kt", java: "java", go: "go",
+    rs: "rs", c: "c", h: "c", cpp: "c", cc: "c", hpp: "c", cs: "c",
+    sh: "sh", bash: "sh", zsh: "sh", css: "css",
+    json: "json", md: "md", html: "html", xml: "html", svg: "html",
+    yml: "yml", yaml: "yml", toml: "toml",
+  };
+  return m[ext] || "txt";
+}
+
+// Single-pass tokenizer. Every branch consumes ≥1 char (last branch matches any
+// single char), so the loop always advances and covers the whole string. Token
+// text is HTML-escaped individually, so highlighting can't inject markup.
+function highlightCode(code, lang) {
+  const kws = CV_KW[lang];
+  const kw = kws ? new Set(kws.split(" ")) : null;
+  const hashComment = ["py", "sh", "yml", "toml"].includes(lang);
+  const cStyle = ["js", "ts", "kt", "java", "go", "rs", "c", "css"].includes(lang);
+  const parts = [];
+  if (cStyle) parts.push("(?<bc>/\\*[\\s\\S]*?\\*/)");
+  if (cStyle) parts.push("(?<lc>//[^\\n]*)");
+  if (hashComment) parts.push("(?<hc>#[^\\n]*)");
+  if (lang === "py") parts.push("(?<tsd>\"\"\"[\\s\\S]*?\"\"\"|'''[\\s\\S]*?''')");
+  const backtick = lang === "js" || lang === "ts" ? "|`(?:\\\\.|[^`\\\\])*`" : "";
+  parts.push("(?<str>\"(?:\\\\.|[^\"\\\\\\n])*\"|'(?:\\\\.|[^'\\\\\\n])*'" + backtick + ")");
+  parts.push("(?<num>\\b\\d[\\d_]*(?:\\.[\\d_]+)?(?:[eE][+-]?\\d+)?\\b)");
+  parts.push("(?<word>[A-Za-z_$][\\w$]*)");
+  parts.push("(?<any>[\\s\\S])");
+  let re;
+  try { re = new RegExp(parts.join("|"), "g"); }
+  catch (e) { return escapeHtml(code); } // no named-group support → plain text
+  let out = "", m;
+  while ((m = re.exec(code))) {
+    const g = m.groups, t = m[0];
+    let cls = null;
+    if (g.bc || g.lc || g.hc) cls = "c";
+    else if (g.tsd || g.str) cls = "s";
+    else if (g.num) cls = "n";
+    else if (g.word) {
+      if (kw && kw.has(t)) cls = "k";
+      else if (t.length > 1 && /^[A-Z]/.test(t)) cls = "t";
+    }
+    out += cls ? `<span class="hl-${cls}">${escapeHtml(t)}</span>` : escapeHtml(t);
+    if (m.index === re.lastIndex) re.lastIndex++; // safety: never stall
+  }
+  return out;
+}
+
+function looksBinary(s) {
+  if (!s) return false;
+  const chunk = s.slice(0, 4000);
+  if (chunk.includes(" ")) return true;
+  let bad = 0;
+  for (let i = 0; i < chunk.length; i++) {
+    const c = chunk.charCodeAt(i);
+    if (c === 9 || c === 10 || c === 13) continue;
+    if (c < 32 || c === 0xfffd) bad++;
+  }
+  return chunk.length > 0 && bad / chunk.length > 0.15;
+}
+
+function cvBase(p) { return p.includes("/") ? p.slice(p.lastIndexOf("/") + 1) : p; }
+
+function openCode() {
+  $("#code").classList.remove("hidden");
+  loadCodeFiles();
+  call("git.repoInfo").then((info) => {
+    $("#codeRepo").textContent =
+      (info.full_name || "local workspace") + (info.local_branch ? " · " + info.local_branch : "");
+  }).catch(() => { $("#codeRepo").textContent = "workspace"; });
+}
+function closeCode() { $("#code").classList.add("hidden"); }
+function openTree() { $("#codeTree").classList.add("open"); $("#codeTreeScrim").classList.remove("hidden"); }
+function closeTree() { $("#codeTree").classList.remove("open"); $("#codeTreeScrim").classList.add("hidden"); }
+
+async function loadCodeFiles() {
+  try { CV.files = JSON.parse((await call("orch", { fn: "browse_files" })).text) || []; }
+  catch (e) { CV.files = []; }
+  await loadCodePins();
+  renderCodeTree();
+  if (!CV.open.length) openTree();
+}
+async function loadCodePins() {
+  try { CV.pinned = JSON.parse((await call("orch", { fn: "list_context_files" })).text) || []; }
+  catch (e) { CV.pinned = []; }
+}
+
+function cvTreeModel(paths) {
+  const root = { children: {} };
+  paths.forEach((p) => {
+    const parts = p.split("/");
+    let node = root;
+    parts.forEach((part, i) => {
+      const isFile = i === parts.length - 1;
+      if (!node.children[part]) {
+        node.children[part] = { name: part, path: parts.slice(0, i + 1).join("/"), dir: !isFile, children: {} };
+      }
+      if (!isFile) node.children[part].dir = true;
+      node = node.children[part];
+    });
+  });
+  return root;
+}
+function cvRenderNode(node, depth, out) {
+  const kids = Object.values(node.children).sort((a, b) =>
+    a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name));
+  kids.forEach((k) => {
+    const pad = 8 + depth * 14;
+    if (k.dir) {
+      const open = CV.expanded.has(k.path);
+      out.push(`<div class="tree-row dir" data-dir="${escAttr(k.path)}" style="padding-left:${pad}px"><span class="twig">${open ? "▾" : "▸"}</span><span class="tname">${escapeHtml(k.name)}</span></div>`);
+      if (open) cvRenderNode(k, depth + 1, out);
+    } else {
+      const pinned = CV.pinned.includes(k.path);
+      const active = CV.open[CV.active] && CV.open[CV.active].path === k.path;
+      out.push(`<div class="tree-row file${pinned ? " pinned" : ""}${active ? " active" : ""}" data-file="${escAttr(k.path)}" style="padding-left:${pad + 14}px"><span class="tname">${escapeHtml(k.name)}</span></div>`);
+    }
+  });
+}
+function renderCodeTree() {
+  const el = $("#codeTree");
+  const out = [];
+  cvRenderNode(cvTreeModel(CV.files), 0, out);
+  el.innerHTML = out.length ? out.join("") : `<div class="hint" style="padding:14px">No files here yet.<br/>Clone or open a repo first.</div>`;
+  el.querySelectorAll("[data-dir]").forEach((x) => {
+    x.onclick = () => {
+      const p = x.dataset.dir;
+      if (CV.expanded.has(p)) CV.expanded.delete(p); else CV.expanded.add(p);
+      renderCodeTree();
+    };
+  });
+  el.querySelectorAll("[data-file]").forEach((x) => {
+    x.onclick = () => { openCodeFile(x.dataset.file); closeTree(); };
+  });
+}
+
+async function openCodeFile(path) {
+  let idx = CV.open.findIndex((f) => f.path === path);
+  if (idx < 0) {
+    let content = "";
+    try { content = (await call("orch", { fn: "read_ws_file", arg: path })).text || ""; }
+    catch (e) { content = "(could not read file)"; }
+    CV.open.push({ path, content, lang: langFor(path), binary: looksBinary(content) });
+    idx = CV.open.length - 1;
+    if (CV.open.length > 8) { CV.open.shift(); idx--; }
+  }
+  CV.active = idx;
+  renderCodeTabs(); renderCodeFile(); renderCodeTree();
+}
+function closeCodeTab(i) {
+  const wasActive = i === CV.active;
+  CV.open.splice(i, 1);
+  if (!CV.open.length) CV.active = -1;
+  else if (wasActive) CV.active = Math.min(i, CV.open.length - 1);
+  else if (i < CV.active) CV.active--;
+  renderCodeTabs(); renderCodeFile(); renderCodeTree();
+}
+function renderCodeTabs() {
+  const el = $("#codeTabs");
+  el.innerHTML = CV.open.map((f, i) =>
+    `<div class="code-tab${i === CV.active ? " active" : ""}" data-tab="${i}"><span>${escapeHtml(cvBase(f.path))}</span><b data-close-tab="${i}">✕</b></div>`
+  ).join("");
+  el.querySelectorAll(".code-tab").forEach((x) => {
+    x.onclick = (e) => {
+      if (e.target.dataset.closeTab != null) return;
+      CV.active = +x.dataset.tab; renderCodeTabs(); renderCodeFile(); renderCodeTree();
+    };
+  });
+  el.querySelectorAll("[data-close-tab]").forEach((x) => {
+    x.onclick = (e) => { e.stopPropagation(); closeCodeTab(+x.dataset.closeTab); };
+  });
+}
+function renderCodeFile() {
+  const view = $("#codeView"), crumb = $("#codeCrumb");
+  if (CV.active < 0 || !CV.open[CV.active]) {
+    view.innerHTML = `<div class="code-empty">Select a file from the tree to view it.</div>`;
+    crumb.classList.add("hidden");
+    return;
+  }
+  const f = CV.open[CV.active];
+  const pinned = CV.pinned.includes(f.path);
+  crumb.classList.remove("hidden");
+  crumb.innerHTML =
+    `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${escapeHtml(f.path)}</span>` +
+    `<button class="pinbtn ${pinned ? "on" : ""}" id="cvPin">${pinned ? "Unpin" : "📎 Context"}</button>` +
+    `<button class="pinbtn" id="cvWrap">${CV.wrap ? "No wrap" : "Wrap"}</button>`;
+  $("#cvPin").onclick = async () => {
+    const on = CV.pinned.includes(f.path);
+    await call("orch", { fn: on ? "remove_context_file" : "add_context_file", arg: f.path });
+    await loadCodePins(); renderCodeFile(); renderCodeTree(); refreshStats();
+  };
+  $("#cvWrap").onclick = () => { CV.wrap = !CV.wrap; renderCodeFile(); };
+  if (f.binary) { view.innerHTML = `<div class="code-binary">Binary file — preview not shown.</div>`; return; }
+  const lines = f.content.split("\n");
+  const gutter = lines.map((_, i) => i + 1).join("\n");
+  view.innerHTML =
+    `<div class="code-scroll"><div class="code-gutter">${gutter}</div><pre class="code-src${CV.wrap ? " wrap" : ""}">${highlightCode(f.content, f.lang)}</pre></div>`;
+}
+
+function escAttr(s) { return escapeHtml(s).replace(/"/g, "&quot;"); }
+
 // --- Actions -------------------------------------------------------------
 const actions = {
   async files() { filesModal(""); },
+  code() { openCode(); },
   run() { call("run"); },
   commit() { runText("Commit", "agent.commit"); },
   push() { runText("Push", "git.push"); },
@@ -491,23 +714,89 @@ const actions = {
     });
   },
   newRepo() {
+    let priv = true;
     modal("New GitHub repo",
-      `<label>Repo name</label><input id="rn" type="text" placeholder="repo-name" />`,
+      `<label>Repo name</label><input id="rn" type="text" placeholder="repo-name" />
+       <label>Description (optional)</label><input id="rd" type="text" placeholder="What is this repo?" />
+       <label>Visibility</label>
+       <div class="seg" id="visSeg">
+         <button data-vis="1" class="on">Private</button>
+         <button data-vis="0">Public</button>
+       </div>`,
       async () => {
         const name = $("#rn").value.trim(); if (!name) return;
-        await runText("Create repo", "git.createRepo", { name });
+        await runText("Create repo", "git.createRepo",
+          { name, description: $("#rd").value.trim(), private: priv });
         refreshHeader();
       });
+    $("#visSeg").querySelectorAll("[data-vis]").forEach((b) => {
+      b.onclick = () => {
+        priv = b.dataset.vis === "1";
+        $("#visSeg").querySelectorAll("[data-vis]").forEach((x) => x.classList.toggle("on", x === b));
+      };
+    });
   },
   async switchRepo() {
     bubble("Loading repos…", "sys");
-    const r = await call("git.listRepos");
-    const repos = r.repos || [];
-    if (!repos.length) { bubble("No repos found (check GitHub token).", "sys"); return; }
-    modal("Switch repo",
-      repos.map((f) => `<div class="list-item" data-repo="${f}"><span>${f}</span></div>`).join(""));
+    let repos = [];
+    try { repos = (await call("git.reposDetailed")).repos || []; } catch (e) {}
+    if (!repos.length) { bubble("No repos found (check GitHub token in Settings).", "sys"); return; }
+    modal("Switch repo (" + repos.length + ")",
+      repos.map((r) => {
+        const badge = r.private ? `<span class="pr-badge priv">private</span>` : `<span class="pr-badge">public</span>`;
+        const lang = r.language ? `<span class="repo-lang">${escapeHtml(r.language)}</span>` : "";
+        const desc = r.description ? `<div class="sub">${escapeHtml(r.description).slice(0, 90)}</div>` : "";
+        return `<div class="list-item" data-repo="${escAttr(r.full_name)}">
+          <span style="min-width:0"><b>${escapeHtml(r.full_name)}</b> ${badge} ${lang}${desc}</span></div>`;
+      }).join(""));
     $("#modalBody").querySelectorAll("[data-repo]").forEach((el) => {
       el.onclick = () => { closeSheet("#modal"); confirmClone(el.dataset.repo); };
+    });
+  },
+  async createPR() {
+    let info = {};
+    try { info = await call("git.repoInfo"); } catch (e) {}
+    if (!info.full_name) { bubble("No repo set — create or switch to a repo first.", "sys"); return; }
+    modal("Create pull request",
+      `<div class="hint" style="margin:0 0 6px">Repo: <b>${escapeHtml(info.full_name)}</b></div>
+       <label>Title</label><input id="prTitle" type="text" placeholder="Short summary of the change" />
+       <label>Head branch (your changes)</label>
+       <input id="prHead" type="text" value="${escAttr(info.local_branch || "")}" list="brList" />
+       <label>Base branch (merge into)</label>
+       <input id="prBase" type="text" value="${escAttr(info.default_branch || "main")}" list="brList" />
+       <datalist id="brList"></datalist>
+       <label>Description (optional)</label>
+       <textarea id="prBody" class="field" rows="5" placeholder="What and why"></textarea>
+       <div class="hint">Push your branch first (Git ▸ Push pushes to <b>main</b>; use a branch name here if you pushed elsewhere).</div>`,
+      async () => {
+        const title = $("#prTitle").value.trim();
+        if (!title) { setStatus("Enter a PR title"); return true; }
+        await runText("Create PR", "git.createPR", {
+          title, body: $("#prBody").value, head: $("#prHead").value.trim(), base: $("#prBase").value.trim(),
+        });
+      });
+    // Populate branch suggestions asynchronously.
+    try {
+      const br = (await call("git.branches")).branches || [];
+      const dl = $("#brList");
+      if (dl) dl.innerHTML = br.map((b) => `<option value="${escAttr(b)}">`).join("");
+    } catch (e) {}
+  },
+  async listPRs() {
+    bubble("Loading pull requests…", "sys");
+    let prs = [];
+    try { prs = (await call("git.listPRs")).prs || []; } catch (e) {}
+    const body = prs.length
+      ? prs.map((p) => {
+          const draft = p.draft ? `<span class="pr-badge draft">draft</span>` : "";
+          return `<div class="list-item" data-pr="${escAttr(p.html_url)}">
+            <span style="min-width:0"><b>#${p.number}</b> ${escapeHtml(p.title)} ${draft}
+            <div class="sub">${escapeHtml(p.head)} → ${escapeHtml(p.base)} · @${escapeHtml(p.user)}</div></span></div>`;
+        }).join("")
+      : `<div class="hint">No open pull requests.</div>`;
+    modal("Open pull requests", body);
+    $("#modalBody").querySelectorAll("[data-pr]").forEach((el) => {
+      el.onclick = () => bubble(el.dataset.pr, "sys");
     });
   },
   async sessions() {
@@ -738,6 +1027,13 @@ document.querySelectorAll(".mode").forEach((b) => {
     currentMode = b.dataset.mode;
   };
 });
+
+// Code viewer panel controls.
+$("#codeClose").onclick = () => closeCode();
+$("#codeRefresh").onclick = () => loadCodeFiles();
+$("#codeTreeToggle").onclick = () =>
+  $("#codeTree").classList.contains("open") ? closeTree() : openTree();
+$("#codeTreeScrim").onclick = () => closeTree();
 
 // Boot
 (async function () {

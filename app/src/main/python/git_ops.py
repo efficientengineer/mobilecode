@@ -80,11 +80,13 @@ def current_user() -> str:
     return _api("GET", "/user").get("login", "")
 
 
-def create_repo(name: str, private: bool = True) -> str:
+def create_repo(name: str, private: bool = True, description: str = "") -> str:
     """Create a repo on GitHub and set it as this workspace's origin."""
     try:
-        repo = _api("POST", "/user/repos",
-                    {"name": name, "private": bool(private), "auto_init": False})
+        payload = {"name": name, "private": bool(private), "auto_init": False}
+        if description:
+            payload["description"] = str(description)
+        repo = _api("POST", "/user/repos", payload)
         full = repo["full_name"]
         root = _workspace()
         if not (root / ".git").exists():
@@ -100,6 +102,35 @@ def list_repos() -> str:
     try:
         repos = _api("GET", "/user/repos?per_page=100&sort=pushed")
         return json.dumps([r["full_name"] for r in repos])
+    except Exception:
+        return json.dumps([])
+
+
+def list_repos_detailed(_=None) -> str:
+    """JSON array of the user's repos with metadata (most recently pushed first).
+
+    Each item: {full_name, name, owner, private, fork, description,
+    default_branch, language, pushed_at, updated_at}. The web layer renders
+    these as a rich repo list (private badges, descriptions, languages).
+    """
+    try:
+        repos = _api("GET", "/user/repos?per_page=100&sort=pushed&affiliation="
+                     "owner,collaborator,organization_member")
+        out = []
+        for r in repos:
+            out.append({
+                "full_name": r.get("full_name", ""),
+                "name": r.get("name", ""),
+                "owner": (r.get("owner") or {}).get("login", ""),
+                "private": bool(r.get("private")),
+                "fork": bool(r.get("fork")),
+                "description": r.get("description") or "",
+                "default_branch": r.get("default_branch") or "main",
+                "language": r.get("language") or "",
+                "pushed_at": r.get("pushed_at") or "",
+                "updated_at": r.get("updated_at") or "",
+            })
+        return json.dumps(out)
     except Exception:
         return json.dumps([])
 
@@ -165,6 +196,126 @@ def pull() -> str:
         return f"Pulled from {full}"
     except Exception:
         return "Pull failed:\n" + traceback.format_exc()
+
+
+# --- branches + pull requests --------------------------------------------
+
+def _local_branch(root: Path) -> str:
+    """The active local branch name (falls back to 'master')."""
+    try:
+        return porcelain.active_branch(str(root)).decode()
+    except Exception:
+        return "master"
+
+
+def push_branch(branch: str = "") -> str:
+    """Push the active workspace to a named remote branch (for PR workflows).
+
+    Unlike push(), which force-pushes onto 'main', this pushes the local HEAD to
+    refs/heads/<branch> so you can open a pull request from it. If <branch> is
+    blank, the local branch name is reused on the remote.
+    """
+    try:
+        root = _workspace()
+        full = _remote_full_name(root)
+        if not full:
+            return "No repo set for this workspace (create or select one first)."
+        local = _local_branch(root)
+        target = str(branch).strip() or local
+        refspec = f"refs/heads/{local}:refs/heads/{target}"
+        porcelain.push(str(root), _auth_url(full), refspec, force=True)
+        return f"Pushed {full}@{target}"
+    except Exception:
+        return "Push branch failed:\n" + traceback.format_exc()
+
+
+def repo_info(_=None) -> str:
+    """JSON describing the active repo: current local branch, remote, default
+    branch, and open-PR count. Resilient — network fields are best-effort."""
+    root = _workspace()
+    full = _remote_full_name(root)
+    info = {
+        "full_name": full,
+        "local_branch": _local_branch(root),
+        "default_branch": "main",
+        "open_prs": None,
+    }
+    if full:
+        try:
+            repo = _api("GET", f"/repos/{full}")
+            info["default_branch"] = repo.get("default_branch", "main")
+        except Exception:
+            pass
+        try:
+            prs = _api("GET", f"/repos/{full}/pulls?state=open&per_page=100")
+            info["open_prs"] = len(prs)
+        except Exception:
+            pass
+    return json.dumps(info)
+
+
+def list_branches(_=None) -> str:
+    """JSON array of the active repo's remote branch names."""
+    try:
+        full = _remote_full_name(_workspace())
+        if not full:
+            return json.dumps([])
+        branches = _api("GET", f"/repos/{full}/branches?per_page=100")
+        return json.dumps([b["name"] for b in branches])
+    except Exception:
+        return json.dumps([])
+
+
+def create_pull_request(title: str, body: str = "",
+                        head: str = "", base: str = "") -> str:
+    """Open a pull request on the active repo.
+
+    head defaults to the current local branch; base defaults to the repo's
+    default branch. Returns a status line with the PR URL, or the raw error.
+    """
+    try:
+        root = _workspace()
+        full = _remote_full_name(root)
+        if not full:
+            return "No repo set for this workspace (create or select one first)."
+        head = str(head).strip() or _local_branch(root)
+        if not str(base).strip():
+            try:
+                base = _api("GET", f"/repos/{full}").get("default_branch", "main")
+            except Exception:
+                base = "main"
+        pr = _api("POST", f"/repos/{full}/pulls", {
+            "title": str(title).strip() or f"{head} → {base}",
+            "body": str(body or ""),
+            "head": head,
+            "base": str(base).strip(),
+        })
+        return f"PR #{pr.get('number')} opened\n{pr.get('html_url')}"
+    except Exception:
+        return "Create PR failed:\n" + traceback.format_exc()
+
+
+def list_prs(_=None) -> str:
+    """JSON array of the active repo's open pull requests."""
+    try:
+        full = _remote_full_name(_workspace())
+        if not full:
+            return json.dumps([])
+        prs = _api("GET", f"/repos/{full}/pulls?state=open&per_page=30&sort=updated&direction=desc")
+        out = []
+        for p in prs:
+            out.append({
+                "number": p.get("number"),
+                "title": p.get("title", ""),
+                "html_url": p.get("html_url", ""),
+                "head": (p.get("head") or {}).get("ref", ""),
+                "base": (p.get("base") or {}).get("ref", ""),
+                "draft": bool(p.get("draft")),
+                "user": (p.get("user") or {}).get("login", ""),
+            })
+        return json.dumps(out)
+    except Exception:
+        return json.dumps([])
 
 
 # --- file inspection -----------------------------------------------------
