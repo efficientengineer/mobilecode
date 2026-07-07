@@ -289,13 +289,10 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 .editor-lines, .editor-hl, .editor-area { position: absolute; inset: 0; margin: 0; padding: 8px 10px;
   font-family: monospace; font-size: 12.5px; line-height: 1.5; white-space: pre;
   tab-size: 2; -moz-tab-size: 2; border: 0; }
+/* Numbers stay fully visible at the line start (underlaid at the first char). */
 .editor-lines { overflow: hidden; pointer-events: none; z-index: 0; text-align: left;
-  padding-left: 4px; color: #38bdf8; opacity: .4; font-weight: 700;
+  color: #38bdf8; opacity: .85; font-weight: 700;
   text-shadow: 0 0 2px #000, 0 1px 2px rgba(0,0,0,.95);
-  /* Crisp at the left margin, fading to nothing over the first ~4 characters so
-     the number never fights the code. Compositor-only — no per-keystroke cost. */
-  -webkit-mask-image: linear-gradient(to right, #000 0, #000 16px, transparent 44px);
-  mask-image: linear-gradient(to right, #000 0, #000 16px, transparent 44px);
   user-select: none; -webkit-user-select: none; }
 
 /* Find & replace popover — opened from the 🔍 button, floats over the code. */
@@ -310,7 +307,11 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   min-width: 30px; text-align: center; }
 .hint#edStatus { margin: 0; padding: 3px 8px; flex-shrink: 0; }
 .hint#edStatus:empty { display: none; }
-.editor-hl { overflow: hidden; color: var(--text); pointer-events: none; z-index: 1; background: transparent; }
+/* The code's first few characters fade in from the left, so the number underneath
+   reads clearly at the line start. Compositor-only — no per-keystroke cost. */
+.editor-hl { overflow: hidden; color: var(--text); pointer-events: none; z-index: 1; background: transparent;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.12) 0, rgba(0,0,0,.12) 6px, #000 42px);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.12) 0, rgba(0,0,0,.12) 6px, #000 42px); }
 .editor-area { overflow: auto; background: transparent; color: transparent;
   caret-color: var(--text); resize: none; outline: none; z-index: 2; }
 .editor-area::selection { background: rgba(59,130,246,.35); }
