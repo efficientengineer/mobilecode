@@ -46,6 +46,11 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 #githubFab { left: 10px; max-width: 45vw; }
 #playFab { right: 10px; width: 40px; justify-content: center; font-size: 15px; padding: 0;
   background: var(--accent); color: #fff; border-color: transparent; }
+#playFab.running { color: transparent; pointer-events: none; }
+#playFab.running::after { content: ""; position: absolute; top: 50%; left: 50%; margin: -8px 0 0 -8px;
+  width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff;
+  border-radius: 50%; animation: fab-spin .7s linear infinite; }
+@keyframes fab-spin { to { transform: rotate(360deg); } }
 #menuFab { right: 58px; width: 40px; justify-content: center; font-size: 18px; padding: 0; }
 #actionsFab { right: 106px; width: 40px; justify-content: center; font-size: 20px; padding: 0; }
 .usagechip { position: fixed; z-index: 40; top: 29px; left: 50%; transform: translateX(-50%);
@@ -90,7 +95,9 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
   font-size: 13px; cursor: pointer; }
 .tab.active { background: var(--agent); color: var(--text); }
 .tab .tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tab .tab-dirty { color: #fbbf24; font-weight: 700; }
+.tab .tab-dirty { font-weight: 700; }
+.tab .tab-dirty.m-unsaved { color: #fbbf24; }
+.tab .tab-dirty.m-modified { color: #4ade80; }
 .tab .tab-x { color: var(--muted); font-size: 14px; padding: 0 2px; border-radius: 6px; }
 .tab .tab-x:active { color: #f87171; background: var(--border); }
 
@@ -120,8 +127,9 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 #edFindFab.hidden, #edDiffFab.hidden { display: none; }
 #edFindFab:active, #edDiffFab:active { background: var(--border); }
 
-/* Inline diff view (working buffer vs last commit), overlays the code. */
-.editor-diff { position: absolute; inset: 0; margin: 0; padding: 8px 10px; overflow: auto;
+/* Inline diff view (working buffer vs last commit), overlays the code.
+   Top padding keeps the first hunk's revert button clear of the ± button. */
+.editor-diff { position: absolute; inset: 0; margin: 0; padding: 52px 10px 8px; overflow: auto;
   font-family: monospace; font-size: 12.5px; line-height: 1.5; white-space: pre;
   z-index: 3; background: var(--bg); }
 .editor-diff.hidden { display: none; }
@@ -129,6 +137,11 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 .di-del { background: rgba(239,68,68,.16); color: #f38ba8; display: block; }
 .di-ctx { color: var(--muted); display: block; }
 .di-empty { color: var(--muted); }
+.di-hunk { position: relative; }
+.di-revert { position: absolute; top: 0; right: 6px; z-index: 1; background: var(--panel2);
+  color: var(--accent); border: 1px solid var(--border); border-radius: 8px; padding: 1px 8px;
+  font-size: 11px; font-weight: 600; font-family: -apple-system, Roboto, sans-serif; }
+.di-revert:active { background: var(--border); }
 
 /* Tree rows */
 .tree-row { display: flex; align-items: center; gap: 5px; padding: 5px 12px;
@@ -233,6 +246,12 @@ pre.small { white-space: pre-wrap; word-wrap: break-word; background: var(--bg);
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .grid button { background: var(--panel2); border-radius: 12px; padding: 14px 10px; font-weight: 600; }
 .grid button:active { background: var(--border); }
+#menuSearch { margin-top: 4px; }
+#menuResults { margin-top: 10px; }
+#menuResults.hidden, #menuDefault.hidden { display: none; }
+.palette-item { padding: 12px 14px; border-radius: 10px; background: var(--panel2);
+  margin-bottom: 6px; font-weight: 600; font-size: 14px; }
+.palette-item:active { background: var(--border); }
 .close, .modal-actions { margin-top: 14px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .close { width: 100%; background: var(--panel2); border-radius: 12px; padding: 12px; }
