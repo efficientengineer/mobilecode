@@ -157,22 +157,37 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   max-height: 60vh; overflow: auto; }
 .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
 
-/* File viewer / editor (VS Code style: gutter + editable code area) */
+/* File viewer / editor (VS Code style: highlighting + gutter + find/replace) */
 .editor { display: flex; flex-direction: column; gap: 8px; }
 .editor-toolbar { display: flex; align-items: center; justify-content: space-between;
   gap: 8px; font-size: 12px; color: var(--muted); }
 .editor-dirty { color: #fbbf24; font-weight: 600; }
+.editor-find { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.editor-find .field { flex: 1; min-width: 110px; padding: 7px 10px; font-size: 13px; }
+.editor-find-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+  min-width: 34px; text-align: center; }
+.pill.sm { padding: 6px 11px; font-size: 13px; }
 .editor-body { display: flex; background: var(--bg); border: 1px solid var(--border);
-  border-radius: 10px; overflow: hidden; height: 58vh; }
+  border-radius: 10px; overflow: hidden; height: 56vh; }
 .editor-gutter { flex-shrink: 0; overflow: hidden; padding: 10px 8px 10px 10px;
   text-align: right; color: var(--muted); opacity: .6; background: var(--panel2);
   border-right: 1px solid var(--border); font-family: monospace; font-size: 12.5px;
   line-height: 1.5; white-space: pre; user-select: none; -webkit-user-select: none;
   min-width: 2.6em; }
-.editor-area { flex: 1; min-width: 0; resize: none; border: none; outline: none;
-  background: var(--bg); color: var(--text); padding: 10px 12px;
+/* The code area stacks a highlighted (visible) layer under a transparent-text
+   textarea so the caret and editing behavior stay native. */
+.editor-code { position: relative; flex: 1; min-width: 0; }
+.editor-hl, .editor-area { position: absolute; inset: 0; margin: 0; padding: 10px 12px;
   font-family: monospace; font-size: 12.5px; line-height: 1.5; white-space: pre;
-  overflow: auto; tab-size: 2; -moz-tab-size: 2; }
+  tab-size: 2; -moz-tab-size: 2; border: 0; }
+.editor-hl { overflow: hidden; color: var(--text); pointer-events: none; z-index: 0; }
+.editor-area { overflow: auto; background: transparent; color: transparent;
+  caret-color: var(--text); resize: none; outline: none; z-index: 1; }
+.editor-area::selection { background: rgba(59,130,246,.35); }
+.tk-k { color: #c792ea; }
+.tk-s { color: #c3e88d; }
+.tk-c { color: #7d8799; font-style: italic; }
+.tk-n { color: #f78c6c; }
 
 /* Commit review bar (autocommit off) */
 .review-bar { align-self: stretch; display: flex; gap: 8px; justify-content: flex-end;
