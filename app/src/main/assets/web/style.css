@@ -77,6 +77,9 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 #filesBtn:active { background: var(--border); }
 #filesBtn .fb-ico { font-size: 15px; }
 #tabs { flex: 1; min-width: 0; display: flex; gap: 5px; overflow-x: auto; }
+.cursor-pos { flex-shrink: 0; align-self: center; font-size: 11px; color: var(--muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap; padding: 0 4px; }
+.cursor-pos:empty { display: none; }
 .tab { flex-shrink: 0; display: flex; align-items: center; gap: 6px; max-width: 160px;
   background: var(--panel2); color: var(--muted); border-radius: 10px; padding: 6px 8px 6px 11px;
   font-size: 13px; cursor: pointer; }
@@ -314,23 +317,13 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 .pill.sm { padding: 6px 11px; font-size: 13px; }
 .editor-body { display: flex; background: var(--bg); border: 0; border-top: 1px solid var(--border);
   overflow: hidden; flex: 1; min-height: 0; }
-/* The code area stacks three layers sharing identical metrics:
-   line numbers (bottom, underlaid at the first-character position) → highlighted
-   code (transparent background, so numbers show through gaps and indentation) →
-   transparent-text textarea on top (native caret + editing). No gutter column,
-   so the code starts hard against the left edge. */
+/* The code area stacks a highlighted (visible) layer under a transparent-text
+   textarea so the caret and editing behavior stay native. No line-number gutter;
+   the cursor position is shown in the tab bar instead. */
 .editor-code { position: relative; flex: 1; min-width: 0; }
-.editor-lines, .editor-hl, .editor-area { position: absolute; inset: 0; margin: 0; padding: 8px 10px;
+.editor-hl, .editor-area { position: absolute; inset: 0; margin: 0; padding: 8px 10px;
   font-family: monospace; font-size: 12.5px; line-height: 1.5; white-space: pre;
   tab-size: 2; -moz-tab-size: 2; border: 0; }
-/* Numbers sit under the code, tucked into the left margin: fully visible in the
-   margin, fading out to the right as they pass behind the text. */
-.editor-lines { overflow: hidden; pointer-events: none; z-index: 0; text-align: left;
-  padding-left: 2px; color: #38bdf8; opacity: .85; font-weight: 700;
-  text-shadow: 0 0 2px #000, 0 1px 2px rgba(0,0,0,.95);
-  -webkit-mask-image: linear-gradient(to right, #000 0, #000 12px, transparent 34px);
-  mask-image: linear-gradient(to right, #000 0, #000 12px, transparent 34px);
-  user-select: none; -webkit-user-select: none; }
 
 /* Find & replace popover — opened from the floating 🔍, drops below it. */
 .editor-findpop { position: absolute; top: 54px; right: 10px; z-index: 16;
