@@ -18,7 +18,7 @@ from pathlib import Path
 import llm
 import agent_tools
 
-MAX_STEPS = int(os.environ.get("AGENT_MAX_STEPS", "40"))
+MAX_STEPS = int(os.environ.get("AGENT_MAX_STEPS", "120"))
 REPAIR_ROUNDS = 2
 
 
