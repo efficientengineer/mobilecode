@@ -257,6 +257,23 @@ def _commit_message(summary: str, changed: list) -> str:
         return summary
 
 
+def _stage_deletions(root: Path) -> None:
+    """Record files removed from disk (dulwich's add never stages removals)."""
+    try:
+        st = porcelain.status(str(root))
+        removed = list(st.staged.get("delete", [])) + list(getattr(st, "unstaged", []) or [])
+    except Exception:
+        return
+    for p in removed:
+        rel = p.decode() if isinstance(p, bytes) else p
+        if (root / rel).exists():
+            continue  # still present → not a deletion
+        try:
+            porcelain.remove(str(root), paths=[str(root / rel)])
+        except Exception:
+            pass
+
+
 def _commit(root: Path, message: str) -> str:
     """Stage all changes and commit via dulwich."""
     git_dir = root / ".git"
@@ -269,6 +286,9 @@ def _commit(root: Path, message: str) -> str:
         if p.name in ("meta.json", "transcript.jsonl"):
             continue
         porcelain.add(str(root), paths=[str(p)])
+    # Stage deletions too — porcelain.add never records removals, so a file
+    # deleted or renamed on disk would otherwise linger in the committed tree.
+    _stage_deletions(root)
     commit_id = porcelain.commit(
         str(root),
         message=message.encode(),
@@ -366,8 +386,10 @@ def _append_discussion(role: str, text: str, run_id: str = "", ctx: str = None,
     model context, so exposing them costs no tokens and can't bloat the prompt."""
     idx = len(_read_discussion())
     ctx_text = text if ctx is None else ctx
-    rec = {"id": idx, "role": role, "text": text, "ctx": ctx_text,
-           "cave": _caveman(ctx_text), "run_id": run_id}
+    # No 'cave' field: readers (_compact_discussion, get_discussion) recompute
+    # caveman on the fly, so persisting it just ran the regex per append and
+    # bloated discussion.jsonl (re-parsed every turn) for nothing.
+    rec = {"id": idx, "role": role, "text": text, "ctx": ctx_text, "run_id": run_id}
     if display_only:
         rec["display_only"] = True
     with open(_discussion_file(), "a", encoding="utf-8") as f:
@@ -514,14 +536,19 @@ def _full_context(task_hint: str = "", mode: str = "") -> str:
     mem_name, mem = _memory(root)
     if mem:
         parts.append(f"PROJECT GUIDELINES ({mem_name}):\n" + mem)
-    bp = _best_practices_section(task_hint, root)
-    if bp:
-        parts.append("BEST PRACTICES (apply these by default; the user's own "
-                     "take priority over the built-ins):\n" + bp)
+    # The chat/ask path is a deliberately lightweight single shot where the model
+    # can't edit, so skip the build-oriented BEST PRACTICES and DEPENDENCY MAP
+    # (pure build guidance) — keep only guidelines + outline + attached + disc.
+    is_chat = mode == "chat"
+    if not is_chat:
+        bp = _best_practices_section(task_hint, root)
+        if bp:
+            parts.append("BEST PRACTICES (apply these by default; the user's own "
+                         "take priority over the built-ins):\n" + bp)
     outline = _outline_file(root)
     if outline.exists():
         parts.append("PROJECT OUTLINE:\n" + outline.read_text(encoding="utf-8"))
-    dep = _depgraph_section(root)
+    dep = _depgraph_section(root) if not is_chat else ""
     if dep:
         parts.append(
             "DEPENDENCY MAP (path → files it imports; to understand a feature, "
@@ -680,9 +707,19 @@ def browse_files(_=None) -> str:
     return json.dumps(files)
 
 
+def _in_workspace(root: Path, rel: str):
+    """Resolve rel under root, returning the path only if it stays inside root."""
+    if not rel:
+        return None
+    fp = (root / rel).resolve()
+    root = root.resolve()
+    return fp if (fp == root or root in fp.parents) else None
+
+
 def read_ws_file(path="") -> str:
-    fp = _workspace() / str(path)
-    if fp.exists() and fp.is_file():
+    root = _workspace()
+    fp = _in_workspace(root, str(path))  # reject ../ and absolute-path escapes
+    if fp and fp.exists() and fp.is_file():
         try:
             return fp.read_text(encoding="utf-8", errors="replace")
         except Exception:
@@ -697,9 +734,10 @@ def head_file(path="") -> str:
     what's committed.
     """
     rel = str(path).strip()
-    if not rel:
+    root = _workspace()
+    if not _in_workspace(root, rel):
         return ""
-    return _head_file(_workspace(), rel) or ""
+    return _head_file(root, rel) or ""
 
 
 def write_ws_file(path="", content="") -> str:
@@ -863,14 +901,34 @@ def _outline_manifest_path(root: Path = None) -> Path:
     return _agent_dir(root) / "outline_manifest.json"
 
 
-def _file_hashes(root: Path, files: list) -> dict:
-    """sha1 of each readable file's content, keyed by path."""
+def _manifest_hash(v):
+    """Extract the content hash from a manifest value (old str or new dict form)."""
+    return v if isinstance(v, str) else (v or {}).get("h")
+
+
+def _file_hashes(root: Path, files: list, prev: dict = None) -> dict:
+    """Per-file {'h': sha1, 'mt': mtime, 'sz': size}, keyed by path.
+
+    Reuses the previous entry (skipping the read+sha1) for any file whose
+    (mtime, size) is unchanged — so a no-change build no longer re-reads every
+    file just to detect that nothing moved."""
     import hashlib
+    prev = prev or {}
     out = {}
     for f in files:
+        try:
+            st = (root / f).stat()
+            mt, sz = int(st.st_mtime), st.st_size
+        except Exception:
+            mt = sz = None
+        pv = prev.get(f)
+        if mt is not None and isinstance(pv, dict) and pv.get("mt") == mt and pv.get("sz") == sz and pv.get("h"):
+            out[f] = pv
+            continue
         c = _read_file(root, f)
         if c is not None:
-            out[f] = hashlib.sha1(c.encode("utf-8", "replace")).hexdigest()
+            out[f] = {"h": hashlib.sha1(c.encode("utf-8", "replace")).hexdigest(),
+                      "mt": mt or 0, "sz": sz or 0}
     return out
 
 
@@ -882,7 +940,6 @@ def build_outline(_=None) -> str:
     try:
         root = _workspace()
         files = _list_repo_files(root, max_files=120)
-        hashes = _file_hashes(root, files)
 
         prev = ""
         of = _outline_file(root)
@@ -900,7 +957,9 @@ def build_outline(_=None) -> str:
             except Exception:
                 manifest = {}
 
-        changed = [f for f in files if hashes.get(f) != manifest.get(f)]
+        # Hash with the prior manifest so unchanged files skip the read+sha1.
+        hashes = _file_hashes(root, files, manifest)
+        changed = [f for f in files if _manifest_hash(hashes.get(f)) != _manifest_hash(manifest.get(f))]
         deleted = [f for f in manifest if f not in hashes]
 
         def snippets_for(paths):
@@ -1458,21 +1517,12 @@ def commit_now() -> str:
         root = _workspace()
         if not (root / ".git").exists():
             porcelain.init(str(root))
-        # Detect changed paths so we can (a) skip empty commits and (b) feed
-        # the message generator.
-        try:
-            status = porcelain.status(str(root))
-            changed = list(status.untracked)
-            for kind in ("add", "delete", "modify"):
-                changed += [
-                    p.decode() if isinstance(p, bytes) else p
-                    for p in status.staged.get(kind, [])
-                ]
-            changed += [
-                p.decode() if isinstance(p, bytes) else p for p in status.unstaged
-            ]
-        except Exception:
-            changed = []
+        # Detect changed paths so we can (a) skip empty commits and (b) feed the
+        # message generator. Use _changed_paths so agent-internal churn
+        # (.agent/, meta.json, transcript.jsonl — perpetually untracked and never
+        # committed) doesn't defeat the "nothing to commit" guard and produce an
+        # empty commit + a wasted message-generation LLM call.
+        changed = _changed_paths(root)
         if not changed:
             return "Nothing to commit."
         message = _commit_message(f"Update {len(changed)} file(s)", changed)

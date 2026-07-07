@@ -37,7 +37,11 @@ class AgentService : Service() {
                     }
             } catch (_: Throwable) {}
         }
-        return START_STICKY
+        // Don't auto-restart with a null intent after a process kill: there is
+        // no run to attach to, so a resurrected service would just show a zombie
+        // "Working…" notification and hold the wake lock until the 1h cap. The
+        // Activity re-starts this per run.
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {

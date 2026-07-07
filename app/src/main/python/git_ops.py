@@ -81,6 +81,16 @@ def _auth_url(full_name: str) -> str:
     return f"https://x-access-token:{_token()}@github.com/{full_name}.git"
 
 
+def _scrub(s: str) -> str:
+    """Redact the GitHub token from any string before it reaches the UI/model.
+
+    Dulwich embeds the token in the remote URL (_auth_url), so a failed
+    clone/push/pull traceback can otherwise leak it verbatim.
+    """
+    tok = _token()
+    return s.replace(tok, "***") if tok else s
+
+
 def _remote_full_name(root: Path) -> str:
     """Read the stored origin (owner/repo) for this workspace, if any."""
     marker = root / ".git" / "voiceagent_origin"
@@ -128,6 +138,23 @@ def status_summary() -> str:
     return "\n".join(lines)
 
 
+def _stage_deletions(root: Path) -> None:
+    """Record files removed from disk (dulwich's add never stages removals)."""
+    try:
+        st = porcelain.status(str(root))
+        removed = list(st.staged.get("delete", [])) + list(getattr(st, "unstaged", []) or [])
+    except Exception:
+        return
+    for p in removed:
+        rel = p.decode() if isinstance(p, bytes) else p
+        if (root / rel).exists():
+            continue
+        try:
+            porcelain.remove(str(root), paths=[str(root / rel)])
+        except Exception:
+            pass
+
+
 def commit(message: str = "") -> str:
     """Stage every workspace file (except .git/.agent/app meta) and commit."""
     try:
@@ -142,6 +169,7 @@ def commit(message: str = "") -> str:
             if p.name in ("meta.json", "transcript.jsonl"):
                 continue
             porcelain.add(str(root), paths=[str(p)])
+        _stage_deletions(root)  # dulwich's add never records removals
         msg = (message or "").strip() or "Update workspace"
         cid = porcelain.commit(str(root), message=msg.encode(),
                                author=b"Voice Agent <agent@device.local>",
@@ -308,7 +336,7 @@ def clone_repo(full_name: str) -> str:
         _set_origin(root, full_name)
         return f"Cloned {full_name}"
     except Exception:
-        return "Clone failed:\n" + traceback.format_exc()
+        return _scrub("Clone failed:\n" + traceback.format_exc())
 
 
 def push(force: bool = False) -> str:
@@ -330,7 +358,7 @@ def push(force: bool = False) -> str:
                     "don't have — Pull first, or use Force push if you're sure.")
         return f"Pushed {branch} to {full}"
     except Exception:
-        return "Push failed:\n" + traceback.format_exc()
+        return _scrub("Push failed:\n" + traceback.format_exc())
 
 
 def push_force(_=None) -> str:
@@ -355,7 +383,7 @@ def pull() -> str:
                            f"refs/heads/{default}".encode())
             return f"Pulled {default} from {full}"
     except Exception:
-        return "Pull failed:\n" + traceback.format_exc()
+        return _scrub("Pull failed:\n" + traceback.format_exc())
 
 
 # --- pull requests ---------------------------------------------------------

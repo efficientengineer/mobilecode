@@ -48,13 +48,24 @@ def _load_wsgi_app(root: Path):
     for name in ("app.py", "wsgi.py"):
         fp = root / name
         if fp.exists():
-            sys.path.insert(0, str(root))
-            spec = importlib.util.spec_from_file_location("user_app", str(fp))
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            app = getattr(mod, "app", None)
-            if app is not None:
-                return app
+            # Put the workspace on sys.path only while executing the user module,
+            # then remove it — a permanent sys.path[0] insert lets a same-named
+            # user file shadow the agent's own modules (llm, templates, …) on the
+            # next OTA reload, and re-inserts on every start().
+            added = str(root) not in sys.path
+            if added:
+                sys.path.insert(0, str(root))
+            try:
+                spec = importlib.util.spec_from_file_location("user_app", str(fp))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                app = getattr(mod, "app", None)
+                if app is not None:
+                    return app
+            finally:
+                if added:
+                    try: sys.path.remove(str(root))
+                    except ValueError: pass
     return None
 
 
@@ -70,9 +81,16 @@ def _static_app(root: Path):
     """A tiny WSGI static-file server rooted at the workspace."""
     import mimetypes
 
+    root_res = root.resolve()
+
     def app(environ, start_response):
         path = environ.get("PATH_INFO", "/").lstrip("/") or "index.html"
-        fp = (root / path)
+        fp = (root / path).resolve()
+        # Confine to the workspace — reject ../ traversal (the server binds
+        # 127.0.0.1 but is reachable by any co-resident app under the app UID).
+        if fp != root_res and root_res not in fp.parents:
+            start_response("403 Forbidden", [("Content-Type", "text/plain")] + _NO_CACHE_HEADERS)
+            return [b"Forbidden"]
         if fp.is_dir():
             fp = fp / "index.html"
         if not fp.exists() or not fp.is_file():
