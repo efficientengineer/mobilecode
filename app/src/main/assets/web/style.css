@@ -290,8 +290,12 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   font-family: monospace; font-size: 12.5px; line-height: 1.5; white-space: pre;
   tab-size: 2; -moz-tab-size: 2; border: 0; }
 .editor-lines { overflow: hidden; pointer-events: none; z-index: 0; text-align: left;
-  color: #38bdf8; opacity: .5; font-weight: 700;
+  padding-left: 4px; color: #38bdf8; opacity: .4; font-weight: 700;
   text-shadow: 0 0 2px #000, 0 1px 2px rgba(0,0,0,.95);
+  /* Crisp at the left margin, fading to nothing over the first ~4 characters so
+     the number never fights the code. Compositor-only — no per-keystroke cost. */
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 16px, transparent 44px);
+  mask-image: linear-gradient(to right, #000 0, #000 16px, transparent 44px);
   user-select: none; -webkit-user-select: none; }
 
 /* Find & replace popover — opened from the 🔍 button, floats over the code. */
