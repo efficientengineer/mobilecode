@@ -1543,13 +1543,19 @@ const _saveTimers = {};
 
 function tabBasename(rel) { return rel.includes("/") ? rel.slice(rel.lastIndexOf("/") + 1) : rel; }
 
+// A tab's status dot: amber = unsaved edits, green = differs from last commit.
+function tabMark(t) {
+  if (t.content !== t.saved) return { ch: "●", cls: "m-unsaved" };
+  if (t.head != null && t.saved !== t.head) return { ch: "●", cls: "m-modified" };
+  return { ch: "", cls: "" };
+}
 function renderTabs() {
   const c = $("#tabs"); if (!c) return;
   c.innerHTML = openTabs.map((t) => {
     const active = t.rel === activeTab ? " active" : "";
-    const dirty = t.content !== t.saved ? "●" : "";
+    const mk = tabMark(t);
     return `<div class="tab${active}" data-tab="${escAttr(t.rel)}" title="${escAttr(t.rel)}">
-      <span class="tab-dirty">${dirty}</span>
+      <span class="tab-dirty ${mk.cls}">${mk.ch}</span>
       <span class="tab-name">${escapeHtml(tabBasename(t.rel))}</span>
       <span class="tab-x" data-close="${escAttr(t.rel)}">✕</span></div>`;
   }).join("");
@@ -1560,16 +1566,28 @@ function renderTabs() {
     el.onclick = (e) => { e.stopPropagation(); closeTab(el.getAttribute("data-close")); };
   });
 }
-function updateActiveTabDirty(dirty) {
+function updateActiveTabMark() {
+  const tab = openTabs.find((t) => t.rel === activeTab);
   const d = document.querySelector("#tabs .tab.active .tab-dirty");
-  if (d) d.textContent = dirty ? "●" : "";
+  if (!tab || !d) return;
+  const mk = tabMark(tab);
+  d.textContent = mk.ch;
+  d.className = "tab-dirty " + mk.cls;
 }
 async function openTab(rel) {
   if (openTabs.some((t) => t.rel === rel)) { setActiveTab(rel); return; }
   let content = "";
   try { content = (await call("orch", { fn: "read_ws_file", arg: rel })).text || ""; } catch (e) {}
-  openTabs.push({ rel, content, saved: content });
+  const tab = { rel, content, saved: content, head: null };
+  openTabs.push(tab);
   setActiveTab(rel);
+  // Fetch the committed version in the background for the "modified" dot.
+  fetchHead(tab);
+}
+async function fetchHead(tab) {
+  try { tab.head = (await call("py.call", { module: "orchestrator", fn: "head_file", args: [tab.rel] })).text || ""; }
+  catch (e) { return; }
+  if (tab.rel === activeTab) updateActiveTabMark(); else renderTabs();
 }
 function setActiveTab(rel) {
   activeTab = rel;
@@ -1615,7 +1633,7 @@ async function saveTab(rel) {
   const res = await call("py.call", { module: "orchestrator", fn: "write_ws_file", args: [rel, pending] });
   if ((res.text || "").startsWith("Saved")) {
     tab.saved = pending;
-    if (rel === activeTab && tab.content === tab.saved) updateActiveTabDirty(false);
+    if (rel === activeTab && tab.content === tab.saved) updateActiveTabMark();
     else renderTabs();
   }
 }
@@ -1628,9 +1646,10 @@ async function refreshOpenTabs() {
     let disk;
     try { disk = (await call("orch", { fn: "read_ws_file", arg: tab.rel })).text || ""; }
     catch (e) { continue; }
-    if (disk === tab.saved) continue;         // agent didn't change it → keep local edits
+    if (disk === tab.saved) { fetchHead(tab); continue; } // maybe committed → refresh head dot
     tab.content = disk;
     tab.saved = disk;
+    fetchHead(tab);
     if (tab.rel === activeTab) {
       const prev = $("#edArea"), st = prev ? prev.scrollTop : 0;
       renderEditor();
@@ -1693,23 +1712,58 @@ function renderEditor() {
   // --- Inline diff (working buffer vs last commit), toggled by the ± button ---
   const edDiff = $("#edDiff");
   let diffOn = false;
-  function hideDiff() { diffOn = false; diffFab.classList.remove("active"); edDiff.classList.add("hidden"); }
+  function hideDiff() { diffOn = false; diffFab.classList.remove("active"); edDiff.classList.add("hidden"); fab.classList.remove("hidden"); }
+  // Apply a programmatic buffer change (e.g. a revert) without leaving diff view.
+  function setBuffer(v) {
+    area.value = v; tab.content = v;
+    updateActiveTabMark(); renderHl(); findMatches();
+    scheduleSave(tab.rel);
+  }
+  async function renderDiff() {
+    let head = "";
+    try { head = (await call("py.call", { module: "orchestrator", fn: "head_file", args: [tab.rel] })).text || ""; } catch (e) {}
+    if (!diffOn) return;
+    const rows = lineDiff(head, area.value);
+    if (rows === null) { edDiff.innerHTML = `<span class="di-empty">File too large to diff.</span>`; return; }
+    // Group consecutive changed rows into hunks.
+    const hunkOf = rows.map(() => -1);
+    let h = -1, prev = false;
+    rows.forEach((r, i) => { const ch = r[0] !== " "; if (ch) { if (!prev) h++; hunkOf[i] = h; } prev = ch; });
+    if (h < 0) { edDiff.innerHTML = `<span class="di-empty">No changes vs last commit.</span>`; return; }
+    let html = "", cur = -1;
+    rows.forEach(([t, s], i) => {
+      const k = hunkOf[i];
+      if (k !== cur) {
+        if (cur !== -1) html += "</div>";
+        if (k !== -1) html += `<div class="di-hunk"><button class="di-revert" data-hunk="${k}">⤺ revert</button>`;
+        cur = k;
+      }
+      const cls = t === "+" ? "di-add" : t === "-" ? "di-del" : "di-ctx";
+      html += `<span class="${cls}">${escapeHtml(t + " " + s)}</span>`;
+    });
+    if (cur !== -1) html += "</div>";
+    edDiff.innerHTML = html;
+    edDiff.querySelectorAll("[data-hunk]").forEach((btn) => {
+      btn.onclick = () => {
+        const k = parseInt(btn.dataset.hunk, 10);
+        const res = [];
+        rows.forEach(([t, s], i) => {
+          if (hunkOf[i] === k) { if (t === "-") res.push(s); }   // revert: keep committed side
+          else if (t !== "-") res.push(s);                        // elsewhere: keep current
+        });
+        setBuffer(res.join("\n"));
+        renderDiff();
+      };
+    });
+  }
   async function toggleDiff() {
     if (diffOn) { hideDiff(); return; }
     diffOn = true;
     diffFab.classList.add("active");
     findPop.classList.add("hidden");
-    let head = "";
-    try { head = (await call("py.call", { module: "orchestrator", fn: "head_file", args: [tab.rel] })).text || ""; } catch (e) {}
-    if (!diffOn) return; // toggled off while awaiting
-    const rows = lineDiff(head, area.value);
-    if (rows === null) edDiff.innerHTML = `<span class="di-empty">File too large to diff.</span>`;
-    else if (!rows.some((r) => r[0] !== " ")) edDiff.innerHTML = `<span class="di-empty">No changes vs last commit.</span>`;
-    else edDiff.innerHTML = rows.map(([t, s]) => {
-      const cls = t === "+" ? "di-add" : t === "-" ? "di-del" : "di-ctx";
-      return `<span class="${cls}">${escapeHtml(t + " " + s)}</span>`;
-    }).join("");
-    edDiff.classList.remove("hidden");
+    fab.classList.add("hidden");   // hide the find button while diffing
+    await renderDiff();
+    if (diffOn) edDiff.classList.remove("hidden");
   }
   diffFab.onclick = toggleDiff;
 
@@ -1717,7 +1771,7 @@ function renderEditor() {
   function onEdit() {
     if (diffOn) hideDiff(); // editing exits the (now stale) diff view
     tab.content = area.value;
-    updateActiveTabDirty(tab.content !== tab.saved);
+    updateActiveTabMark();
     refresh();
     scheduleSave(tab.rel);
   }
@@ -2012,11 +2066,79 @@ function openGithubMenu() {
   });
 }
 
+// --- Command palette (search box in the menu) ----------------------------
+const ACTION_INDEX = [
+  { label: "Make a game", act: "makeGame" },
+  { label: "Blank project", act: "newProject" },
+  { label: "Projects / sessions", act: "sessions" },
+  { label: "Best practices", act: "bestPractices" },
+  { label: "Guidelines", act: "guidelines" },
+  { label: "Settings", act: "settings" },
+  { label: "Open files", fn: () => openTree() },
+  { label: "New file", fn: () => newFile() },
+  { label: "Run app", fn: () => call("run") },
+  { label: "Refresh map", act: "refreshMap" },
+  { label: "Check web", act: "checkWeb" },
+  { label: "Commit (AI message)", act: "commit" },
+  { label: "Push", act: "push" },
+  { label: "Pull", act: "pull" },
+  { label: "New repository", act: "newRepo" },
+  { label: "Switch repository", act: "switchRepo" },
+  { label: "Delete repository", act: "deleteRepo" },
+  { label: "Merge → open PR", act: "createPR" },
+  { label: "Diff (workspace)", act: "diff" },
+  { label: "Start branch", act: "startBranch" },
+  { label: "PR status", act: "prStatus" },
+  { label: "Watch PR", act: "watchPr" },
+  { label: "Build in cloud", act: "cloudBuild" },
+  { label: "Build status", act: "buildStatus" },
+  { label: "Fix CI build", act: "fixBuild" },
+  { label: "Revert last commit", act: "revertLast" },
+  { label: "Force push", act: "forcePush" },
+  { label: "Clear context", act: "clearContext" },
+  { label: "View context", act: "viewContext" },
+  { label: "Preview payload", act: "previewContext" },
+  { label: "Attach files", act: "contextFiles" },
+  { label: "Trim context", act: "trimContext" },
+  { label: "Compaction", act: "compaction" },
+  { label: "Autocommit toggle", act: "autocommit" },
+  { label: "Speak replies toggle", act: "speak" },
+  { label: "Caveman toggle", act: "caveman" },
+  { label: "Effort (cycle)", act: "effort" },
+  { label: "Frugal toggle", act: "frugal" },
+  { label: "Battery", act: "battery" },
+  { label: "Update app", act: "updateApp" },
+];
+function runPaletteEntry(e) {
+  closeSheet("#menu");
+  if (e.fn) e.fn(); else (actions[e.act] || (() => {}))();
+}
+function renderPalette(q) {
+  const results = $("#menuResults"), def = $("#menuDefault");
+  q = (q || "").trim().toLowerCase();
+  if (!q) { results.classList.add("hidden"); results.innerHTML = ""; def.classList.remove("hidden"); return; }
+  def.classList.add("hidden"); results.classList.remove("hidden");
+  const hits = ACTION_INDEX.filter((e) => e.label.toLowerCase().includes(q));
+  results.innerHTML = hits.length
+    ? hits.map((e, i) => `<div class="palette-item" data-pi="${i}">${escapeHtml(e.label)}</div>`).join("")
+    : `<div class="hint">No matching action.</div>`;
+  results.querySelectorAll("[data-pi]").forEach((el, idx) => { el.onclick = () => runPaletteEntry(hits[idx]); });
+}
+
 // --- Wire up -------------------------------------------------------------
-$("#menuFab").onclick = () => { closeFabMenus(); openSheet("#menu"); };
+$("#menuFab").onclick = () => { closeFabMenus(); const s = $("#menuSearch"); if (s) s.value = ""; renderPalette(""); openSheet("#menu"); };
+const _menuSearch = $("#menuSearch");
+if (_menuSearch) _menuSearch.addEventListener("input", (e) => renderPalette(e.target.value));
 $("#actionsFab").onclick = (e) => { e.stopPropagation(); openActionsMenu(); };
 $("#githubFab").onclick = (e) => { e.stopPropagation(); openGithubMenu(); };
-$("#playFab").onclick = () => { closeFabMenus(); (actions.run || (() => {}))(); };
+$("#playFab").onclick = async () => {
+  closeFabMenus();
+  const fab = $("#playFab");
+  if (fab.classList.contains("running")) return;
+  fab.classList.add("running");
+  try { await call("run"); } catch (e) {}
+  fab.classList.remove("running");
+};
 $("#modelLead").onclick = (e) => { e.stopPropagation(); openModelMenu("orchestrator", e.currentTarget); };
 $("#modelImpl").onclick = (e) => { e.stopPropagation(); openModelMenu("implementer", e.currentTarget); };
 $("#chatActionsBtn").onclick = (e) => { e.stopPropagation(); openChatActionsMenu(); };
