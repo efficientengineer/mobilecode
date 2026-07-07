@@ -40,7 +40,7 @@ class RunActivity : AppCompatActivity() {
     private lateinit var web: WebView
     private lateinit var toolbar: MaterialToolbar
     private lateinit var urlText: TextView
-    private var immersive = false
+    private var fullscreened = false
     private var customView: View? = null
     private var customCallback: WebChromeClient.CustomViewCallback? = null
 
@@ -55,11 +55,11 @@ class RunActivity : AppCompatActivity() {
         toolbar = findViewById(R.id.runToolbar)
         toolbar.title = "Run"
         toolbar.setNavigationOnClickListener { finish() }
-        // A text ⛶ action that enters fullscreen. Once immersive, the toolbar is
+        // A text ⛶ action that enters fullscreen. Once fullscreened, the toolbar is
         // hidden, so the back key (onBackPressed) is how you leave.
         toolbar.menu.add(0, MENU_FULLSCREEN, 0, "⛶").apply {
             setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS or MenuItem.SHOW_AS_ACTION_WITH_TEXT)
-            setOnMenuItemClickListener { setImmersive(true); true }
+            setOnMenuItemClickListener { applyImmersive(true); true }
         }
 
         urlText = findViewById(R.id.runUrl)
@@ -85,7 +85,7 @@ class RunActivity : AppCompatActivity() {
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
                 )
-                setImmersive(true)
+                applyImmersive(true)
             }
 
             override fun onHideCustomView() {
@@ -94,7 +94,7 @@ class RunActivity : AppCompatActivity() {
                 customView = null
                 customCallback?.onCustomViewHidden()
                 customCallback = null
-                setImmersive(false)
+                applyImmersive(false)
             }
         }
 
@@ -113,9 +113,9 @@ class RunActivity : AppCompatActivity() {
         }
     }
 
-    /** Hide/show the toolbar, URL bar, and Android system bars for immersive play. */
-    private fun setImmersive(on: Boolean) {
-        immersive = on
+    /** Hide/show the toolbar, URL bar, and Android system bars for fullscreened play. */
+    private fun applyImmersive(on: Boolean) {
+        fullscreened = on
         toolbar.visibility = if (on) View.GONE else View.VISIBLE
         urlText.visibility = if (on) View.GONE else View.VISIBLE
         val c = WindowCompat.getInsetsController(window, window.decorView)
@@ -130,14 +130,14 @@ class RunActivity : AppCompatActivity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        // Leave an in-page (HTML) fullscreen first, then immersive, then exit.
+        // Leave an in-page (HTML) fullscreen first, then fullscreened, then exit.
         if (customView != null) {
             web.evaluateJavascript(
                 "(document.exitFullscreen||document.webkitExitFullscreen).call(document)", null
             )
             return
         }
-        if (immersive) { setImmersive(false); return }
+        if (fullscreened) { applyImmersive(false); return }
         super.onBackPressed()
     }
 
