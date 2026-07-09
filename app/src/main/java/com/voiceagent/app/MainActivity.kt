@@ -245,6 +245,7 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("keys", MODE_PRIVATE)
         prefs.getString("ANTHROPIC_API_KEY", null)?.let { set("ANTHROPIC_API_KEY", it) }
         prefs.getString("DEEPSEEK_API_KEY", null)?.let { set("DEEPSEEK_API_KEY", it) }
+        prefs.getString("OPENAI_API_KEY", null)?.let { set("OPENAI_API_KEY", it) }
         prefs.getString("GITHUB_TOKEN", null)?.let { set("GITHUB_TOKEN", it) }
         val (lead, worker) = effectiveModels()
         set("LEAD_MODEL", lead)
@@ -404,6 +405,7 @@ class MainActivity : AppCompatActivity() {
             JSONObject()
                 .put("anthropicKey", p.getString("ANTHROPIC_API_KEY", ""))
                 .put("deepseekKey", p.getString("DEEPSEEK_API_KEY", ""))
+                .put("openaiKey", p.getString("OPENAI_API_KEY", ""))
                 .put("githubToken", p.getString("GITHUB_TOKEN", ""))
                 .put("leadModel", p.getString("LEAD_MODEL", "")?.ifBlank { getString(R.string.lead_model_default) })
                 .put("workerModel", p.getString("WORKER_MODEL", "")?.ifBlank { getString(R.string.worker_model_default) })
@@ -416,6 +418,7 @@ class MainActivity : AppCompatActivity() {
             getSharedPreferences("keys", MODE_PRIVATE).edit()
                 .putString("ANTHROPIC_API_KEY", arg.optString("anthropicKey"))
                 .putString("DEEPSEEK_API_KEY", arg.optString("deepseekKey"))
+                .putString("OPENAI_API_KEY", arg.optString("openaiKey"))
                 .putString("GITHUB_TOKEN", arg.optString("githubToken"))
                 .putString("LEAD_MODEL", arg.optString("leadModel"))
                 .putString("WORKER_MODEL", arg.optString("workerModel"))
@@ -641,6 +644,22 @@ class MainActivity : AppCompatActivity() {
         p.getString("DEEPSEEK_API_KEY", "")?.takeIf { it.isNotBlank() }?.let {
             runCatching { out += fetchModels("https://api.deepseek.com/v1/models", "deepseek/") { c ->
                 c.setRequestProperty("Authorization", "Bearer $it") } }
+        }
+        p.getString("OPENAI_API_KEY", "")?.takeIf { it.isNotBlank() }?.let {
+            runCatching {
+                // /v1/models lists everything (audio, image, embeddings, tts…);
+                // keep only chat/reasoning text models the agent loop can drive.
+                out += fetchModels("https://api.openai.com/v1/models", "openai/") { c ->
+                    c.setRequestProperty("Authorization", "Bearer $it") }
+                    .filter { m ->
+                        val n = m.removePrefix("openai/").lowercase()
+                        (n.startsWith("gpt-") || n.startsWith("chatgpt") ||
+                            n.matches(Regex("^o[0-9].*"))) &&
+                            listOf("audio", "realtime", "transcribe", "tts", "image",
+                                "search", "embed", "moderation", "instruct").none { n.contains(it) }
+                    }
+                    .sorted()
+            }
         }
         return out
     }

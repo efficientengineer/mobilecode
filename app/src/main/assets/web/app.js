@@ -1159,6 +1159,7 @@ const actions = {
     modal("Settings",
       `<label>Anthropic API key</label><input id="ak" type="password" value="${s.anthropicKey||""}" />
        <label>DeepSeek API key</label><input id="dk" type="password" value="${s.deepseekKey||""}" />
+       <label>OpenAI API key</label><input id="ok" type="password" value="${s.openaiKey||""}" />
        <label>GitHub token (push / create / build)</label><input id="gt" type="password" value="${s.githubToken||""}" />
        <label>Default orchestrator model</label><input id="lm" type="text" value="${s.leadModel||""}" />
        <label>Default implementer model (blank = single agent)</label><input id="wm" type="text" value="${s.workerModel||""}" />
@@ -1177,6 +1178,7 @@ const actions = {
       async () => {
         await call("settings.save", {
           anthropicKey: $("#ak").value.trim(), deepseekKey: $("#dk").value.trim(),
+          openaiKey: $("#ok").value.trim(),
           githubToken: $("#gt").value.trim(), leadModel: $("#lm").value.trim(),
           workerModel: $("#wm").value.trim(), fallbackModel: $("#fm").value.trim(),
           speechSilenceMs: $("#ssm").value.trim(),
