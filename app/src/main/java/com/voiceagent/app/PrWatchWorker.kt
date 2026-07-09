@@ -48,6 +48,7 @@ class PrWatchWorker(private val ctx: Context, params: WorkerParameters) :
             set("AGENT_MAX_STEPS", "15") // bound a background fix to the work window
             keys.getString("ANTHROPIC_API_KEY", "")?.takeIf { it.isNotBlank() }?.let { set("ANTHROPIC_API_KEY", it) }
             keys.getString("DEEPSEEK_API_KEY", "")?.takeIf { it.isNotBlank() }?.let { set("DEEPSEEK_API_KEY", it) }
+            keys.getString("OPENAI_API_KEY", "")?.takeIf { it.isNotBlank() }?.let { set("OPENAI_API_KEY", it) }
             keys.getString("GITHUB_TOKEN", "")?.takeIf { it.isNotBlank() }?.let { set("GITHUB_TOKEN", it) }
             set("LEAD_MODEL", watch.getString("lead", "").orEmpty())
             set("WORKER_MODEL", watch.getString("worker", "").orEmpty())

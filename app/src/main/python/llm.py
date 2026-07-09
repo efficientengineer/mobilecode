@@ -425,8 +425,9 @@ def _parse_anthropic(result, model=""):
 
 # --- OpenAI-compatible (DeepSeek, etc.) -------------------------------------
 
-_OAI_BASES = {"deepseek": "https://api.deepseek.com"}
-_OAI_KEYS = {"deepseek": "DEEPSEEK_API_KEY"}
+_OAI_BASES = {"deepseek": "https://api.deepseek.com",
+              "openai": "https://api.openai.com"}
+_OAI_KEYS = {"deepseek": "DEEPSEEK_API_KEY", "openai": "OPENAI_API_KEY"}
 
 
 def _openai_tools(tools):
@@ -475,9 +476,13 @@ def _call_openai(provider, model, system, cached_context, messages, tools,
     key = os.environ.get(_OAI_KEYS.get(provider, "OPENAI_API_KEY"), "")
     payload = {
         "model": model,
-        "max_tokens": max_tokens,
         "messages": _openai_messages(system, cached_context, messages),
     }
+    # OpenAI moved to max_completion_tokens — its reasoning models (o1/o3/o4,
+    # gpt-5) REJECT the old max_tokens; the newer alias works on every current
+    # OpenAI chat model. DeepSeek and other OpenAI-compatible servers still use
+    # max_tokens, so keep that for them.
+    payload["max_completion_tokens" if provider == "openai" else "max_tokens"] = max_tokens
     if tools:
         payload["tools"] = _openai_tools(tools)
     # DeepSeek V4 (flash/pro) is a hybrid Thinking/Non-Thinking model. Send the
