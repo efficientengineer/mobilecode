@@ -242,6 +242,19 @@ class MainActivity : AppCompatActivity() {
         val pyOverride = File(filesDir, "py_override").apply { mkdirs() }
         set("AGENT_OVERRIDE", File(pyOverride, "orchestrator.py").absolutePath)
         set("AGENT_OVERRIDE_DIR", pyOverride.absolutePath)
+        // Everything the OTA loader (ota.py) needs to update ANY runtime file:
+        // repo/branch to fetch from and the device roots files land in.
+        set("OTA_REPO", REPO)
+        set("OTA_BRANCH", branch())
+        set("OTA_WEB_DIR", File(filesDir, "web").absolutePath)
+        set("OTA_FILES_DIR", filesDir.absolutePath)
+        // Put the override dir FIRST on sys.path so a downloaded copy of ANY
+        // module — including agent_loader.py and ota.py themselves — wins over
+        // the bundled one. This is what makes the whole brain hot-updatable.
+        val sysPath = Python.getInstance().getModule("sys").get("path")
+        if (sysPath?.callAttr("count", pyOverride.absolutePath)?.toInt() == 0) {
+            sysPath.callAttr("insert", 0, pyOverride.absolutePath)
+        }
         val prefs = getSharedPreferences("keys", MODE_PRIVATE)
         prefs.getString("ANTHROPIC_API_KEY", null)?.let { set("ANTHROPIC_API_KEY", it) }
         prefs.getString("DEEPSEEK_API_KEY", null)?.let { set("DEEPSEEK_API_KEY", it) }
@@ -491,8 +504,13 @@ class MainActivity : AppCompatActivity() {
             JSONObject().put("exempt", already)
         }
         "run" -> { withContext(Dispatchers.Main) { startActivity(Intent(this@MainActivity, RunActivity::class.java)) }; JSONObject().put("ok", true) }
-        "updateAgent" -> withContext(Dispatchers.IO) { text(updateAgent()) }
-        "updateUI" -> withContext(Dispatchers.IO) { text(updateUI()) }
+        "updateAgent" -> withContext(Dispatchers.IO) { text(otaUpdate("agent")) }
+        "updateUI" -> withContext(Dispatchers.IO) {
+            val r = otaUpdate("ui"); runOnUiThread { loadUi() }; text(r)
+        }
+        "updateAll" -> withContext(Dispatchers.IO) {
+            val r = otaUpdate("all"); runOnUiThread { loadUi() }; text(r)
+        }
         "web.runtimeCheck" -> webRuntimeCheck()
         else -> JSONObject().put("text", "unknown action: $action")
     }
@@ -555,22 +573,43 @@ class MainActivity : AppCompatActivity() {
             else (0 until arr.length()).map { arr.getString(it) }.ifEmpty { fallback }
         } catch (e: Throwable) { fallback }
 
-    private fun updateAgent(): String = try {
+    // All update logic lives in ota.py (itself OTA-updatable, manifest-driven,
+    // self-updating): Kotlin only exports the env and delegates. The legacy
+    // built-in updaters below remain ONLY as a bootstrap/repair fallback — if
+    // ota.py is missing or broken they restore enough (including a fresh
+    // ota.py, which is in the manifest's python list) to get back on the
+    // manifest-driven path.
+    private fun otaUpdate(kind: String): String = try {
+        prepareEnv() // pick up a branch/setting change made this session
+        py("ota").callAttr("update", kind).toString()
+    } catch (e: Throwable) {
+        val legacy = when (kind) {
+            "ui" -> legacyUpdateUI()
+            "agent" -> legacyUpdateAgent()
+            else -> legacyUpdateAgent() + " · " + legacyUpdateUI()
+        }
+        "$legacy (via built-in fallback: ${e.message?.take(120)})"
+    }
+
+    private fun legacyUpdateAgent(): String = try {
         val dir = File(filesDir, "py_override").apply { mkdirs() }
         val files = manifestList("python", listOf("llm.py", "agent_tools.py",
             "agentloop.py", "git_ops.py", "localrun.py", "templates.py", "orchestrator.py"))
         val fetched = files.map { it to fetchRaw("app/src/main/python/$it") }
-        fetched.forEach { (name, body) -> File(dir, name).writeText(body) }
+        fetched.forEach { (name, body) ->
+            File(dir, name).apply { parentFile?.mkdirs() }.writeText(body)
+        }
         "Agent updated (${files.size} modules) — next task uses the new code"
     } catch (e: Throwable) {
         "Update agent failed: ${e.message}"
     }
 
-    private fun updateUI(): String = try {
+    private fun legacyUpdateUI(): String = try {
         val dir = File(filesDir, "web").apply { mkdirs() }
         val files = manifestList("web", listOf("index.html", "style.css", "app.js"))
         for (f in files) {
-            File(dir, f).writeText(fetchRaw("app/src/main/assets/web/$f"))
+            File(dir, f).apply { parentFile?.mkdirs() }
+                .writeText(fetchRaw("app/src/main/assets/web/$f"))
         }
         runOnUiThread { loadUi() }
         "UI updated"

@@ -797,12 +797,21 @@ const actions = {
     if (next === "1") { try { call("speak", { text: "Voice replies on." }); } catch (e) {} }
   },
   async updateApp() {
-    bubble("Updating agent + UI…", "sys");
+    bubble("Updating everything (manifest-driven OTA)…", "sys");
     setStatus("Updating…");
     try {
-      const a = await call("updateAgent");
-      bubble(a.text || "Agent updated", "sys");
-      await call("updateUI"); // fetches new web assets and reloads the WebView
+      // One verb updates every runtime file (python + web + extras) per the
+      // repo's ota_manifest.json; the host reloads the WebView afterwards.
+      const r = await call("updateAll");
+      const t = (r && r.text) || "";
+      if (/^unknown action/.test(t)) {
+        // Older APK without updateAll — fall back to the two legacy verbs.
+        const a = await call("updateAgent");
+        bubble(a.text || "Agent updated", "sys");
+        await call("updateUI"); // reloads the WebView
+      } else {
+        bubble(t || "Updated", "sys");
+      }
     } catch (e) {
       bubble("Update failed: " + e.message, "sys");
       setStatus("");

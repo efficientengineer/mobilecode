@@ -1,5 +1,9 @@
 {
+  "version": 2,
+  "loader": "app/src/main/python/ota.py",
   "python": [
+    "ota.py",
+    "agent_loader.py",
     "llm.py",
     "agent_tools.py",
     "agentloop.py",
@@ -16,5 +20,7 @@
     "index.html",
     "style.css",
     "app.js"
-  ]
+  ],
+  "extra": [],
+  "remove": []
 }
