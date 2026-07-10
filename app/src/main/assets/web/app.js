@@ -1926,8 +1926,29 @@ function clampFabMenu(menu) {
   left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
   menu.style.left = left + "px";
 }
+// --- model grouping (by provider, and OpenAI further by family) -------------
+const PROVIDER_ORDER = ["anthropic", "deepseek", "openai"];
+const PROVIDER_LABEL = { anthropic: "Anthropic", deepseek: "DeepSeek", openai: "OpenAI" };
+// OpenAI ships a lot of ids; bucket them into recognizable families.
+const OAI_FAMILY_ORDER = ["GPT-5", "o-series (reasoning)", "GPT-4.1", "GPT-4o", "GPT-4", "GPT-3.5", "Other"];
+function modelProvider(m) { const i = m.indexOf("/"); return i < 0 ? "openai" : m.slice(0, i); }
+function modelName(m) { const i = m.indexOf("/"); return i < 0 ? m : m.slice(i + 1); }
+function openaiFamily(name) {
+  const n = name.toLowerCase();
+  if (/^o[0-9]/.test(n)) return "o-series (reasoning)";
+  if (n.startsWith("gpt-5") || n.startsWith("chatgpt-5")) return "GPT-5";
+  if (n.startsWith("gpt-4.1")) return "GPT-4.1";
+  if (n.startsWith("gpt-4o") || n.startsWith("chatgpt")) return "GPT-4o";
+  if (n.startsWith("gpt-4")) return "GPT-4";
+  if (n.startsWith("gpt-3.5") || n.startsWith("gpt-3")) return "GPT-3.5";
+  return "Other";
+}
+function titleCase(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
 // Model picker for a given role ("orchestrator" or "implementer"), anchored to
-// the button that opened it. Selecting sets that role and keeps the other.
+// the button that opened it. Models are grouped into collapsible provider
+// sections (Anthropic / DeepSeek / OpenAI), and OpenAI is further split by
+// family. Selecting sets that role and keeps the other.
 async function openModelMenu(role, anchor) {
   const menu = $("#modelMenu");
   if (!menu.classList.contains("hidden") && menu._role === role) { menu.classList.add("hidden"); return; }
@@ -1942,35 +1963,95 @@ async function openModelMenu(role, anchor) {
     meta = m; all = agg.models || [];
     cur = (role === "implementer" ? m.implementer : m.orchestrator) || "";
   } catch (e) {}
+
+  // sort within a group: most-recently-used first, then alphabetical by name
   const recent = getRecentModels(), rank = (m) => recent.indexOf(m);
-  const sorted = all.slice().sort((a, b) => {
+  const bySort = (a, b) => {
     const ra = rank(a), rb = rank(b);
-    if (ra < 0 && rb < 0) return a.localeCompare(b);
-    if (ra < 0) return -1;
-    if (rb < 0) return 1;
-    return rb - ra; // most recent first (top of an anchored-below dropdown)
-  });
-  const items = [];
-  if (role === "implementer") {
-    items.push(`<div class="fab-item" data-model="">${cur === "" ? "● " : ""}(single agent)</div>`);
+    if (ra < 0 && rb < 0) return modelName(a).localeCompare(modelName(b));
+    if (ra < 0) return -1; if (rb < 0) return 1; return rb - ra;
+  };
+  const groups = {};
+  for (const m of all) (groups[modelProvider(m)] || (groups[modelProvider(m)] = [])).push(m);
+  for (const k in groups) groups[k].sort(bySort);
+  const provKeys = [
+    ...PROVIDER_ORDER.filter((p) => groups[p]),
+    ...Object.keys(groups).filter((p) => !PROVIDER_ORDER.includes(p)).sort(),
+  ];
+
+  // Expanded sections. Open the current model's provider (+ family); if there's
+  // only one provider, open it so there's no needless extra tap.
+  const expanded = new Set();
+  const curProv = cur ? modelProvider(cur) : provKeys[0];
+  if (curProv) expanded.add("prov:" + curProv);
+  if (provKeys.length === 1) expanded.add("prov:" + provKeys[0]);
+  if (cur && modelProvider(cur) === "openai") expanded.add("fam:" + openaiFamily(modelName(cur)));
+
+  const chip = (n, open) => `<span class="fm-meta">${n} ${open ? "▾" : "▸"}</span>`;
+  const modelRow = (m) =>
+    `<div class="fab-item model" data-model="${escAttr(m)}">${m === cur ? "● " : ""}${escapeHtml(modelName(m))}</div>`;
+
+  function render() {
+    const rows = [];
+    if (role === "implementer") {
+      rows.push(`<div class="fab-item" data-model="">${cur === "" ? "● " : ""}(single agent)</div>`);
+    }
+    if (!provKeys.length) {
+      menu.innerHTML = rows.join("") +
+        `<div class="fab-item muted">No models — add an API key in Settings.</div>`;
+      clampFabMenu(menu); bind(); return;
+    }
+    for (const p of provKeys) {
+      const list = groups[p], open = expanded.has("prov:" + p);
+      rows.push(`<div class="fab-head tap" data-toggle="prov:${escAttr(p)}">` +
+        `<span>${escapeHtml(PROVIDER_LABEL[p] || titleCase(p))}</span>${chip(list.length, open)}</div>`);
+      if (!open) continue;
+      if (p === "openai") {
+        const fam = {};
+        for (const m of list) (fam[openaiFamily(modelName(m))] || (fam[openaiFamily(modelName(m))] = [])).push(m);
+        const famKeys = [
+          ...OAI_FAMILY_ORDER.filter((f) => fam[f]),
+          ...Object.keys(fam).filter((f) => !OAI_FAMILY_ORDER.includes(f)),
+        ];
+        for (const f of famKeys) {
+          const fopen = expanded.has("fam:" + f);
+          rows.push(`<div class="fab-subhead tap" data-toggle="fam:${escAttr(f)}">` +
+            `<span>${escapeHtml(f)}</span>${chip(fam[f].length, fopen)}</div>`);
+          if (fopen) rows.push(...fam[f].map(modelRow));
+        }
+      } else {
+        rows.push(...list.map(modelRow));
+      }
+    }
+    menu.innerHTML = rows.join("");
+    clampFabMenu(menu);
+    bind();
   }
-  items.push(...sorted.map((m) => `<div class="fab-item" data-model="${escAttr(m)}">${m === cur ? "● " : ""}${escapeHtml(shortModel(m))}</div>`));
-  menu.innerHTML = (items.length && (sorted.length || role === "implementer"))
-    ? items.join("")
-    : `<div class="fab-item muted">No models — add an API key in Settings.</div>`;
-  clampFabMenu(menu);
-  menu.querySelectorAll("[data-model]").forEach((el) => {
-    el.onclick = async () => {
-      const chosen = el.getAttribute("data-model");
-      const orchestrator = role === "implementer" ? (meta.orchestrator || "") : chosen;
-      const implementer = role === "implementer" ? chosen : (meta.implementer || "");
-      await call("session.setModels", { orchestrator, implementer });
-      if (chosen) pushRecentModel(chosen);
-      menu.classList.add("hidden");
-      await refreshHeader();
-      bubble((role === "implementer" ? "Implementer → " : "Model → ") + (chosen ? shortModel(chosen) : "single agent"), "sys");
-    };
-  });
+
+  function bind() {
+    menu.querySelectorAll("[data-toggle]").forEach((el) => {
+      el.onclick = (ev) => {
+        ev.stopPropagation();
+        const k = el.getAttribute("data-toggle");
+        expanded.has(k) ? expanded.delete(k) : expanded.add(k);
+        render();
+      };
+    });
+    menu.querySelectorAll("[data-model]").forEach((el) => {
+      el.onclick = async () => {
+        const chosen = el.getAttribute("data-model");
+        const orchestrator = role === "implementer" ? (meta.orchestrator || "") : chosen;
+        const implementer = role === "implementer" ? chosen : (meta.implementer || "");
+        await call("session.setModels", { orchestrator, implementer });
+        if (chosen) pushRecentModel(chosen);
+        menu.classList.add("hidden");
+        await refreshHeader();
+        bubble((role === "implementer" ? "Implementer → " : "Model → ") + (chosen ? shortModel(chosen) : "single agent"), "sys");
+      };
+    });
+  }
+
+  render();
 }
 const ACTION_ITEMS = [
   { label: "Clear context", act: "clearContext" },
