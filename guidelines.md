@@ -80,3 +80,37 @@
 ### Repo and branch
 
 The app reads `OTA_REPO` and `OTA_BRANCH` from SharedPreferences (or defaults from `strings.xml`). All OTA fetches go to `https://raw.githubusercontent.com/{repo}/{branch}/`. You can point a test device at a different branch to validate OTA changes before merging to main.
+
+## Git Branching Workflow — Feature Branches Required
+
+**Every new feature or non-trivial change MUST be developed in its own branch. Never commit directly to `main`.**
+
+### The workflow
+
+1. **Start a feature branch**: `git checkout -b feature/<short-name>` (e.g. `feature/edit-mode`, `feature/dark-theme`). The branch name should be descriptive and kebab-case.
+2. **Build the feature**: all commits for that feature go on the feature branch. Commit frequently with clear messages.
+3. **Push to remote**: `git push -u origin feature/<short-name>` so the branch exists on GitHub.
+4. **Merge to main when done**: once the feature is complete and verified, merge it into `main`:
+   ```
+   git checkout main
+   git pull origin main
+   git merge feature/<short-name>
+   git push origin main
+   ```
+5. **Delete the feature branch** after merging (both locally and on remote):
+   ```
+   git branch -d feature/<short-name>
+   git push origin --delete feature/<short-name>
+   ```
+
+### Why this matters
+
+- `main` is the production branch — the OTA system pulls from it. Broken code on `main` breaks the app for every user on the next update.
+- Feature branches let you test safely by pointing a device at the feature branch (`OTA_BRANCH = feature/<short-name>`) before merging.
+- If something goes wrong, you can abandon the branch without polluting `main`.
+
+### NEVER do these
+
+- **Never** commit directly to `main` for anything beyond a one-line hotfix (typo, manifest entry). Even small changes should go through a branch.
+- **Never** leave stale feature branches — delete them after merging.
+- **Never** merge a branch you haven't pushed — the agent needs to push so the user can see/test the changes on their device.
