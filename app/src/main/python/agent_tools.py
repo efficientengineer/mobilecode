@@ -797,6 +797,16 @@ def t_git_delete_branch(name="", remote=False, **_):
     return git_ops.delete_branch(name, bool(remote))
 
 
+def t_git_list_branches(**_):
+    import git_ops
+    return git_ops.list_branches()
+
+
+def t_git_prune_branches(dry_run=False, **_):
+    import git_ops
+    return git_ops.prune_branches(bool(dry_run))
+
+
 def t_git_update_from_base(**_):
     import git_ops
     return git_ops.update_from_base()
@@ -1130,6 +1140,20 @@ WRITE_TOOLS = [
          "name": {"type": "string"}, "remote": {"type": "boolean"},
      }, ["name"]),
      "fn": t_git_delete_branch},
+    {"name": "git_list_branches",
+     "description": "List all branches, flagging which are safe to delete (their "
+                    "PR merged, or already in the default branch) vs. which still "
+                    "have unmerged work. Use to answer 'what branches do I have?' "
+                    "or before pruning.",
+     "input_schema": _schema({}, []),
+     "fn": t_git_list_branches},
+    {"name": "git_prune_branches",
+     "description": "Clean up ALL stale branches at once: delete every merged "
+                    "non-default branch (local + remote). Never deletes the "
+                    "default branch or branches with unmerged commits. Set "
+                    "dry_run=true to preview what would be deleted first.",
+     "input_schema": _schema({"dry_run": {"type": "boolean"}}, []),
+     "fn": t_git_prune_branches},
     {"name": "git_update_from_base",
      "description": "Bring the current branch up to date with the default branch "
                     "when a PR won't merge because it's behind/conflicting. Merges "
