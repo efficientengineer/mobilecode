@@ -451,6 +451,59 @@ def pr_status(_=None) -> str:
         return "PR status failed:\n" + traceback.format_exc()
 
 
+def merge_pr(method: str = "merge") -> str:
+    """Merge the open PR for the current branch into its base branch.
+
+    method: "merge" (default) | "squash" | "rebase". Surfaces GitHub's own
+    reason when the merge is blocked (CI still running/failing, review or
+    branch-protection rules, conflicts, or a token without write access)
+    instead of a raw traceback."""
+    try:
+        full = _remote_full_name(_workspace())
+        if not full:
+            return "No repo set for this workspace."
+        branch = current_branch()
+        owner = full.split("/")[0]
+        prs = _api("GET", f"/repos/{full}/pulls?head={owner}:{branch}&state=all&per_page=1")
+        if not prs:
+            return f"No PR for branch {branch}. Open one first (Merge → open PR)."
+        pr = prs[0]
+        num = pr["number"]
+        if pr.get("merged_at"):
+            return f"PR #{num} is already merged: {pr['html_url']}"
+        if pr.get("state") != "open":
+            return f"PR #{num} is {pr.get('state')} (not open): {pr['html_url']}"
+
+        m = (method or "merge").strip().lower()
+        if m not in ("merge", "squash", "rebase"):
+            m = "merge"
+        try:
+            res = _api("PUT", f"/repos/{full}/pulls/{num}/merge", {"merge_method": m})
+        except _GitHubApiError as e:
+            why = e.message or (e.detail or "")[:200]
+            if e.code == 405:
+                return (f"PR #{num} can't be merged yet: {why}\n"
+                        "Usually required CI is still running or failing, a review "
+                        "is required, or branch protection is blocking it. "
+                        "Tap PR status to check.")
+            if e.code == 409:
+                return (f"PR #{num} has a conflict or the branch moved: {why}\n"
+                        "Pull the base branch, resolve conflicts, push, then retry.")
+            if e.code in (403, 401):
+                return (f"Merge not allowed: {why}\nThe GitHub token needs write "
+                        "access to this repo — a classic token with the 'repo' "
+                        "scope, or a fine-grained token with Contents + Pull "
+                        "requests read/write.")
+            return f"Merge PR #{num} failed (HTTP {e.code}): {why}"
+
+        if res.get("merged"):
+            base = (pr.get("base") or {}).get("ref", "the base branch")
+            return f"Merged PR #{num} ({m}) into {base} ✅\n{pr['html_url']}"
+        return f"Merge PR #{num}: {res.get('message', 'unexpected response')}"
+    except Exception:
+        return "Merge PR failed:\n" + traceback.format_exc()
+
+
 # --- file inspection -----------------------------------------------------
 
 def list_tree() -> str:

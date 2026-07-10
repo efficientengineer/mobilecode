@@ -745,6 +745,22 @@ const actions = {
       });
   },
   prStatus() { runText("PR status", "py.call", { module: "git_ops", fn: "pr_status", args: [] }); },
+  mergePR() {
+    modal("Merge pull request",
+      `<div class="hint">Merges the open PR for the current branch into its base branch. This can't be easily undone — GitHub will block it if CI is failing, a review is required, or there's a conflict.</div>
+       <label>Method</label>
+       <select id="mm">
+         <option value="merge">Merge commit</option>
+         <option value="squash">Squash and merge</option>
+         <option value="rebase">Rebase and merge</option>
+       </select>`,
+      async () => {
+        const m = ($("#mm") && $("#mm").value) || "merge";
+        bubble("Merging PR…", "sys");
+        bubble((await call("py.call", { module: "git_ops", fn: "merge_pr", args: [m] })).text, "sys");
+        refreshHeader();
+      });
+  },
   forcePush() {
     modal("Force push",
       `<div class="hint">Overwrite the remote branch with your local history? Remote-only commits are LOST.</div>`,
@@ -2136,6 +2152,7 @@ const GITHUB_ITEMS = [
   { label: "Diff", act: "diff" },
   { label: "Start branch", act: "startBranch" },
   { label: "PR status", act: "prStatus" },
+  { label: "Merge PR", act: "mergePR" },
   { label: "Watch PR", act: "watchPr" },
   { label: "Build in cloud", act: "cloudBuild" },
   { label: "Build status", act: "buildStatus" },
@@ -2181,6 +2198,7 @@ const ACTION_INDEX = [
   { label: "Diff (workspace)", act: "diff" },
   { label: "Start branch", act: "startBranch" },
   { label: "PR status", act: "prStatus" },
+  { label: "Merge PR", act: "mergePR" },
   { label: "Watch PR", act: "watchPr" },
   { label: "Build in cloud", act: "cloudBuild" },
   { label: "Build status", act: "buildStatus" },
