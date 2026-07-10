@@ -771,6 +771,16 @@ def t_git_open_pr(title="", body="", **_):
     return git_ops.create_pr(title, body)
 
 
+def t_git_pr_status(**_):
+    import git_ops
+    return git_ops.pr_status()
+
+
+def t_git_merge_pr(method="merge", **_):
+    import git_ops
+    return git_ops.merge_pr(method)
+
+
 def t_git_pull(**_):
     import git_ops
     return git_ops.pull()
@@ -1020,6 +1030,21 @@ WRITE_TOOLS = [
          "title": {"type": "string"}, "body": {"type": "string"},
      }, []),
      "fn": t_git_open_pr},
+    {"name": "git_pr_status",
+     "description": "Report the open PR for the current branch and its CI verdict "
+                    "(passing / failing / running). Check this before merging.",
+     "input_schema": _schema({}, []),
+     "fn": t_git_pr_status},
+    {"name": "git_merge_pr",
+     "description": "Merge the open PR for the current branch into its base "
+                    "branch. Only when the user asked to merge. Prefer checking "
+                    "git_pr_status first — GitHub blocks the merge if CI is "
+                    "failing, a review is required, or there's a conflict, and "
+                    "this returns that reason. method: merge | squash | rebase.",
+     "input_schema": _schema({
+         "method": {"type": "string", "enum": ["merge", "squash", "rebase"]},
+     }, []),
+     "fn": t_git_merge_pr},
     {"name": "git_pull",
      "description": "Pull the current branch from origin (falls back to the "
                     "default branch). Use to sync after a merge.",
