@@ -120,14 +120,19 @@ function bubble(text, kind, runId, ctxText) {
     d.classList.add("tappable");
     d.onclick = () => openRun(runId);
   }
-  chat.appendChild(d);
+  // Insert BEFORE any live progress element so user messages during a run don't
+  // end up below the live/streaming block — they stay in correct time order.
+  const live = chat.querySelector(".live");
+  if (live) chat.insertBefore(d, live);
+  else chat.appendChild(d);
   // Per-message token estimate = what this turn costs in CONTEXT (the compact
   // form), not the full displayed text. UI only — never itself sent.
   if ((kind === "user" || kind === "agent") && ctxText !== false) {
     const t = document.createElement("div");
     t.className = "tok " + kind;
     t.textContent = "~" + estTokens(ctxText != null ? ctxText : text) + " ctx tokens";
-    chat.appendChild(t);
+    if (live) chat.insertBefore(t, live);
+    else chat.appendChild(t);
   }
   chat.scrollTop = chat.scrollHeight;
   // New agent reply while the drawer is closed → flag it on the 💬 button.
@@ -303,7 +308,9 @@ async function steerRun(task) {
   const tag = document.createElement("div");
   tag.className = "eph-tag";
   tag.textContent = "↪ steering the running task";
-  chat.appendChild(tag);
+  const live = chat.querySelector(".live");
+  if (live) chat.insertBefore(tag, live);
+  else chat.appendChild(tag);
   chat.scrollTop = chat.scrollHeight;
   try { await call("orch", { fn: "steer", arg: task }); } catch (e) {}
 }
