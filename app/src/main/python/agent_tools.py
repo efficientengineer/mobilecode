@@ -781,6 +781,21 @@ def t_git_merge_pr(method="merge", **_):
     return git_ops.merge_pr(method)
 
 
+def t_git_pull(**_):
+    import git_ops
+    return git_ops.pull()
+
+
+def t_git_checkout(name="", **_):
+    import git_ops
+    return git_ops.checkout(name)
+
+
+def t_git_delete_branch(name="", remote=False, **_):
+    import git_ops
+    return git_ops.delete_branch(name, bool(remote))
+
+
 # --- todo list (TodoWrite-style live checklist) ------------------------------
 
 def _agent_dir() -> Path:
@@ -1030,6 +1045,25 @@ WRITE_TOOLS = [
          "method": {"type": "string", "enum": ["merge", "squash", "rebase"]},
      }, []),
      "fn": t_git_merge_pr},
+    {"name": "git_pull",
+     "description": "Pull the current branch from origin (falls back to the "
+                    "default branch). Use to sync after a merge.",
+     "input_schema": _schema({}, []),
+     "fn": t_git_pull},
+    {"name": "git_checkout",
+     "description": "Switch to an existing local branch (e.g. back to main after "
+                    "merging). Refuses if there are uncommitted changes.",
+     "input_schema": _schema({"name": {"type": "string"}}, ["name"]),
+     "fn": t_git_checkout},
+    {"name": "git_delete_branch",
+     "description": "Delete a branch after its PR is merged (cleanup). Deletes "
+                    "the local branch; set remote=true to also delete it on "
+                    "GitHub. Auto-switches off the branch first if it's checked "
+                    "out; never deletes the default branch.",
+     "input_schema": _schema({
+         "name": {"type": "string"}, "remote": {"type": "boolean"},
+     }, ["name"]),
+     "fn": t_git_delete_branch},
 ]
 
 DELEGATE_TOOL = {
@@ -1093,6 +1127,9 @@ _SYNONYMS = {
     "todos": ("items", "tasks", "list", "todo", "todo_list"),
     "title": ("subject", "name", "heading"),
     "method": ("merge_method", "mergeMethod", "strategy", "mode"),
+    "name": ("branch", "branch_name", "branchName", "ref"),
+    "remote": ("delete_remote", "remote_too", "remoteToo", "push_delete",
+               "also_remote", "on_remote"),
 }
 
 

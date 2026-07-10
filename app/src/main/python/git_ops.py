@@ -389,6 +389,86 @@ def pull() -> str:
         return _scrub("Pull failed:\n" + traceback.format_exc())
 
 
+def checkout(name: str = "") -> str:
+    """Switch to an existing local branch, updating the working tree. Refuses
+    when there are uncommitted changes (a hard switch would lose them)."""
+    try:
+        root = _workspace()
+        if not (root / ".git").exists():
+            return "No repo in this workspace."
+        name = (name or "").strip()
+        if not name:
+            return "checkout: which branch?"
+        if name == current_branch():
+            return f"Already on {name}."
+        from dulwich.repo import Repo
+        r = Repo(str(root))
+        ref = ("refs/heads/" + name).encode()
+        if ref not in r.refs:
+            return (f"No local branch '{name}'. Pull it first "
+                    "(git_pull) or create it (git_branch).")
+        if _changed(root):
+            return (f"Can't switch to {name}: you have uncommitted changes. "
+                    "Commit or revert them first.")
+        r.refs.set_symbolic_ref(b"HEAD", ref)     # point HEAD at the branch
+        porcelain.reset(str(root), "hard")        # materialize its tree
+        return f"On branch {name}"
+    except Exception:
+        return _scrub("Checkout failed:\n" + traceback.format_exc())
+
+
+def delete_branch(name: str = "", remote: bool = False) -> str:
+    """Delete a local branch (and the remote one when remote=True). If you're
+    currently on it, switches to the default branch first so the delete is
+    allowed; never deletes the default branch itself."""
+    try:
+        root = _workspace()
+        if not (root / ".git").exists():
+            return "No repo in this workspace."
+        full = _remote_full_name(root)
+        name = (name or "").strip()
+        if not name:
+            return "delete_branch: which branch?"
+        default = _default_branch(full) if full else "main"
+        if name == default:
+            return f"Refusing to delete '{name}' — it's the default branch."
+
+        from dulwich.repo import Repo
+        r = Repo(str(root))
+        ref = ("refs/heads/" + name).encode()
+        msgs = []
+        if current_branch() == name:
+            dref = ("refs/heads/" + default).encode()
+            if dref not in r.refs:
+                return (f"Can't delete '{name}' while it's checked out and there's "
+                        f"no local '{default}' to switch to. Pull {default} first.")
+            r.refs.set_symbolic_ref(b"HEAD", dref)
+            if not _changed(root):
+                try: porcelain.reset(str(root), "hard")
+                except Exception: pass
+            msgs.append(f"switched to {default}")
+        if ref in r.refs:
+            del r.refs[ref]
+            msgs.append(f"deleted local {name}")
+        else:
+            msgs.append(f"no local {name}")
+
+        if remote and full:
+            try:
+                _api("DELETE", f"/repos/{full}/git/refs/heads/{name}")
+                msgs.append(f"deleted remote {name}")
+            except _GitHubApiError as e:
+                if e.code in (404, 422):
+                    msgs.append(f"remote {name} already gone")
+                elif e.code in (401, 403):
+                    msgs.append("remote delete not allowed (token needs write access)")
+                else:
+                    msgs.append(f"remote delete failed ({e.code}: {e.message or ''})")
+        return "Cleanup: " + ", ".join(msgs)
+    except Exception:
+        return _scrub("Delete branch failed:\n" + traceback.format_exc())
+
+
 # --- pull requests ---------------------------------------------------------
 
 def create_pr(title: str = "", body: str = "") -> str:
