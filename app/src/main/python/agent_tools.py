@@ -796,6 +796,16 @@ def t_git_delete_branch(name="", remote=False, **_):
     return git_ops.delete_branch(name, bool(remote))
 
 
+def t_git_update_from_base(**_):
+    import git_ops
+    return git_ops.update_from_base()
+
+
+def t_git_force_push(**_):
+    import git_ops
+    return git_ops.push_force()
+
+
 # --- todo list (TodoWrite-style live checklist) ------------------------------
 
 def _agent_dir() -> Path:
@@ -1064,6 +1074,21 @@ WRITE_TOOLS = [
          "name": {"type": "string"}, "remote": {"type": "boolean"},
      }, ["name"]),
      "fn": t_git_delete_branch},
+    {"name": "git_update_from_base",
+     "description": "Bring the current branch up to date with the default branch "
+                    "when a PR won't merge because it's behind/conflicting. Merges "
+                    "the latest default in; on a clean merge, git_push then "
+                    "git_merge_pr; on conflicts it lists the files to fix (resolve "
+                    "the <<<<<<< markers, then git_commit + git_push). If it can't "
+                    "merge on-device, rebuild the branch from the default branch.",
+     "input_schema": _schema({}, []),
+     "fn": t_git_update_from_base},
+    {"name": "git_force_push",
+     "description": "Force-push the current branch (overwrites the remote branch "
+                    "with local history). Use after rebuilding/rewriting a branch "
+                    "to fix conflicts. Never on the default branch.",
+     "input_schema": _schema({}, []),
+     "fn": t_git_force_push},
 ]
 
 DELEGATE_TOOL = {

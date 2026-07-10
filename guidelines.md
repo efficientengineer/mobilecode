@@ -81,36 +81,80 @@
 
 The app reads `OTA_REPO` and `OTA_BRANCH` from SharedPreferences (or defaults from `strings.xml`). All OTA fetches go to `https://raw.githubusercontent.com/{repo}/{branch}/`. You can point a test device at a different branch to validate OTA changes before merging to main.
 
-## Git Branching Workflow — Feature Branches Required
+## Git Workflow — Use the git TOOLS, not raw `git`
 
-**Every new feature or non-trivial change MUST be developed in its own branch. Never commit directly to `main`.**
+**You do NOT have a shell or the `git` command.** Do all git work through your
+git TOOLS. Never write shell/`git` commands for the user to run — you have
+everything you need:
 
-### The workflow
+| Tool | What it does |
+|------|--------------|
+| `git_status` | current branch, remote, uncommitted changes |
+| `git_branch(name)` | create + switch to a work branch at HEAD (files untouched) |
+| `git_commit(message)` | stage all changes and commit |
+| `git_push` | push the current branch to origin |
+| `git_open_pr(title, body)` | push, then open a PR into the default branch |
+| `git_pr_status` | the PR's state + CI verdict — check before merging |
+| `git_merge_pr(method)` | merge the current branch's PR (`merge`/`squash`/`rebase`) |
+| `git_pull` | pull the current branch (or default) from origin |
+| `git_checkout(name)` | switch to an existing local branch |
+| `git_delete_branch(name, remote)` | delete a merged branch, local (+ remote) |
+| `git_update_from_base` | merge the latest default branch into your branch (un-stale a PR) |
+| `git_force_push` | force-push (overwrite the remote branch) — for rebuilt branches |
 
-1. **Start a feature branch**: `git checkout -b feature/<short-name>` (e.g. `feature/edit-mode`, `feature/dark-theme`). The branch name should be descriptive and kebab-case.
-2. **Build the feature**: all commits for that feature go on the feature branch. Commit frequently with clear messages.
-3. **Push to remote**: `git push -u origin feature/<short-name>` so the branch exists on GitHub.
-4. **Merge to main when done**: once the feature is complete and verified, merge it into `main`:
-   ```
-   git checkout main
-   git pull origin main
-   git merge feature/<short-name>
-   git push origin main
-   ```
-5. **Delete the feature branch** after merging (both locally and on remote):
-   ```
-   git branch -d feature/<short-name>
-   git push origin --delete feature/<short-name>
-   ```
+**Every non-trivial change goes on its own branch. Never commit directly to
+`main`** — the OTA system pulls from `main`, so broken code there breaks the app
+for every user on the next update.
 
-### Why this matters
+### The happy path (do it in this order)
 
-- `main` is the production branch — the OTA system pulls from it. Broken code on `main` breaks the app for every user on the next update.
-- Feature branches let you test safely by pointing a device at the feature branch (`OTA_BRANCH = feature/<short-name>`) before merging.
-- If something goes wrong, you can abandon the branch without polluting `main`.
+1. **Start clean from the latest default branch** — this is the #1 way to AVOID
+   conflicts: `git_checkout("main")` → `git_pull` → `git_branch("feature/<short-name>")`
+   (descriptive, kebab-case). A branch cut from up-to-date `main` won't conflict
+   if you also merge promptly.
+2. **Build + commit**: make the change, then `git_commit("clear message")`. Keep
+   each branch SMALL and focused — small, short-lived branches almost never
+   conflict.
+3. **Open the PR**: `git_open_pr("what changed", "why")` (it pushes first).
+4. **Check, then merge**: `git_pr_status` to confirm CI is green, then
+   `git_merge_pr("merge")`.
+5. **Clean up**: `git_checkout("main")` → `git_pull` →
+   `git_delete_branch("feature/<short-name>", remote=true)`.
+
+### When a merge conflicts (do NOT get stuck — you can fix this)
+
+`git_merge_pr` returns a reason when GitHub blocks the merge. If it's a
+**conflict** or "branch is behind", resolve it — two ways, prefer the first:
+
+**A. Resolve in place (keeps your PR):**
+1. `git_update_from_base` — merges the latest `main` into your branch.
+   - *Clean* → it says so: `git_push`, then `git_merge_pr` again. Done.
+   - *Conflicts* → it lists the conflicted files.
+2. For each listed file: `read_file` it, find the conflict blocks
+   (`<<<<<<< … ======= … >>>>>>>`), and use `str_replace`/`write_file` to keep
+   the correct code and **delete all three marker lines**. Verify nothing else
+   still contains `<<<<<<<`.
+3. `git_commit("resolve merge conflicts with main")` → `git_push` →
+   `git_merge_pr`.
+
+**B. Rebuild from main (bulletproof fallback — use if A can't merge on-device,
+or the change is small):**
+1. `git_checkout("main")` → `git_pull` (now you have the latest).
+2. `git_branch("feature/<short-name>-v2")` and **re-apply your change** (you know
+   what it was — just redo the edits on this fresh branch).
+3. `git_open_pr(...)` → `git_merge_pr` → `git_delete_branch` the stale branch
+   (`remote=true`). Because you started from current `main`, there's no conflict.
+
+Both paths are safe. When in doubt, prefer **B** for small changes — it can't get
+stuck. Never leave the user a list of terminal commands to run; finish the git
+work with your tools.
 
 ### NEVER do these
 
-- **Never** commit directly to `main` for anything beyond a one-line hotfix (typo, manifest entry). Even small changes should go through a branch.
-- **Never** leave stale feature branches — delete them after merging.
-- **Never** merge a branch you haven't pushed — the agent needs to push so the user can see/test the changes on their device.
+- **Never** hand the user raw `git`/shell commands — you have tools; use them.
+- **Never** commit directly to `main` beyond a one-line hotfix (typo, manifest
+  entry). Even small changes go through a branch + PR.
+- **Never** `git_force_push` the default branch.
+- **Never** leave stale branches — delete them (local + remote) after merging.
+- **Never** "merge" by editing files to look merged — resolve the actual conflict
+  markers or rebuild from `main`.

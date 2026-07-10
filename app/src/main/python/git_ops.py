@@ -389,6 +389,83 @@ def pull() -> str:
         return _scrub("Pull failed:\n" + traceback.format_exc())
 
 
+def _conflicted_files(root: Path) -> list:
+    """Workspace files left with merge-conflict markers, relative-path sorted."""
+    out = []
+    skip = {".git", ".agent", "node_modules", "__pycache__"}
+    for p in root.rglob("*"):
+        if not p.is_file() or any(s in p.parts for s in skip):
+            continue
+        try:
+            t = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if "<<<<<<<" in t and ">>>>>>>" in t:
+            out.append(str(p.relative_to(root)))
+    return sorted(out)
+
+
+def update_from_base() -> str:
+    """Merge the latest default branch into the current work branch, so a PR
+    that has fallen behind main becomes mergeable. Clean merge -> push, then
+    merge the PR. Conflicts -> the files are left with <<<<<<< markers to fix,
+    then git_commit + git_push. If this build can't 3-way-merge on device, it
+    says so and you rebuild the branch from main instead (see guidelines)."""
+    try:
+        root = _workspace()
+        full = _remote_full_name(root)
+        if not full:
+            return "No repo set for this workspace."
+        branch = current_branch()
+        default = _default_branch(full)
+        if branch == default:
+            return f"You're on {default} — nothing to update from."
+        remote = _auth_url(full)
+        try:
+            porcelain.fetch(str(root), remote)
+        except Exception:
+            pass
+        from dulwich.repo import Repo
+        r = Repo(str(root))
+        base_sha = None
+        for cand in (f"refs/remotes/origin/{default}", f"refs/heads/{default}"):
+            b = cand.encode()
+            if b in r.refs:
+                base_sha = r.refs[b]
+                break
+        if base_sha is None:
+            return (f"Couldn't find {default} after fetch. Rebuild the branch from "
+                    f"{default} instead (see guidelines: 'When a merge conflicts').")
+        if not hasattr(porcelain, "merge"):
+            return (f"This build can't 3-way-merge on device. Rebuild the branch "
+                    f"from the latest {default}: git_checkout {default} -> git_pull "
+                    "-> git_branch <new-name> -> redo your change -> git_open_pr "
+                    "(see guidelines: 'When a merge conflicts').")
+        try:
+            try:
+                porcelain.merge(str(root), base_sha)
+            except TypeError:
+                porcelain.merge(str(root), [base_sha])
+        except Exception as e:
+            conflicts = _conflicted_files(root)
+            if conflicts:
+                return ("Merge hit CONFLICTS in:\n- " + "\n- ".join(conflicts) +
+                        "\nOpen each file, resolve the <<<<<<< / ======= / >>>>>>> "
+                        "sections (keep the right code, delete the markers), then "
+                        "git_commit and git_push, then git_merge_pr.")
+            return (f"Couldn't merge {default} cleanly ({_scrub(str(e))[:160]}). "
+                    f"Rebuild the branch from {default} instead (see guidelines).")
+        conflicts = _conflicted_files(root)
+        if conflicts:
+            return ("Merged with CONFLICTS in:\n- " + "\n- ".join(conflicts) +
+                    "\nResolve the <<<<<<< markers in each, then git_commit, "
+                    "git_push, git_merge_pr.")
+        return (f"Merged the latest {default} into {branch} cleanly. "
+                "Now git_push, then git_merge_pr.")
+    except Exception:
+        return _scrub("Update from base failed:\n" + traceback.format_exc())
+
+
 def checkout(name: str = "") -> str:
     """Switch to an existing local branch, updating the working tree. Refuses
     when there are uncommitted changes (a hard switch would lose them)."""
