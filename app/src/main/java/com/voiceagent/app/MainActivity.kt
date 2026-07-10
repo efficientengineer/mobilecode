@@ -384,6 +384,7 @@ class MainActivity : AppCompatActivity() {
             JSONObject().put("text", t)
         }
         "agent.commit" -> withContext(Dispatchers.IO) { text(py("orchestrator").callAttr("commit_now").toString()) }
+        "git.currentBranch" -> withContext(Dispatchers.IO) { text(py("git_ops").callAttr("current_branch").toString()) }
         "git.push" -> withContext(Dispatchers.IO) { text(py("git_ops").callAttr("push").toString()) }
         "git.pull" -> withContext(Dispatchers.IO) { text(py("git_ops").callAttr("pull").toString()) }
         "git.balances" -> withContext(Dispatchers.IO) { text(py("git_ops").callAttr("balances").toString()) }

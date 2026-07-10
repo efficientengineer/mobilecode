@@ -149,6 +149,12 @@ async function refreshHeader() {
   if (mn) mn.textContent = shortModel(m.orchestrator);
   const inm = $("#implName");
   if (inm) inm.textContent = m.implementer ? shortModel(m.implementer) : "single";
+  // Fetch current git branch and show it on the GitHub button.
+  try {
+    const br = (await call("git.currentBranch")).text || "";
+    const fab = $("#githubFab");
+    if (fab && br) fab.textContent = "GitHub ▾ · " + br;
+  } catch (e) {}
 }
 
 async function loadHistory() {
