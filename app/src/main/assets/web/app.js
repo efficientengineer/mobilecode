@@ -721,6 +721,22 @@ const actions = {
   commit() { runText("Commit", "agent.commit"); },
   push() { runText("Push", "git.push"); },
   pull() { runText("Pull", "git.pull"); },
+    switchBranch() {
+      modal("Switch / create branch",
+        `<div class="hint">Enter a branch name:</div>
+         <input id="branchNameInput" type="text" placeholder="e.g. feature/my-feature" style="width:100%;box-sizing:border-box;font-size:16px;padding:12px" />`,
+        async () => {
+          const name = document.getElementById("branchNameInput")?.value?.trim();
+          if (!name) return;
+          try {
+            const r = await call("py.call", { module: "git_ops", fn: "start_branch", args: [name] });
+            bubble(r.text || "Switched to branch " + name, "sys");
+            await refreshHeader();
+          } catch (e) {
+            bubble("Error: " + (e.message || "failed to switch branch"), "sys");
+          }
+        });
+    },
   balance() { runText("Balance", "git.balances"); },
   cloudBuild() { runText("Cloud build", "git.cloudBuild"); },
   buildStatus() { runText("Build status", "git.buildStatus"); },
@@ -2138,6 +2154,8 @@ const GITHUB_ITEMS = [
   { label: "New repository", act: "newRepo" },
   { label: "Switch repository", act: "switchRepo" },
   { label: "Delete repository", act: "deleteRepo" },
+  //
+  { label: "Switch / create branch", act: "switchBranch" },
   { label: "Commit (AI message)", act: "commit" },
   { label: "Pull", act: "pull" },
   { label: "Push", act: "push" },
@@ -2156,16 +2174,29 @@ const GITHUB_ITEMS = [
 function openGithubMenu() {
   const menu = $("#githubMenu");
   if (!menu.classList.contains("hidden")) { menu.classList.add("hidden"); return; }
-  closeFabMenus();
-  menu.innerHTML = GITHUB_ITEMS.map((a) => a.header
-    ? `<div class="fab-head">${escapeHtml(a.header)}</div>`
-    : `<div class="fab-item" data-ghact="${a.act}">${a.label}</div>`).join("");
-  positionFabMenu(menu, $("#githubFab"), "left");
-  clampFabMenu(menu);
-  menu.classList.remove("hidden");
-  menu.querySelectorAll("[data-ghact]").forEach((el) => {
-    el.onclick = () => { menu.classList.add("hidden"); (actions[el.getAttribute("data-ghact")] || (() => {}))(); };
-  });
+  closeFabMenus(); (async () => {
+    // Refresh the branch/repo info on the fab before building the popup.
+    await refreshHeader();
+    const branchName = (() => {
+      const fab = $("#githubFab");
+      if (!fab) return "?";
+      // fab text looks like "GitHub ▾ · main" — extract the branch part.
+      const m = fab.textContent.match(/·\s+(.+)$/);
+      return m ? m[1].trim() : "?";
+    })();
+    // Read-only header row showing the current branch.
+    const headerHtml = `<div class="fab-head" style="pointer-events:none;opacity:0.7;font-size:13px">
+      🌿 branch: ${escapeHtml(branchName)}</div>`;
+    menu.innerHTML = headerHtml + GITHUB_ITEMS.map((a) => a.header
+      ? `<div class="fab-head">${escapeHtml(a.header)}</div>`
+      : `<div class="fab-item" data-ghact="${a.act}">${a.label}</div>`).join("");
+    positionFabMenu(menu, $("#githubFab"), "left");
+    clampFabMenu(menu);
+    menu.classList.remove("hidden");
+    menu.querySelectorAll("[data-ghact]").forEach((el) => {
+      el.onclick = () => { menu.classList.add("hidden"); (actions[el.getAttribute("data-ghact")] || (() => {}))(); };
+    });
+  })();
 }
 
 // --- Command palette (search box in the menu) ----------------------------
