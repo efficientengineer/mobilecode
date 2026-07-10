@@ -677,6 +677,114 @@ def delete_branch(name: str = "", remote: bool = False) -> str:
         return _scrub("Delete branch failed:\n" + traceback.format_exc())
 
 
+def _branches_info(root: Path, full: str) -> list:
+    """Per-branch cleanup status via the GitHub API. Returns dicts:
+    {name, default, merged, reason, ahead}. `merged` means safe to delete:
+    the branch had a merged PR (covers squash/rebase merges, which ancestry
+    misses) OR it's fully contained in the default branch (ahead == 0)."""
+    default = _default_branch(full)
+    branches = _api("GET", f"/repos/{full}/branches?per_page=100") or []
+    # Map head branch -> was any PR from it merged. state=all so merged PRs (now
+    # closed) are included; head.ref is the source branch name.
+    merged_heads = set()
+    try:
+        for pr in _api("GET", f"/repos/{full}/pulls?state=all&per_page=100") or []:
+            if pr.get("merged_at"):
+                ref = ((pr.get("head") or {}).get("ref") or "")
+                if ref:
+                    merged_heads.add(ref)
+    except _GitHubApiError:
+        pass
+    out = []
+    for b in branches:
+        name = b.get("name") or ""
+        if not name:
+            continue
+        if name == default:
+            out.append({"name": name, "default": True, "merged": False,
+                        "reason": "default branch", "ahead": None})
+            continue
+        if name in merged_heads:
+            out.append({"name": name, "default": False, "merged": True,
+                        "reason": "PR merged", "ahead": 0})
+            continue
+        # No merged PR — ask the API how far ahead of default it is. ahead == 0
+        # means every commit is already in the default branch (safe to delete).
+        ahead = None
+        try:
+            cmp = _api("GET", f"/repos/{full}/compare/{default}...{name}") or {}
+            ahead = cmp.get("ahead_by")
+        except _GitHubApiError:
+            ahead = None
+        if ahead == 0:
+            out.append({"name": name, "default": False, "merged": True,
+                        "reason": "already in default", "ahead": 0})
+        else:
+            out.append({"name": name, "default": False, "merged": False,
+                        "reason": f"{ahead} commit(s) ahead" if ahead is not None
+                        else "unmerged", "ahead": ahead})
+    return out
+
+
+def list_branches() -> str:
+    """List the repo's branches, flagging which are safe to delete (their PR was
+    merged, or they're already contained in the default branch) vs. which still
+    carry unmerged work. Use before prune_branches or to answer 'what branches do
+    I have?'."""
+    try:
+        root = _workspace()
+        full = _remote_full_name(root)
+        if not full:
+            return "No repo set for this workspace."
+        info = _branches_info(root, full)
+        if not info:
+            return "No branches found."
+        cur = current_branch()
+        lines = []
+        for b in info:
+            mark = "*" if b["name"] == cur else " "
+            if b["default"]:
+                tag = "default"
+            elif b["merged"]:
+                tag = f"MERGED ({b['reason']}) — safe to delete"
+            else:
+                tag = f"unmerged ({b['reason']})"
+            lines.append(f"{mark} {b['name']}  —  {tag}")
+        deletable = [b["name"] for b in info if b["merged"] and not b["default"]]
+        tail = ("\n\n" + f"{len(deletable)} branch(es) safe to prune: "
+                + ", ".join(deletable)) if deletable else \
+               "\n\nNothing to prune — no merged branches."
+        return "Branches:\n" + "\n".join(lines) + tail
+    except Exception:
+        return _scrub("List branches failed:\n" + traceback.format_exc())
+
+
+def prune_branches(dry_run: bool = False) -> str:
+    """Delete every MERGED non-default branch (local + remote) in one call —
+    i.e. clean up stale branches after their PRs merged. Never touches the
+    default branch or branches with unmerged commits. dry_run=true just lists
+    what it would delete."""
+    try:
+        root = _workspace()
+        full = _remote_full_name(root)
+        if not full:
+            return "No repo set for this workspace."
+        info = _branches_info(root, full)
+        targets = [b["name"] for b in info if b["merged"] and not b["default"]]
+        if not targets:
+            return ("No merged branches to prune — every branch is either the "
+                    "default or still has unmerged commits.")
+        if dry_run:
+            return ("Would prune (merged, safe): " + ", ".join(targets)
+                    + "\nRun prune_branches again without dry_run to delete them.")
+        results = []
+        for name in targets:
+            results.append(delete_branch(name, remote=True))
+        return "Pruned " + str(len(targets)) + " branch(es):\n- " + "\n- ".join(results)
+    except Exception:
+        return _scrub("Prune branches failed:\n" + traceback.format_exc())
+
+
 # --- pull requests ---------------------------------------------------------
 
 def create_pr(title: str = "", body: str = "") -> str:

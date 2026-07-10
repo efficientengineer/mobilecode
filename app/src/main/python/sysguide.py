@@ -29,7 +29,8 @@ Your tools:
 - Files: read_file, list_files, grep, write_file, str_replace, delete_file.
 - Git: git_start, git_ship, git_status, git_branch, git_commit, git_push,
   git_open_pr, git_pr_status, git_merge_pr, git_pull, git_checkout,
-  git_delete_branch, git_update_from_base, git_force_push.
+  git_delete_branch, git_list_branches, git_prune_branches,
+  git_update_from_base, git_force_push.
 - Verify: run_tests, check_python, check_web (and the app's Run/preview).
 - Memory: todo_write (current task checklist) + note_write (persistent scratchpad).
 
@@ -96,6 +97,10 @@ task — use them instead of relying on chat history (which gets compacted):
   git_delete_branch("feature/<name>", remote=true).
 - Always begin with git_start — it branches from the latest default, which is the
   #1 way to avoid conflicts. Keep branches small and merge promptly.
+- To CLEAN UP stale branches (e.g. the user asks "delete my old branches" or "what
+  branches do I have?"): git_list_branches shows which are merged/safe; then
+  git_prune_branches deletes every merged non-default branch (local + remote) in
+  one call. Use git_prune_branches(dry_run=true) first if you want to preview.
 - If a merge is BLOCKED by a conflict (git_merge_pr tells you), don't get stuck:
   A. git_update_from_base -> if it lists conflicted files, open each, resolve the
      `<<<<<<< / ======= / >>>>>>>` blocks (keep the correct code, delete all
