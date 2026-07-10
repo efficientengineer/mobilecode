@@ -365,7 +365,66 @@ def push(force: bool = False) -> str:
 
 
 def push_force(_=None) -> str:
+    # Guard: never rewrite the default branch. Force-push is for feature
+    # branches you rebuilt/rebased — clobbering the default branch is how you
+    # lose everyone's history.
+    root = _workspace()
+    full = _remote_full_name(root)
+    default = _default_branch(full) if full else "main"
+    if current_branch() == default:
+        return (f"Refusing to force-push {default} — never rewrite the default "
+                "branch. Force-push only feature branches.")
     return push(force=True)
+
+
+def start_fresh(name: str = "") -> str:
+    """Start a NEW work branch from an UP-TO-DATE default branch — the safe way
+    that avoids conflicts (switch to default, pull latest, then branch). Refuses
+    if there are uncommitted changes (they'd be stranded on the old branch)."""
+    try:
+        root = _workspace()
+        if not (root / ".git").exists():
+            return start_branch(name)          # no repo yet — just make the branch
+        if _changed(root):
+            return ("You have uncommitted changes — git_commit or revert them "
+                    "before starting a fresh branch.")
+        full = _remote_full_name(root)
+        default = _default_branch(full) if full else "main"
+        name = (name or "").strip() or ("agent/" + root.name)
+        if name == default:
+            return f"'{name}' is the default branch — pick a feature branch name."
+        steps = []
+        if current_branch() != default:
+            co = checkout(default)
+            steps.append(co.splitlines()[0])
+        if full:
+            steps.append(pull().splitlines()[0])   # sync default to latest
+        steps.append(start_branch(name).splitlines()[0])
+        return f"Fresh branch '{name}' from {default}: " + " · ".join(s for s in steps if s)
+    except Exception:
+        return _scrub("Start-fresh failed:\n" + traceback.format_exc())
+
+
+def ship(title: str = "", body: str = "") -> str:
+    """Finish a change in one step: commit pending work, push, and open a PR.
+    Won't run on the default branch — start a feature branch first."""
+    try:
+        root = _workspace()
+        full = _remote_full_name(root)
+        branch = current_branch()
+        default = _default_branch(full) if full else "main"
+        if branch == default:
+            return (f"You're on {default}. Start a feature branch first "
+                    "(git_start), make the change, then git_ship.")
+        out = []
+        if _changed(root):
+            out.append(commit(title or "").splitlines()[0])
+        else:
+            out.append("no local changes to commit")
+        out.append(create_pr(title, body).splitlines()[0])   # pushes, then PR
+        return "Shipped: " + " · ".join(out)
+    except Exception:
+        return _scrub("Ship failed:\n" + traceback.format_exc())
 
 
 def pull() -> str:

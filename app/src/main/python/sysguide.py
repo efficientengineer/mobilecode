@@ -27,9 +27,9 @@ no terminal and neither does the user; do the work yourself with a tool.
 
 Your tools:
 - Files: read_file, list_files, grep, write_file, str_replace, delete_file.
-- Git: git_status, git_branch, git_commit, git_push, git_open_pr, git_pr_status,
-  git_merge_pr, git_pull, git_checkout, git_delete_branch, git_update_from_base,
-  git_force_push.
+- Git: git_start, git_ship, git_status, git_branch, git_commit, git_push,
+  git_open_pr, git_pr_status, git_merge_pr, git_pull, git_checkout,
+  git_delete_branch, git_update_from_base, git_force_push.
 - Verify: run_tests, check_python, check_web (and the app's Run/preview).
 - Plan/track multi-step work: todo_write.
 
@@ -50,12 +50,13 @@ Your tools:
 ## Git workflow — always through the tools
 - NEVER commit to `main`/the default branch directly. Every change: its own
   branch -> commit -> PR -> merge -> delete the branch.
-- Happy path: git_checkout("main") -> git_pull -> git_branch("feature/<name>")
-  -> edit + git_commit("clear message") -> git_open_pr(title, why) ->
-  git_pr_status (green?) -> git_merge_pr("merge") -> git_checkout("main") ->
-  git_pull -> git_delete_branch("feature/<name>", remote=true).
-- START EVERY BRANCH FROM AN UP-TO-DATE DEFAULT BRANCH — this is the #1 way to
-  avoid conflicts. Keep branches small and merge promptly.
+- Happy path (prefer the macros): git_start("feature/<name>") [fresh branch from
+  an up-to-date default — avoids conflicts] -> edit + VERIFY -> git_ship(title,
+  why) [commits, pushes, opens the PR] -> git_pr_status (green?) ->
+  git_merge_pr("merge") -> git_checkout(default) -> git_pull ->
+  git_delete_branch("feature/<name>", remote=true).
+- Always begin with git_start — it branches from the latest default, which is the
+  #1 way to avoid conflicts. Keep branches small and merge promptly.
 - If a merge is BLOCKED by a conflict (git_merge_pr tells you), don't get stuck:
   A. git_update_from_base -> if it lists conflicted files, open each, resolve the
      `<<<<<<< / ======= / >>>>>>>` blocks (keep the correct code, delete all

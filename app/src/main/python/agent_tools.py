@@ -167,7 +167,8 @@ def t_read_file(path="", start_line=0, end_line=0, **_):
     if fp.is_dir():
         return (f"('{path}' is a directory — use list_files to see its contents)")
     if not fp.exists() or not fp.is_file():
-        return f"(no such file: {path})"
+        return (f"(no such file: {path} — find it with list_files or grep, or "
+                "create it with write_file)")
     try:
         text = fp.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
@@ -368,10 +369,10 @@ def t_delete_file(path="", **_):
         return err
     fp = _resolve(path)
     if not fp.exists():
-        return f"(no such file: {path})"
+        return f"(no such file: {path} — nothing to delete; check the path with list_files)"
     fp.unlink()
     TOUCHED.add(str(path))
-    return f"deleted {path}"
+    return f"deleted {path} (irreversible — recover from git if needed)"
 
 
 # --- verification ----------------------------------------------------------
@@ -806,6 +807,16 @@ def t_git_force_push(**_):
     return git_ops.push_force()
 
 
+def t_git_start(name="", **_):
+    import git_ops
+    return git_ops.start_fresh(name)
+
+
+def t_git_ship(title="", body="", **_):
+    import git_ops
+    return git_ops.ship(title, body)
+
+
 # --- todo list (TodoWrite-style live checklist) ------------------------------
 
 def _agent_dir() -> Path:
@@ -1086,9 +1097,24 @@ WRITE_TOOLS = [
     {"name": "git_force_push",
      "description": "Force-push the current branch (overwrites the remote branch "
                     "with local history). Use after rebuilding/rewriting a branch "
-                    "to fix conflicts. Never on the default branch.",
+                    "to fix conflicts. Refuses on the default branch.",
      "input_schema": _schema({}, []),
      "fn": t_git_force_push},
+    {"name": "git_start",
+     "description": "PREFERRED way to begin a change: start a fresh feature "
+                    "branch from an up-to-date default branch (switches to "
+                    "default, pulls latest, then branches). Avoids conflicts. "
+                    "Refuses if you have uncommitted changes.",
+     "input_schema": _schema({"name": {"type": "string"}}, ["name"]),
+     "fn": t_git_start},
+    {"name": "git_ship",
+     "description": "Finish a change in one step: commit pending work, push, and "
+                    "open a PR. Use after making + verifying your edits on a "
+                    "feature branch. Then git_pr_status and git_merge_pr.",
+     "input_schema": _schema({
+         "title": {"type": "string"}, "body": {"type": "string"},
+     }, []),
+     "fn": t_git_ship},
 ]
 
 DELEGATE_TOOL = {
