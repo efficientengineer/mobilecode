@@ -911,6 +911,40 @@ def t_todo_write(todos=None, **_):
     return f"todos updated ({done}/{len(clean)} done{tail})" + note
 
 
+# --- persistent scratchpad (durable working memory across tasks) --------------
+
+_SCRATCH_CAP = 4000   # chars — keep working memory tight; it rides context
+
+
+def _scratch_file() -> Path:
+    return _agent_dir() / "scratchpad.md"
+
+
+def read_scratch() -> str:
+    fp = _scratch_file()
+    try:
+        return fp.read_text(encoding="utf-8") if fp.exists() else ""
+    except Exception:
+        return ""
+
+
+def t_note_write(text="", append=False, **_):
+    """Save your persistent working notes (goal, key decisions, current state,
+    gotchas). Carried into every future task's context, so you don't re-derive
+    them. append=false replaces; append=true adds to the end."""
+    text = str(text or "")
+    if append:
+        cur = read_scratch()
+        text = cur + ("\n" if cur and not cur.endswith("\n") else "") + text
+    if len(text) > _SCRATCH_CAP:
+        text = text[-_SCRATCH_CAP:]   # keep the most recent notes
+    try:
+        _scratch_file().write_text(text, encoding="utf-8")
+    except Exception as e:
+        return f"(note_write failed: {e})"
+    return f"working notes saved ({len(text)} chars)"
+
+
 # --- registry ----------------------------------------------------------------
 
 def _schema(props, required):
@@ -1028,6 +1062,17 @@ WRITE_TOOLS = [
          }},
      }, ["todos"]),
      "fn": t_todo_write},
+    {"name": "note_write",
+     "description": "Save your PERSISTENT working notes — the durable goal, key "
+                    "decisions, current state, and gotchas for what you're "
+                    "building. These are carried into every future task's "
+                    "context, so record things here instead of re-explaining or "
+                    "re-deriving them. append=false replaces the notes; "
+                    "append=true adds to the end. Keep it concise.",
+     "input_schema": _schema({
+         "text": {"type": "string"}, "append": {"type": "boolean"},
+     }, ["text"]),
+     "fn": t_note_write},
     {"name": "git_branch",
      "description": "Create and switch to a work branch (safe: files unchanged). "
                     "Blank name = agent/<workspace>. Do this before editing when "
@@ -1176,6 +1221,7 @@ _SYNONYMS = {
     "message": ("msg", "text", "commit_message", "commitMessage", "m"),
     "instruction": ("instructions", "task", "prompt", "detail"),
     "todos": ("items", "tasks", "list", "todo", "todo_list"),
+    "text": ("notes", "note", "memo", "working_notes", "scratchpad"),
     "title": ("subject", "name", "heading"),
     "method": ("merge_method", "mergeMethod", "strategy", "mode"),
     "name": ("branch", "branch_name", "branchName", "ref"),
