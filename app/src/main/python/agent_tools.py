@@ -771,16 +771,6 @@ def t_git_open_pr(title="", body="", **_):
     return git_ops.create_pr(title, body)
 
 
-def t_git_pr_status(**_):
-    import git_ops
-    return git_ops.pr_status()
-
-
-def t_git_merge_pr(method="merge", **_):
-    import git_ops
-    return git_ops.merge_pr(method)
-
-
 # --- todo list (TodoWrite-style live checklist) ------------------------------
 
 def _agent_dir() -> Path:
@@ -1015,21 +1005,6 @@ WRITE_TOOLS = [
          "title": {"type": "string"}, "body": {"type": "string"},
      }, []),
      "fn": t_git_open_pr},
-    {"name": "git_pr_status",
-     "description": "Report the open PR for the current branch and its CI verdict "
-                    "(passing / failing / running). Check this before merging.",
-     "input_schema": _schema({}, []),
-     "fn": t_git_pr_status},
-    {"name": "git_merge_pr",
-     "description": "Merge the open PR for the current branch into its base "
-                    "branch. Only when the user asked to merge. Prefer checking "
-                    "git_pr_status first — GitHub blocks the merge if CI is "
-                    "failing, a review is required, or there's a conflict, and "
-                    "this returns that reason. method: merge | squash | rebase.",
-     "input_schema": _schema({
-         "method": {"type": "string", "enum": ["merge", "squash", "rebase"]},
-     }, []),
-     "fn": t_git_merge_pr},
 ]
 
 DELEGATE_TOOL = {
@@ -1092,7 +1067,6 @@ _SYNONYMS = {
     "instruction": ("instructions", "task", "prompt", "detail"),
     "todos": ("items", "tasks", "list", "todo", "todo_list"),
     "title": ("subject", "name", "heading"),
-    "method": ("merge_method", "mergeMethod", "strategy", "mode"),
 }
 
 

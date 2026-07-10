@@ -368,8 +368,12 @@ def push_force(_=None) -> str:
     return push(force=True)
 
 
-def pull() -> str:
-    """Pull the current branch (falling back to the default branch) from origin."""
+def pull(force: bool = False) -> str:
+    """Pull the current branch (falling back to the default branch) from origin.
+
+    When branches have diverged, does a fetch + hard reset to the remote ref,
+    discarding local commits that aren't on the remote (this is safe after a
+    PR merge where the remote has a merge commit the local branch lacks)."""
     try:
         root = _workspace()
         full = _remote_full_name(root)
@@ -380,13 +384,40 @@ def pull() -> str:
             porcelain.pull(str(root), _auth_url(full),
                            f"refs/heads/{branch}".encode())
             return f"Pulled {branch} from {full}"
-        except Exception:
+        except Exception as first_err:
             default = _default_branch(full)
-            porcelain.pull(str(root), _auth_url(full),
-                           f"refs/heads/{default}".encode())
-            return f"Pulled {default} from {full}"
+            try:
+                porcelain.pull(str(root), _auth_url(full),
+                               f"refs/heads/{default}".encode())
+                return f"Pulled {default} from {full}"
+            except Exception:
+                pass
+            # Branches diverged — fetch + hard reset to remote
+            from dulwich.porcelain import DivergedBranches
+            if isinstance(first_err, DivergedBranches) or force:
+                target_branch = branch if branch else default
+                _force_pull(root, full, target_branch)
+                return f"Pulled {target_branch} from {full} (reset to remote)"
+            raise first_err
     except Exception:
         return _scrub("Pull failed:\n" + traceback.format_exc())
+
+
+def _force_pull(root, full, branch):
+    """Fetch the remote ref and hard-reset the local branch to it."""
+    from dulwich.refs import read_ref, write_ref
+    auth_url = _auth_url(full)
+    remote_refs = porcelain.fetch(str(root), auth_url)
+    remote_head = remote_refs.get(f"refs/heads/{branch}".encode())
+    if not remote_head:
+        raise ValueError(f"Remote ref refs/heads/{branch} not found")
+    repo = porcelain.open_repo(str(root))
+    write_ref(repo, f"refs/heads/{branch}", remote_head)
+    repo.reset_index()
+    from dulwich.index import build_index_from_tree
+    build_index_from_tree(str(root), repo.index_path(),
+                          repo.object_store, repo[remote_head].tree)
+    return f"Reset {branch} to {remote_head.hex()[:7]}"
 
 
 # --- pull requests ---------------------------------------------------------
@@ -452,59 +483,6 @@ def pr_status(_=None) -> str:
         return line
     except Exception:
         return "PR status failed:\n" + traceback.format_exc()
-
-
-def merge_pr(method: str = "merge") -> str:
-    """Merge the open PR for the current branch into its base branch.
-
-    method: "merge" (default) | "squash" | "rebase". Surfaces GitHub's own
-    reason when the merge is blocked (CI still running/failing, review or
-    branch-protection rules, conflicts, or a token without write access)
-    instead of a raw traceback."""
-    try:
-        full = _remote_full_name(_workspace())
-        if not full:
-            return "No repo set for this workspace."
-        branch = current_branch()
-        owner = full.split("/")[0]
-        prs = _api("GET", f"/repos/{full}/pulls?head={owner}:{branch}&state=all&per_page=1")
-        if not prs:
-            return f"No PR for branch {branch}. Open one first (Merge → open PR)."
-        pr = prs[0]
-        num = pr["number"]
-        if pr.get("merged_at"):
-            return f"PR #{num} is already merged: {pr['html_url']}"
-        if pr.get("state") != "open":
-            return f"PR #{num} is {pr.get('state')} (not open): {pr['html_url']}"
-
-        m = (method or "merge").strip().lower()
-        if m not in ("merge", "squash", "rebase"):
-            m = "merge"
-        try:
-            res = _api("PUT", f"/repos/{full}/pulls/{num}/merge", {"merge_method": m})
-        except _GitHubApiError as e:
-            why = e.message or (e.detail or "")[:200]
-            if e.code == 405:
-                return (f"PR #{num} can't be merged yet: {why}\n"
-                        "Usually required CI is still running or failing, a review "
-                        "is required, or branch protection is blocking it. "
-                        "Tap PR status to check.")
-            if e.code == 409:
-                return (f"PR #{num} has a conflict or the branch moved: {why}\n"
-                        "Pull the base branch, resolve conflicts, push, then retry.")
-            if e.code in (403, 401):
-                return (f"Merge not allowed: {why}\nThe GitHub token needs write "
-                        "access to this repo — a classic token with the 'repo' "
-                        "scope, or a fine-grained token with Contents + Pull "
-                        "requests read/write.")
-            return f"Merge PR #{num} failed (HTTP {e.code}): {why}"
-
-        if res.get("merged"):
-            base = (pr.get("base") or {}).get("ref", "the base branch")
-            return f"Merged PR #{num} ({m}) into {base} ✅\n{pr['html_url']}"
-        return f"Merge PR #{num}: {res.get('message', 'unexpected response')}"
-    except Exception:
-        return "Merge PR failed:\n" + traceback.format_exc()
 
 
 # --- file inspection -----------------------------------------------------
