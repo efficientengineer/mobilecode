@@ -277,8 +277,11 @@ def set_active_repo(full_name: str) -> str:
 # --- branches --------------------------------------------------------------
 
 def current_branch() -> str:
+    root = _workspace()
+    if not (root / ".git").exists():
+        return "(no repo)"
     try:
-        return porcelain.active_branch(str(_workspace())).decode()
+        return porcelain.active_branch(str(root)).decode()
     except Exception:
         return "master"
 

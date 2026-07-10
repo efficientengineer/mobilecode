@@ -100,6 +100,13 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 .tab .tab-dirty.m-unsaved { color: #fbbf24; }
 .tab .tab-dirty.m-modified { color: #4ade80; }
 .tab .tab-x { color: var(--muted); font-size: 14px; padding: 0 2px; border-radius: 6px; }
+
+/* Subtle status bar below tabs: session name · repo · branch — always visible. */
+#subtitle { flex-shrink: 0; display: flex; align-items: center; gap: 6px;
+  background: var(--bg); border-bottom: 1px solid var(--border); padding: 3px 10px;
+  font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+#subRepo { color: var(--accent); }
+#subBranch { color: #4ade80; }
 .tab .tab-x:active { color: #f87171; background: var(--border); }
 
 /* Explorer tree, opened from ☰ Files as an overlay panel. */

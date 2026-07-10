@@ -142,19 +142,27 @@ function shortModel(m) {
 }
 
 async function refreshHeader() {
-  const m = await call("session.meta");
-  const sub = $("#subtitle");
-  if (sub) sub.textContent = (m.name || "session") + " • " + (m.activeRepo || "no repo");
+  // Fetch session meta + git branch in parallel.
+  const [m, brResult] = await Promise.all([
+    call("session.meta"),
+    call("git.currentBranch").catch(() => ({ text: "?" }))
+  ]);
+  const branch = brResult.text || "?";
+  // Always-visible subtitle bar: session · repo · branch
+  const ss = $("#subSession");
+  if (ss) ss.textContent = m.name || "session";
+  const sr = $("#subRepo");
+  if (sr) sr.textContent = m.activeRepo || "no repo";
+  const sb = $("#subBranch");
+  if (sb) sb.textContent = branch;
+  // GitHub fab shows branch persistently.
+  const fab = $("#githubFab");
+  if (fab) fab.textContent = "GitHub ▾ · " + branch;
+  // Model picker labels in the chat drawer.
   const mn = $("#modelName");
   if (mn) mn.textContent = shortModel(m.orchestrator);
   const inm = $("#implName");
   if (inm) inm.textContent = m.implementer ? shortModel(m.implementer) : "single";
-  // Fetch current git branch and show it on the GitHub button.
-  try {
-    const br = (await call("git.currentBranch")).text || "";
-    const fab = $("#githubFab");
-    if (fab && br) fab.textContent = "GitHub ▾ · " + br;
-  } catch (e) {}
 }
 
 async function loadHistory() {
@@ -2175,18 +2183,12 @@ function openGithubMenu() {
   const menu = $("#githubMenu");
   if (!menu.classList.contains("hidden")) { menu.classList.add("hidden"); return; }
   closeFabMenus(); (async () => {
-    // Refresh the branch/repo info on the fab before building the popup.
-    await refreshHeader();
-    const branchName = (() => {
-      const fab = $("#githubFab");
-      if (!fab) return "?";
-      // fab text looks like "GitHub ▾ · main" — extract the branch part.
-      const m = fab.textContent.match(/·\s+(.+)$/);
-      return m ? m[1].trim() : "?";
-    })();
-    // Read-only header row showing the current branch.
+    // Repo + branch are already live on the fab and subtitle bar — read them.
+    const repoName = ($("#subRepo") && $("#subRepo").textContent) || "no repo";
+    const branchName = ($("#subBranch") && $("#subBranch").textContent) || "?";
+    // Header row showing current repo and branch.
     const headerHtml = `<div class="fab-head" style="pointer-events:none;opacity:0.7;font-size:13px">
-      🌿 branch: ${escapeHtml(branchName)}</div>`;
+      📁 ${escapeHtml(repoName)} &nbsp; 🌿 ${escapeHtml(branchName)}</div>`;
     menu.innerHTML = headerHtml + GITHUB_ITEMS.map((a) => a.header
       ? `<div class="fab-head">${escapeHtml(a.header)}</div>`
       : `<div class="fab-item" data-ghact="${a.act}">${a.label}</div>`).join("");
