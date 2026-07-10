@@ -374,30 +374,31 @@ def pull(force: bool = False) -> str:
     When branches have diverged, does a fetch + hard reset to the remote ref,
     discarding local commits that aren't on the remote (this is safe after a
     PR merge where the remote has a merge commit the local branch lacks)."""
+    root = _workspace()
+    full = _remote_full_name(root)
+    if not full:
+        return "No repo set for this workspace (create or select one first)."
+    branch = current_branch()
+    target_branch = branch if branch else _default_branch(full)
     try:
-        root = _workspace()
-        full = _remote_full_name(root)
-        if not full:
-            return "No repo set for this workspace (create or select one first)."
-        branch = current_branch()
         try:
             porcelain.pull(str(root), _auth_url(full),
-                           f"refs/heads/{branch}".encode())
-            return f"Pulled {branch} from {full}"
+                           f"refs/heads/{target_branch}".encode())
+            return f"Pulled {target_branch} from {full}"
         except Exception as first_err:
-            default = _default_branch(full)
-            try:
-                porcelain.pull(str(root), _auth_url(full),
-                               f"refs/heads/{default}".encode())
-                return f"Pulled {default} from {full}"
-            except Exception:
-                pass
+            # Try the other branch (default if we tried named, named if we tried default)
+            other = _default_branch(full) if branch else (branch or _default_branch(full))
+            if other != target_branch:
+                try:
+                    porcelain.pull(str(root), _auth_url(full),
+                                   f"refs/heads/{other}".encode())
+                    return f"Pulled {other} from {full}"
+                except Exception:
+                    pass
             # Branches diverged — fetch + hard reset to remote
             from dulwich.porcelain import DivergedBranches
             if isinstance(first_err, DivergedBranches) or force:
-                target_branch = branch if branch else default
-                _force_pull(root, full, target_branch)
-                return f"Pulled {target_branch} from {full} (reset to remote)"
+                return _force_pull(root, full, target_branch)
             raise first_err
     except Exception:
         return _scrub("Pull failed:\n" + traceback.format_exc())
@@ -405,7 +406,7 @@ def pull(force: bool = False) -> str:
 
 def _force_pull(root, full, branch):
     """Fetch the remote ref and hard-reset the local branch to it."""
-    from dulwich.refs import read_ref, write_ref
+    from dulwich.refs import write_ref
     auth_url = _auth_url(full)
     remote_refs = porcelain.fetch(str(root), auth_url)
     remote_head = remote_refs.get(f"refs/heads/{branch}".encode())
@@ -417,7 +418,7 @@ def _force_pull(root, full, branch):
     from dulwich.index import build_index_from_tree
     build_index_from_tree(str(root), repo.index_path(),
                           repo.object_store, repo[remote_head].tree)
-    return f"Reset {branch} to {remote_head.hex()[:7]}"
+    return f"Pulled {branch} from {full} (reset to {remote_head.hex()[:7]})"
 
 
 # --- pull requests ---------------------------------------------------------
