@@ -26,6 +26,21 @@ def _token() -> str:
     return os.environ.get("GITHUB_TOKEN", "").strip()
 
 
+# Commit identity for on-device commits. Defaults to the repo owner so commits
+# are attributed to their GitHub account (not an anonymous agent@device.local);
+# overridable via GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL (or GIT_COMMITTER_*).
+_DEFAULT_GIT_NAME = "efficientengineer"
+_DEFAULT_GIT_EMAIL = "efficientengineer@proton.me"
+
+
+def _identity() -> bytes:
+    name = (os.environ.get("GIT_AUTHOR_NAME")
+            or os.environ.get("GIT_COMMITTER_NAME") or _DEFAULT_GIT_NAME).strip()
+    email = (os.environ.get("GIT_AUTHOR_EMAIL")
+             or os.environ.get("GIT_COMMITTER_EMAIL") or _DEFAULT_GIT_EMAIL).strip()
+    return f"{name} <{email}>".encode()
+
+
 def _workspace() -> Path:
     ws = os.environ.get("AGENT_WORKSPACE")
     if not ws:
@@ -171,9 +186,9 @@ def commit(message: str = "") -> str:
             porcelain.add(str(root), paths=[str(p)])
         _stage_deletions(root)  # dulwich's add never records removals
         msg = (message or "").strip() or "Update workspace"
+        ident = _identity()
         cid = porcelain.commit(str(root), message=msg.encode(),
-                               author=b"Voice Agent <agent@device.local>",
-                               committer=b"Voice Agent <agent@device.local>")
+                               author=ident, committer=ident)
         cid = cid.decode() if isinstance(cid, bytes) else str(cid)
         return f"Committed {cid[:8]}: {msg}"
     except Exception:
