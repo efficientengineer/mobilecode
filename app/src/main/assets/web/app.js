@@ -942,6 +942,7 @@ const actions = {
         refreshStats();
       });
   },
+  templates() { showTemplates(); },
   async contextFiles() {
     let pinned = [];
     try { pinned = JSON.parse((await call("orch", { fn: "list_context_files" })).text); } catch (e) {}
@@ -1028,6 +1029,7 @@ const actions = {
         bubble((await call("orch", { fn: "apply_template", arg: "engine-3d" })).text, "sys");
         await refreshHeader(); await loadHistory(); refreshStats();
         submit("Make this game on the existing engine (glue game/ against engine/CONTRACTS.md, don't rewrite the engine): " + desc);
+        setTimeout(() => maybeOpenPreview(), 2000);
       });
     $("#modalBody").querySelectorAll(".gm-ex").forEach((el) => {
       el.onclick = () => { $("#gmdesc").value = el.textContent; $("#gmdesc").focus(); };
@@ -1052,7 +1054,9 @@ const actions = {
         await call("session.create", { name });
         if (tpl) bubble((await call("orch", { fn: "apply_template", arg: tpl })).text, "sys");
         await refreshHeader(); await loadHistory(); refreshStats();
-        bubble("New project ready. Describe what to build, or press Run to preview.", "sys");
+        bubble("New project ready. Describe what to build, or press ▶ to preview.", "sys");
+        // Try to auto-open preview if the template produced a runnable project.
+        setTimeout(() => maybeOpenPreview(), 1500);
       });
   },
   async sessions() {
@@ -2168,7 +2172,12 @@ const ACTION_INDEX = [
   { label: "Settings", act: "settings" },
   { label: "Open files", fn: () => openTree() },
   { label: "New file", fn: () => newFile() },
-  { label: "Run app", fn: () => call("run") },
+  { label: "Run app (external)", fn: () => call("run") },
+  { label: "▶ Run & preview (inline)", fn: runScript },
+  { label: "🖥 Toggle preview pane", fn: togglePreview },
+  { label: "± Diff (uncommitted)", fn: showDiff },
+  { label: "🧪 Check runtime errors", fn: showRuntimeErrors },
+  { label: "📦 Quick-start templates", fn: showTemplates },
   { label: "Refresh map", act: "refreshMap" },
   { label: "Check web", act: "checkWeb" },
   { label: "Commit (AI message)", act: "commit" },
@@ -2217,6 +2226,206 @@ function renderPalette(q) {
   results.querySelectorAll("[data-pi]").forEach((el, idx) => { el.onclick = () => runPaletteEntry(hits[idx]); });
 }
 
+// --- Inline preview pane ---------------------------------------------------
+// A resizable preview frame embedded in the main UI, below the workspace.
+// It loads the Python/static web server so you can test code without leaving
+// the main screen. Opens automatically after a run completes if the project
+// has an index.html or app.py, and can be toggled manually with the 🖥 fab.
+
+let _previewUrl = null;
+let _previewActive = false;
+
+function openPreview(url, label) {
+  const pane = $("#previewPane");
+  const body = $("#previewBody");
+  const urlEl = $("#previewUrl");
+  const fab = $("#previewFab");
+  if (!pane || !body) return;
+  if (url) _previewUrl = url;
+  if (urlEl && label) urlEl.textContent = label || url || "Preview";
+  if (_previewUrl) {
+    body.innerHTML = `<iframe src="${escapeHtml(_previewUrl)}" allow="fullscreen; autoplay; microphone" loading="lazy"></iframe>`;
+  } else {
+    body.innerHTML = `<div class="preview-empty">Server not running</div>`;
+  }
+  pane.classList.remove("hidden");
+  pane.classList.add("open");
+  _previewActive = true;
+  if (fab) { fab.classList.add("active"); fab.textContent = "🖥"; fab.title = "Close preview"; }
+}
+
+function closePreview() {
+  const pane = $("#previewPane");
+  const fab = $("#previewFab");
+  if (pane) { pane.classList.remove("open", "active"); pane.classList.add("hidden");
+    // Kill the iframe to stop audio/WebGL/CPU use when preview is hidden.
+    const body = $("#previewBody");
+    if (body) body.innerHTML = `<div class="preview-empty">Closed</div>`;
+  }
+  _previewActive = false;
+  if (fab) { fab.classList.remove("active"); fab.textContent = "🖥"; fab.title = "Open preview"; }
+}
+
+async function togglePreview() {
+  if (_previewActive) { closePreview(); return; }
+  // Start the server if it hasn't been started yet.
+  setStatus("Starting server…");
+  try {
+    const r = await call("py.call", { module: "localrun", fn: "start", args: [] });
+    const url = (r.text || "").trim().split(" ")[0];
+    if (url.startsWith("http")) {
+      openPreview(url, r.text);
+    } else {
+      bubble("Preview server: " + r.text, "sys");
+      openPreview(null, "Failed to start");
+    }
+  } catch (e) {
+    bubble("Preview start failed: " + e.message, "sys");
+    openPreview(null, "Start failed");
+  }
+  setStatus("");
+}
+
+async function refreshPreview() {
+  const body = $("#previewBody");
+  if (!body || !_previewUrl) return;
+  const iframe = body.querySelector("iframe");
+  if (iframe) { iframe.src = _previewUrl; return; }
+  // If the iframe was removed (e.g. error state), re-create it.
+  openPreview(_previewUrl);
+}
+
+// Start preview automatically after a code run if the project has a web entry.
+async function maybeOpenPreview() {
+  if (running) return;
+  try {
+    let files = [];
+    try { files = JSON.parse((await call("orch", { fn: "browse_files" })).text) || []; } catch (e) {}
+    const hasWeb = files.some((f) => f === "index.html" || f === "app.py" || f === "wsgi.py");
+    if (!hasWeb) return;
+    const r = await call("py.call", { module: "localrun", fn: "start", args: [] });
+    const url = (r.text || "").trim().split(" ")[0];
+    if (url.startsWith("http")) {
+      openPreview(url, r.text);
+      // Also do a runtime check and surface errors.
+      let errCheck;
+      try { errCheck = await call("web.runtimeCheck"); } catch (e) {}
+      if (errCheck && errCheck.errors && errCheck.errors.length) {
+        bubble("⚠️ The preview has runtime errors:\n" +
+          errCheck.errors.slice(0, 12).map((e) => "• " + e).join("\n"), "sys");
+        addFixRuntime(errCheck.errors);
+      } else if (errCheck && errCheck.skipped === false) {
+        // Only show success if we actually did a check.
+      }
+    }
+  } catch (e) {
+    // Server start may fail silently — that's fine, user can tap 🖥 to try.
+  }
+}
+
+// --- Enhanced diff view: inline per-file or full project diff --------------
+async function showDiff() {
+  const r = await call("orch", { fn: "get_diff" });
+  const text = r.text || "";
+  if (!text || text === "(none)") {
+    bubble("No uncommitted changes.", "sys");
+    return;
+  }
+  modal("Uncommitted changes",
+    `<pre class="filebody diff">${escapeHtml(text)}</pre>
+     <div class="hint">Changes since the last commit. Tap Commit to save, or revert files.</div>
+     <button class="pill" id="diffCommit" style="margin-top:10px">✓ Commit all</button>`);
+  $("#diffCommit").onclick = async () => { closeSheet("#modal"); await runText("Commit", "agent.commit"); };
+}
+
+// --- Enhanced error surfacing --------------------------------------------
+function showRuntimeErrors() {
+  driveLive("Checking runtime errors…", async () => {
+    let r;
+    try { r = await call("web.runtimeCheck"); } catch (e) {
+      bubble("Runtime check failed: " + e.message, "sys"); return;
+    }
+    if (r.skipped) { bubble("No web entry point (index.html) to check.", "sys"); return; }
+    const errs = r.errors || [];
+    if (!errs.length) { bubble("✓ No runtime errors from the preview.", "sys"); return; }
+    bubble("⚠️ Runtime errors detected:\n" + errs.slice(0, 15).map((e) => "• " + e).join("\n"), "sys");
+    addFixRuntime(errs);
+  });
+}
+
+// --- Template shortcuts: quick-start templates for common project types -----
+const QUICK_TEMPLATES = [
+  { id: "blank", name: "Empty project", desc: "Blank workspace", act: "newProject" },
+  { id: "web-game", name: "🎮 Web game (canvas)", desc: "HTML5 canvas game with input, loop, entities" },
+  { id: "web-app", name: "🌐 Web app", desc: "index.html + app.js CSS starter" },
+  { id: "python-web", name: "🐍 Python web app", desc: "Flask-like app.py with localrun support" },
+  { id: "engine-3d", name: "🎲 3D game (engine)", desc: "Full 3D engine twin-stick shooter base" },
+  { id: "chat-ui", name: "💬 Chat UI", desc: "Chat interface like this one" },
+];
+
+async function applyQuickTemplate(id) {
+  if (id === "blank" || id === "newProject") { actions.newProject(); return; }
+  await call("session.create", { name: id + "-" + Date.now().toString(36) });
+  await refreshHeader();
+  const r = await call("orch", { fn: "apply_template", arg: id });
+  bubble(r.text || "Template applied", "sys");
+  await loadHistory();
+  refreshStats();
+  // Try to open the preview if the template produced a runnable project.
+  setTimeout(() => maybeOpenPreview(), 1500);
+}
+
+function showTemplates() {
+  const rows = QUICK_TEMPLATES.map((t) =>
+    `<div class="list-item" data-tpl="${escAttr(t.id)}">
+       <span><b>${escapeHtml(t.name)}</b><div class="sub">${escapeHtml(t.desc)}</div></span></div>`
+  ).join("");
+  modal("Quick-start templates",
+    rows + `<div class="hint">Creates a new session and applies the template. The agent sets up
+     the boilerplate — you can then describe what to build.</div>`);
+  $("#modalBody").querySelectorAll("[data-tpl]").forEach((el) => {
+    el.onclick = () => { closeSheet("#modal"); applyQuickTemplate(el.dataset.tpl); };
+  });
+}
+
+// --- Run generated script (Python or Node-like) ---------------------------
+async function runScript() {
+  // Check for a runnable entry point: app.py first, then index.html.
+  try {
+    const files = JSON.parse((await call("orch", { fn: "browse_files" })).text) || [];
+    const hasAppPy = files.includes("app.py") || files.includes("wsgi.py");
+    if (hasAppPy) {
+      // Start the Python web server and open the preview.
+      setStatus("Starting Python server…");
+      const r = await call("py.call", { module: "localrun", fn: "start", args: [] });
+      const url = (r.text || "").trim().split(" ")[0];
+      if (url.startsWith("http")) {
+        openPreview(url, r.text);
+        bubble("Python app running at " + url, "sys");
+      } else {
+        bubble("Server start: " + r.text, "sys");
+      }
+      setStatus("");
+      return;
+    }
+    const hasIndexHtml = files.includes("index.html");
+    if (hasIndexHtml) {
+      // Open preview for static web.
+      const r = await call("py.call", { module: "localrun", fn: "start", args: [] });
+      const url = (r.text || "").trim().split(" ")[0];
+      if (url.startsWith("http")) {
+        openPreview(url, r.text);
+      } else {
+        bubble("Preview start: " + r.text, "sys");
+      }
+      return;
+    }
+    bubble("No runnable entry found (need index.html or app.py).", "sys");
+  } catch (e) {
+    bubble("Script runner failed: " + e.message, "sys");
+  }
+}
+
 // --- Wire up -------------------------------------------------------------
 $("#menuFab").onclick = () => { closeFabMenus(); const s = $("#menuSearch"); if (s) s.value = ""; renderPalette(""); openSheet("#menu"); };
 const _menuSearch = $("#menuSearch");
@@ -2231,6 +2440,10 @@ $("#playFab").onclick = async () => {
   try { await call("run"); } catch (e) {}
   fab.classList.remove("running");
 };
+// Preview fab: toggle the inline preview pane.
+$("#previewFab").onclick = togglePreview;
+$("#previewClose").onclick = closePreview;
+$("#previewRefresh").onclick = refreshPreview;
 $("#modelLead").onclick = (e) => { e.stopPropagation(); openModelMenu("orchestrator", e.currentTarget); };
 $("#modelImpl").onclick = (e) => { e.stopPropagation(); openModelMenu("implementer", e.currentTarget); };
 $("#chatActionsBtn").onclick = (e) => { e.stopPropagation(); openChatActionsMenu(); };

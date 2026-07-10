@@ -262,6 +262,99 @@ new Phaser.Game(config);
 """
 
 
+_CHAT_INDEX = """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>Chat</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="messages"></div>
+  <footer id="bar">
+    <input id="input" type="text" placeholder="Type a message…" autocomplete="off" />
+    <button id="send">Send</button>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>
+"""
+
+_CHAT_CSS = """*{box-sizing:border-box;}
+body{margin:0;height:100vh;display:flex;flex-direction:column;font:15px system-ui,sans-serif;background:#f5f5f5;}
+#messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;}
+.msg{max-width:80%;padding:10px 14px;border-radius:16px;word-wrap:break-word;line-height:1.35;}
+.msg.me{background:#0b57d0;color:#fff;align-self:flex-end;border-bottom-right-radius:4px;}
+.msg.other{background:#e8eaed;color:#1f1f1f;align-self:flex-start;border-bottom-left-radius:4px;}
+#bar{display:flex;gap:8px;padding:10px;border-top:1px solid #ddd;background:#fff;}
+#bar input{flex:1;border:1px solid #ddd;border-radius:20px;padding:8px 14px;font:inherit;outline:none;}
+#bar input:focus{border-color:#0b57d0;}
+#bar button{background:#0b57d0;color:#fff;border:0;border-radius:20px;padding:8px 16px;font-weight:600;}
+"""
+
+_CHAT_JS = """const input = document.getElementById("input");
+const msgs = document.getElementById("messages");
+document.getElementById("send").onclick = () => {
+  const t = input.value.trim(); if (!t) return;
+  const d = document.createElement("div"); d.className = "msg me"; d.textContent = t;
+  msgs.appendChild(d); msgs.scrollTop = msgs.scrollHeight;
+  input.value = "";
+};
+input.addEventListener("keydown", (e) => { if (e.key === "Enter") document.getElementById("send").click(); });
+"""
+
+_WEBGAME_INDEX = """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Canvas Game</title>
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#0f1117;touch-action:none;}
+    canvas{display:block;width:100%;height:100%}
+    #hud{position:fixed;top:10px;left:10px;color:#eef;font:600 14px system-ui,sans-serif;pointer-events:none;text-shadow:0 1px 3px #000;}
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="hud">use WASD/arrows</div>
+  <script>
+    // A minimal canvas game loop with input and delta time.
+    const canvas = document.getElementById("c"), ctx = canvas.getContext("2d");
+    canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+
+    const keys = {};
+    addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+    addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+    addEventListener("resize", () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
+
+    let px = canvas.width/2, py = canvas.height/2, lastTime = 0;
+
+    function loop(time) {
+      const dt = lastTime ? (time - lastTime) / 1000 : 1/60;
+      lastTime = time;
+
+      const speed = 200 * dt;
+      if (keys["w"] || keys["arrowup"]) py -= speed;
+      if (keys["s"] || keys["arrowdown"]) py += speed;
+      if (keys["a"] || keys["arrowleft"]) px -= speed;
+      if (keys["d"] || keys["arrowright"]) px += speed;
+
+      ctx.fillStyle = "#0f1117";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#4cc2ff";
+      ctx.beginPath();
+      ctx.arc(px, py, 16, 0, Math.PI * 2);
+      ctx.fill();
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
+"""
+
 TEMPLATES = [
     {
         "id": "babylon-peerjs",
@@ -275,10 +368,22 @@ TEMPLATES = [
         },
     },
     {
+        "id": "web-game",
+        "name": "Canvas game (vanilla JS)",
+        "description": "Minimal canvas game with arrow-key movement, delta-time loop, and resize.",
+        "files": {"index.html": _WEBGAME_INDEX},
+    },
+    {
         "id": "phaser-2d",
         "name": "2D game (Phaser)",
         "description": "A minimal Phaser 3 scene with a movable player. CDN-loaded.",
         "files": {"index.html": _PHASER_INDEX, "game.js": _PHASER_GAME},
+    },
+    {
+        "id": "chat-ui",
+        "name": "Chat UI (HTML/CSS)",
+        "description": "A chat interface like the VoiceAgent UI. Bubble layout, text input, messages.",
+        "files": {"index.html": _CHAT_INDEX, "style.css": _CHAT_CSS, "app.js": _CHAT_JS},
     },
     {
         "id": "static-web",

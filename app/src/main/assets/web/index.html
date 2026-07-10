@@ -35,6 +35,18 @@
       <div id="editorPane" class="hidden"></div>
       <button id="edDiffFab" class="hidden" title="Toggle diff (vs last commit)">±</button>
       <button id="edFindFab" class="hidden" title="Find &amp; replace">🔍</button>
+
+      <!-- Preview pane inline (inside #workspace, below the editor) -->
+      <div id="previewPane" class="hidden">
+        <div id="previewHead">
+          <span id="previewUrl">Preview</span>
+          <span class="preview-actions">
+            <button id="previewRefresh" class="txtbtn xs" title="Refresh">⟳</button>
+            <button id="previewClose" class="txtbtn xs" title="Close preview">✕</button>
+          </span>
+        </div>
+        <div id="previewBody"><div id="previewStatus" class="preview-empty">Server not running</div></div>
+      </div>
     </div>
   </div>
 
@@ -51,6 +63,9 @@
     </div>
     <div id="tree"></div>
   </div>
+
+  <!-- Preview fab (floating, near the other fabs) -->
+  <button id="previewFab" class="fab hidden" title="Toggle preview" style="right:144px">🖥</button>
 
   <!-- Floating chat button (opens the agent drawer) -->
   <button id="chatFab" title="Agent chat"><span id="chatFabIcon">💬</span><span id="chatUnread" class="unread hidden"></span></button>
@@ -126,6 +141,7 @@
       <div class="grid">
         <button data-act="makeGame">🎮 Make a game</button>
         <button data-act="newProject">Blank project</button>
+        <button data-act="templates">📦 Templates</button>
         <button data-act="sessions">Projects</button>
         <button data-act="bestPractices">Best practices</button>
         <button data-act="guidelines">Guidelines</button>
