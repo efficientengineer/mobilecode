@@ -442,23 +442,80 @@ def ship(title: str = "", body: str = "") -> str:
         return _scrub("Ship failed:\n" + traceback.format_exc())
 
 
+def _force_pull(root: Path, remote: str, branch: str) -> str:
+    """Recover a DIVERGED branch: fetch, then hard-reset the local branch to
+    origin/<branch> so the working tree matches remote exactly. This DISCARDS
+    local commits that aren't on the remote — the right move when a local branch
+    has diverged (e.g. after a merge happened on GitHub) and a normal pull can't
+    fast-forward. Reports how many local commits were dropped so nothing is lost
+    silently. This is what keeps the agent from ever hand-editing .git."""
+    from dulwich.repo import Repo
+    # Use the fetch RESULT's refs, not refs/remotes/* — dulwich versions differ on
+    # whether fetch writes remote-tracking refs, but the result always carries the
+    # advertised heads. Fall back to any remote-tracking ref if present.
+    fr = porcelain.fetch(str(root), remote)
+    want = f"refs/heads/{branch}".encode()
+    target = None
+    fr_refs = getattr(fr, "refs", None) or {}
+    if want in fr_refs:
+        target = fr_refs[want]
+    else:
+        r0 = Repo(str(root))
+        for cand in (f"refs/remotes/origin/{branch}".encode(), want):
+            if cand in r0.refs:
+                target = r0.refs[cand]
+                break
+        r0.close()
+    if target is None:
+        raise RuntimeError(f"origin/{branch} not found after fetch")
+    r = Repo(str(root))
+    local_ref = f"refs/heads/{branch}".encode()
+    # Count local-only commits (best effort) purely for the report.
+    dropped = 0
+    try:
+        if local_ref in r.refs and r.refs[local_ref] != target:
+            walker = r.get_walker(include=[r.refs[local_ref]], exclude=[target])
+            dropped = sum(1 for _ in walker)
+    except Exception:
+        dropped = 0
+    r.refs[local_ref] = target                 # move the branch to remote HEAD
+    r.refs.set_symbolic_ref(b"HEAD", local_ref)
+    porcelain.reset(str(root), "hard")         # materialize the remote tree
+    note = f" ({dropped} local commit(s) discarded)" if dropped else ""
+    return f"Force-synced {branch} to origin/{branch}{note}"
+
+
 def pull() -> str:
-    """Pull the current branch (falling back to the default branch) from origin."""
+    """Pull the current branch (falling back to the default branch) from origin.
+
+    If the branch has DIVERGED from remote (a normal pull can't fast-forward),
+    recover by hard-resetting to origin — discarding local-only commits — rather
+    than failing. Syncing to remote is what the caller wants; the report says how
+    many local commits were dropped."""
     try:
         root = _workspace()
         full = _remote_full_name(root)
         if not full:
             return "No repo set for this workspace (create or select one first)."
+        remote = _auth_url(full)
         branch = current_branch()
         try:
-            porcelain.pull(str(root), _auth_url(full),
-                           f"refs/heads/{branch}".encode())
+            porcelain.pull(str(root), remote, f"refs/heads/{branch}".encode())
             return f"Pulled {branch} from {full}"
-        except Exception:
-            default = _default_branch(full)
-            porcelain.pull(str(root), _auth_url(full),
-                           f"refs/heads/{default}".encode())
-            return f"Pulled {default} from {full}"
+        except Exception as e:
+            # Diverged / non-fast-forward: recover the CURRENT branch by resetting
+            # to its remote tip. Only fall back to the default branch when the
+            # current branch has no remote counterpart at all.
+            try:
+                return _force_pull(root, remote, branch)
+            except Exception:
+                default = _default_branch(full)
+                if default != branch:
+                    try:
+                        return _force_pull(root, remote, default)
+                    except Exception:
+                        pass
+                raise e
     except Exception:
         return _scrub("Pull failed:\n" + traceback.format_exc())
 

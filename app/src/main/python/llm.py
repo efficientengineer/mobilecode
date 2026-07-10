@@ -436,7 +436,7 @@ def _openai_tools(tools):
                           "parameters": t["input_schema"]}} for t in tools]
 
 
-def _openai_messages(system, cached_context, messages):
+def _openai_messages(system, cached_context, messages, strip_reasoning=False):
     sys_text = system + (("\n\n" + cached_context) if cached_context else "")
     out = [{"role": "system", "content": sys_text}]
     for m in messages:
@@ -447,11 +447,15 @@ def _openai_messages(system, cached_context, messages):
             content = m.get("content") or None
             entry = {"role": "assistant", "content": content}
             # DeepSeek's thinking mode REQUIRES the assistant's reasoning_content
-            # be passed back on continuation (it 400s without it). Re-attach the
-            # reasoning we captured for this turn; only while thinking is on, so a
-            # thinking-off call doesn't carry a now-disallowed field.
-            if m.get("reasoning") and _thinking_on():
-                entry["reasoning_content"] = m["reasoning"]
+            # be passed back on continuation: a tool-call turn WITHOUT it 400s with
+            # "reasoning_content in the thinking mode must be passed back". So when
+            # thinking is on we attach it to every tool-call turn — using the
+            # reasoning we captured, or a minimal placeholder when the model
+            # returned a tool call with no reasoning (common), because the field
+            # merely being present is what the API checks. Only while thinking is
+            # on, so a thinking-off call doesn't carry a now-disallowed field.
+            if not strip_reasoning and _thinking_on() and (m.get("reasoning") or tcs):
+                entry["reasoning_content"] = m.get("reasoning") or " "
             if tcs:
                 entry["tool_calls"] = [
                     {"id": tc["id"], "type": "function",
@@ -495,13 +499,38 @@ def _call_openai(provider, model, system, cached_context, messages, tools,
     headers = {"Authorization": f"Bearer {key}", "content-type": "application/json"}
     url = f"{base}/v1/chat/completions"
 
+    # Backstop for the reasoning_content contract: providers disagree on whether
+    # replayed assistant turns must (DeepSeek thinking) or must NOT (some builds)
+    # carry reasoning_content. If a call 400s complaining about that exact field,
+    # rebuild the messages the OTHER way and retry once — a mismatch shouldn't
+    # kill the whole run.
+    def _rebuild_stripped():
+        payload["messages"] = _openai_messages(system, cached_context, messages,
+                                                strip_reasoning=True)
+
+    def _is_reasoning_400(e):
+        s = str(e)
+        return "HTTP 400" in s and "reasoning_content" in s
+
     if on_delta is None:
-        result = _post(url, headers, payload, stream=False)
+        try:
+            result = _post(url, headers, payload, stream=False)
+        except RuntimeError as e:
+            if not _is_reasoning_400(e):
+                raise
+            _rebuild_stripped()
+            result = _post(url, headers, payload, stream=False)
         return _parse_openai(result, provider + "/" + model)
 
     payload["stream"] = True
     payload["stream_options"] = {"include_usage": True}
-    resp = _post(url, headers, payload, stream=True)
+    try:
+        resp = _post(url, headers, payload, stream=True)
+    except RuntimeError as e:
+        if not _is_reasoning_400(e):
+            raise
+        _rebuild_stripped()
+        resp = _post(url, headers, payload, stream=True)
     text, reasoning = [], []
     tools_acc = {}  # index -> {id, name, args_json}
     stop = ""
