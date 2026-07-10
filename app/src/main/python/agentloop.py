@@ -400,6 +400,12 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
     interrupted = False
     repair_left = REPAIR_ROUNDS
     steps = 0
+    # Anti-spiral: count identical tool calls (name + args) so we can nudge the
+    # model off a loop before it burns the whole step budget retrying the same
+    # failing action — the #1 way a run gets stuck. Nudge once per signature.
+    call_counts = {}
+    nudged = set()
+    REPEAT_LIMIT = 3
 
     while steps < MAX_STEPS:
         if _interrupted():
@@ -549,6 +555,29 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             messages.append({"role": "tool", "tool_call_id": tc["id"],
                              "name": tc["name"], "content": result,
                              "_path": _arg_path(tc.get("args"))})
+            # Track exact-repeat calls (skip read-only inspection, which is fine
+            # to repeat). When one crosses the limit, queue a one-time nudge.
+            if tc["name"] not in ("read_file", "list_files", "grep",
+                                  "todo_write", "note_write"):
+                try:
+                    sig = tc["name"] + "|" + json.dumps(tc.get("args") or {},
+                                                        sort_keys=True)[:400]
+                except Exception:
+                    sig = tc["name"]
+                call_counts[sig] = call_counts.get(sig, 0) + 1
+                if call_counts[sig] >= REPEAT_LIMIT and sig not in nudged:
+                    nudged.add(sig)
+                    _emit("loop_warn", name=tc["name"], count=call_counts[sig])
+                    nudge = (
+                        f"\n\n[Loop guard] You've called `{tc['name']}` with the "
+                        f"same arguments {call_counts[sig]} times and it is not "
+                        "making progress. STOP repeating it. Either take a "
+                        "genuinely different approach, or if this needs a decision, "
+                        "permission, or a tool you don't have, say so plainly and "
+                        "stop — do not keep retrying.")
+                    if messages and messages[-1]["role"] in ("tool", "user"):
+                        messages[-1]["content"] = (
+                            messages[-1].get("content") or "") + nudge
         if plan_out is not None or interrupted:
             final_text = r.get("text", "")
             break
