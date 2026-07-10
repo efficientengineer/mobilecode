@@ -566,6 +566,28 @@ def _full_context(task_hint: str = "", mode: str = "") -> str:
     if att:
         parts.append("ATTACHED FILES (the user asked you to read these):\n" +
                      "\n\n".join(att))
+    # The agent's own working memory — a stable anchor so it doesn't re-derive
+    # state from the (compacted, lossy) chat history: a persistent scratchpad it
+    # curates with note_write, plus the current task checklist from todo_write.
+    try:
+        sp = _agent_dir(root) / "scratchpad.md"
+        notes = sp.read_text(encoding="utf-8").strip() if sp.exists() else ""
+    except Exception:
+        notes = ""
+    if notes:
+        parts.append("WORKING NOTES (your persistent scratchpad — the goal, "
+                     "decisions, and current state; keep it current with "
+                     "note_write):\n" + notes)
+    try:
+        todos = json.loads((_agent_dir(root) / "todos.json").read_text(encoding="utf-8"))
+        todos = [t for t in todos if isinstance(t, dict) and t.get("content")]
+    except Exception:
+        todos = []
+    if todos:
+        _m = {"completed": "[x]", "in_progress": "[~]", "pending": "[ ]"}
+        tl = "\n".join(f"{_m.get(t.get('status'), '[ ]')} {t['content']}" for t in todos)
+        parts.append("CURRENT CHECKLIST (todo_write):\n" + tl)
+
     lines = _compact_discussion(mode)
     if lines:
         parts.append("DISCUSSION SO FAR:\n" + "\n".join(lines))
