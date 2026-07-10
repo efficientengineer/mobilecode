@@ -383,6 +383,14 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
         if (write and worker and worker != active
                 and os.environ.get("AGENT_DELEGATE", "").strip().lower() != "off"):
             system += _DELEGATE_GUIDANCE.format(worker=worker)
+    # System-wide guidelines — the durable "how to operate" contract applied on
+    # EVERY task/project/session (OTA-updatable via sysguide.py). Imported lazily
+    # so an older build without it still runs.
+    try:
+        import sysguide
+        system += "\n\n" + sysguide.render()
+    except Exception:
+        pass
     if extra_system:
         system += "\n\n" + extra_system
 

@@ -16,7 +16,7 @@ import importlib
 import importlib.util
 
 # Load order matters: leaves first, orchestrator last.
-_MODULES = ["llm", "agent_tools", "engine3d", "agentloop", "git_ops", "localrun", "templates", "projectmap", "best_practices", "workflows", "orchestrator"]
+_MODULES = ["llm", "agent_tools", "sysguide", "engine3d", "agentloop", "git_ops", "localrun", "templates", "projectmap", "best_practices", "workflows", "orchestrator"]
 
 _loaded_mtimes = {}
 
