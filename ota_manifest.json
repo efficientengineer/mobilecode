@@ -19,7 +19,9 @@
   "web": [
     "index.html",
     "style.css",
-    "app.js"
+    "app.js",
+    "editmode.css",
+    "editmode.js"
   ],
   "extra": [],
   "remove": []
