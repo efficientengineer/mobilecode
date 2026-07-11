@@ -1439,41 +1439,68 @@ async function showSessions() {
 
   const items = sessions.map((s) => {
     const nm = escapeHtml(s.name);
-    return `<div class="list-item sess-row">
-      <span class="sess-pick" data-sid="${s.id}">${s.id === activeId ? "● " : "○ "}${nm}</span>
-      <span class="sess-actions">
-        <b class="sess-btn" data-rename="${s.id}" data-name="${nm}" title="Rename">✎</b>
-        <b class="sess-btn" data-del="${s.id}" data-name="${nm}" title="Delete">🗑</b>
-      </span></div>`;
+    return `<div class="list-item sess-row" data-sid="${s.id}">
+      <input type="checkbox" class="sp-sess-check" data-sp-check="${s.id}" />
+      <span class="sess-pick">${s.id === activeId ? "● " : "○ "}${nm}</span>
+    </div>`;
   }).join("");
 
   const reopen = () => showSessions();
-  modal("Sessions", items +
+  modal("Sessions",
+    `<div class="sess-toolbar" style="display:flex;gap:8px;margin-bottom:10px">
+      <button id="sessModalRename" class="txtbtn xs">✎ Rename</button>
+      <button id="sessModalDel" class="txtbtn xs danger">🗑 Delete</button>
+    </div>` +
+    items +
     `<button class="pill ghost" id="newSessFromList" style="margin-top:10px">➕ New session</button>`);
+
+  const getChecked = () => $("#modalBody").querySelectorAll(".sp-sess-check:checked");
+
   $("#modalBody").querySelectorAll("[data-sid]").forEach((el) => {
-    el.onclick = async () => {
+    el.onclick = async (ev) => {
+      if (ev.target.closest(".sp-sess-check")) return;
       await call("session.setActive", { id: el.dataset.sid });
       closeSheet("#modal"); await refreshHeader(); await loadHistory();
     };
   });
-  $("#modalBody").querySelectorAll("[data-rename]").forEach((el) => {
-    el.onclick = (ev) => {
-      ev.stopPropagation();
-      modal("Rename session", `<label>Name</label><input id="rn2" type="text" value="${el.dataset.name}" />`,
-        async () => {
-          const n = $("#rn2").value.trim(); if (!n) return;
-          await call("session.rename", { id: el.dataset.rename, name: n }); reopen();
-        });
-    };
-  });
-  $("#modalBody").querySelectorAll("[data-del]").forEach((el) => {
-    el.onclick = (ev) => {
-      ev.stopPropagation();
-      modal("Delete session",
-        `<div class="hint">Permanently delete "<b>${el.dataset.name}</b>" — its files, history and settings? This cannot be undone.</div>`,
-        async () => { await call("session.delete", { id: el.dataset.del }); reopen(); });
-    };
-  });
+
+  const renameBtn = $("#sessModalRename");
+  if (renameBtn) renameBtn.onclick = () => {
+    const checks = getChecked();
+    if (!checks.length) { bubble("Check a session to rename", "sys"); return; }
+    if (checks.length > 1) { bubble("Check only one session to rename", "sys"); return; }
+    const cb = checks[0];
+    const row = cb.closest("[data-sid]");
+    const nameEl = row ? row.querySelector(".sess-pick") : null;
+    const name = nameEl ? nameEl.textContent.replace(/^[●○] /, "") : "";
+    const id = cb.dataset.spCheck;
+    modal("Rename session", `<label>Name</label><input id="rn2" type="text" value="${escapeHtml(name)}" />`,
+      async () => {
+        const n = $("#rn2").value.trim(); if (!n) return;
+        await call("session.rename", { id, name: n }); reopen();
+      });
+  };
+
+  const delBtn = $("#sessModalDel");
+  if (delBtn) delBtn.onclick = () => {
+    const checks = getChecked();
+    if (!checks.length) { bubble("Check one or more sessions to delete", "sys"); return; }
+    const ids = Array.from(checks).map((cb) => cb.dataset.spCheck);
+    const names = Array.from(checks).map((cb) => {
+      const row = cb.closest("[data-sid]");
+      const nameEl = row ? row.querySelector(".sess-pick") : null;
+      return nameEl ? nameEl.textContent.replace(/^[●○] /, "") : "?";
+    });
+    const listHtml = names.map((n) => `<div>🗑 <b>${escapeHtml(n)}</b></div>`).join("");
+    modal("Delete sessions",
+      `<div class="hint">Permanently delete these sessions — their files, history and settings? This cannot be undone.</div>
+       <div style="margin-top:8px;max-height:160px;overflow-y:auto">${listHtml}</div>`,
+      async () => {
+        for (const id of ids) await call("session.delete", { id });
+        reopen();
+      });
+  };
+
   const newBtn = $("#newSessFromList");
   if (newBtn) newBtn.onclick = () => { closeSheet("#modal"); actions.newSession(); };
 }
@@ -1567,12 +1594,9 @@ async function renderSessionPanel(filter) {
   sessions.forEach((s) => {
     const isActive = s.id === activeId;
     html += `<div class="sp-session${isActive ? " active" : ""}" data-sid="${s.id}">
+      <input type="checkbox" class="sp-sess-check" data-sp-check="${s.id}" />
       <span class="sp-sess-icon">${isActive ? "●" : "○"}</span>
       <span class="sp-sess-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span>
-      <span class="sp-sess-actions">
-        <button class="sp-sess-act" data-sp-rename="${s.id}" data-sp-name="${escapeHtml(s.name)}" title="Rename">✎</button>
-        <button class="sp-sess-act danger" data-sp-del="${s.id}" data-sp-name="${escapeHtml(s.name)}" title="Delete">🗑</button>
-      </span>
     </div>`;
   });
 
@@ -1581,8 +1605,8 @@ async function renderSessionPanel(filter) {
   // Wire clicks: switch session
   list.querySelectorAll(".sp-session").forEach((el) => {
     el.onclick = async (ev) => {
-      // Don't switch if clicking an action button
-      if (ev.target.closest(".sp-sess-act")) return;
+      // Don't switch if clicking the checkbox
+      if (ev.target.closest(".sp-sess-check")) return;
       const id = el.dataset.sid;
       if (id === activeId) return;
       await call("session.setActive", { id });
@@ -1592,40 +1616,14 @@ async function renderSessionPanel(filter) {
     };
   });
 
-  // Wire rename
-  list.querySelectorAll("[data-sp-rename]").forEach((btn) => {
-    btn.onclick = (ev) => {
-      ev.stopPropagation();
-      const id = btn.dataset.spRename;
-      const name = btn.dataset.spName;
-      modal("Rename session",
-        `<label>Name</label><input id="spRnInput" type="text" value="${escapeHtml(name)}" />`,
-        async () => {
-          const n = $("#spRnInput").value.trim();
-          if (!n) return;
-          await call("session.rename", { id, name: n });
-          renderSessionPanel($("#sessionSearch")?.value || "");
-        });
-    };
-  });
-
-  // Wire delete
-  list.querySelectorAll("[data-sp-del]").forEach((btn) => {
-    btn.onclick = (ev) => {
-      ev.stopPropagation();
-      const id = btn.dataset.spDel;
-      const name = btn.dataset.spName;
-      modal("Delete session",
-        `<div class="hint">Permanently delete "<b>${escapeHtml(name)}</b>" — its files, history and settings? This cannot be undone.</div>`,
-        async () => {
-          await call("session.delete", { id });
-          closeSheet("#modal");
-          await refreshHeader();
-          await loadHistory();
-          renderSessionPanel($("#sessionSearch")?.value || "");
-        });
-    };
-  });
+  // Helper: collect checked session IDs
+  const checkedIds = () => {
+    const ids = [];
+    list.querySelectorAll(".sp-sess-check:checked").forEach((cb) => {
+      ids.push(cb.dataset.spCheck);
+    });
+    return ids;
+  };
 }
 
 // Choose (or create) the GitHub repo for a new session.
@@ -2876,6 +2874,45 @@ $("#sessionTab").onclick = toggleSessionPanel;
 $("#sessionPanelClose").onclick = closeSessionPanel;
 $("#sessionBackdrop").onclick = closeSessionPanel;
 $("#sessionNewBtn").onclick = () => { closeSessionPanel(); actions.newSession(); };
+$("#sessionDeleteBtn").onclick = () => {
+  const checks = document.querySelectorAll("#sessionList .sp-sess-check:checked");
+  if (!checks.length) { bubble("Check one or more sessions to delete", "sys"); return; }
+  const ids = Array.from(checks).map((cb) => cb.dataset.spCheck);
+  const names = Array.from(checks).map((cb) => {
+    const row = cb.closest(".sp-session");
+    const nameEl = row ? row.querySelector(".sp-sess-name") : null;
+    return nameEl ? nameEl.textContent : "?";
+  });
+  const listHtml = names.map((n) => `<div>🗑 <b>${escapeHtml(n)}</b></div>`).join("");
+  modal("Delete sessions",
+    `<div class="hint">Permanently delete these sessions — their files, history and settings? This cannot be undone.</div>
+     <div style="margin-top:8px;max-height:160px;overflow-y:auto">${listHtml}</div>`,
+    async () => {
+      for (const id of ids) await call("session.delete", { id });
+      closeSheet("#modal");
+      await refreshHeader();
+      await loadHistory();
+      renderSessionPanel($("#sessionSearch")?.value || "");
+    });
+};
+$("#sessionRenameBtn").onclick = () => {
+  const checks = document.querySelectorAll("#sessionList .sp-sess-check:checked");
+  if (!checks.length) { bubble("Check a session to rename", "sys"); return; }
+  if (checks.length > 1) { bubble("Check only one session to rename", "sys"); return; }
+  const cb = checks[0];
+  const row = cb.closest(".sp-session");
+  const nameEl = row ? row.querySelector(".sp-sess-name") : null;
+  const name = nameEl ? nameEl.textContent : "";
+  const id = cb.dataset.spCheck;
+  modal("Rename session",
+    `<label>Name</label><input id="spRnInput" type="text" value="${escapeHtml(name)}" />`,
+    async () => {
+      const n = $("#spRnInput").value.trim();
+      if (!n) return;
+      await call("session.rename", { id, name: n });
+      renderSessionPanel($("#sessionSearch")?.value || "");
+    });
+};
 const _sessionSearch = $("#sessionSearch");
 if (_sessionSearch) _sessionSearch.addEventListener("input", (e) => renderSessionPanel(e.target.value));
 initSessionSwipe();

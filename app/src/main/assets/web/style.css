@@ -504,17 +504,13 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 .sp-session.active .sp-sess-name {
   font-weight: 600;
 }
-.sp-session .sp-sess-actions {
+.sp-session .sp-sess-check {
   flex-shrink: 0;
-  display: flex;
-  gap: 8px;
-  opacity: 0;
-  transition: opacity .12s;
-}
-.sp-session:hover .sp-sess-actions,
-.sp-session:active .sp-sess-actions,
-.sp-session.active .sp-sess-actions {
-  opacity: 1;
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  margin: 0;
 }
 .sp-sess-act {
   cursor: pointer;
@@ -531,6 +527,12 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 }
 .sp-sess-act.danger:active {
   color: #f87171;
+}
+.txtbtn.danger {
+  color: #f87171;
+}
+.txtbtn.danger:active {
+  color: #ef4444;
 }
 
 /* Empty state */
