@@ -721,3 +721,161 @@ pre.filebody.diff { font-size: 12px; }
 .bubble.agent.streaming::after { content: "▍"; margin-left: 1px; opacity: .6;
   animation: caret 1s steps(1) infinite; }
 @keyframes caret { 50% { opacity: 0; } }
+
+/* --- Action log panel (right side, like session panel on the left) ---------- */
+
+/* Toggle tab on the right edge, above the chat fab */
+#actionLogTab {
+  position: fixed;
+  z-index: 50;
+  right: 0;
+  top: 38%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 56px;
+  border-radius: 10px 0 0 10px;
+  background: var(--panel2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-right: none;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  box-shadow: -2px 0 8px rgba(0,0,0,.35);
+  transition: all .2s ease;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+#actionLogTab:active {
+  background: var(--border);
+  color: var(--text);
+}
+#actionLogTab.panel-open {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) translateX(100%);
+}
+#actionLogTab .unread-dot {
+  position: absolute;
+  top: 10px;
+  left: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--accent);
+  display: none;
+}
+#actionLogTab .unread-dot.show { display: block; }
+
+/* Action log backdrop */
+#actionLogBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 55;
+}
+#actionLogBackdrop.hidden { display: none; }
+
+/* Action log panel — slides in from the right */
+#actionLogPanel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  width: min(380px, 88vw);
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform .22s ease;
+  box-shadow: -6px 0 24px rgba(0,0,0,.4);
+  padding-top: env(safe-area-inset-top, 0px);
+}
+#actionLogPanel.open {
+  transform: translateX(0);
+}
+
+#actionLogPanel-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+}
+#actionLogPanel-head .alp-title {
+  font-size: 16px;
+}
+.alp-head-actions {
+  display: flex;
+  gap: 6px;
+}
+
+#actionLogList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0 12px;
+}
+
+/* Action log entries */
+.alp-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.4;
+}
+.alp-entry:last-child {
+  border-bottom: none;
+}
+.alp-entry .alp-icon {
+  flex-shrink: 0;
+  font-size: 15px;
+  width: 22px;
+  text-align: center;
+  margin-top: 1px;
+}
+.alp-entry .alp-body {
+  flex: 1;
+  min-width: 0;
+}
+.alp-entry .alp-detail {
+  color: var(--text);
+  word-break: break-word;
+}
+.alp-entry .alp-path {
+  font-family: monospace;
+  font-size: 11.5px;
+  color: var(--accent);
+  margin-top: 2px;
+}
+.alp-entry .alp-time {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-top: 2px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.alp-entry.alp-write { border-left: 3px solid #4ade80; }
+.alp-entry.alp-delete { border-left: 3px solid #f87171; }
+.alp-entry.alp-read { border-left: 3px solid var(--accent); }
+.alp-entry.alp-tool { border-left: 3px solid #fbbf24; }
+.alp-entry.alp-git { border-left: 3px solid #c084fc; }
+
+/* Empty state */
+.alp-empty {
+  padding: 24px 14px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
