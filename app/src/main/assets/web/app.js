@@ -692,7 +692,7 @@ function addCommitReview() {
   };
   bar.querySelector("#rvDiscard").onclick = () => {
     modal("Discard changes",
-      `<div class="hint">Throw away ALL uncommitted changes in this project?</div>`,
+      `<div class="hint">Throw away ALL uncommitted changes in this session?</div>`,
       async () => {
         bar.remove();
         bubble((await call("orch", { fn: "discard_changes" })).text, "sys");
@@ -1068,7 +1068,7 @@ const actions = {
   trimContext() {
     modal("Trim context",
       `<label>Keep the last N turns</label><input id="keepN" type="text" value="10" />
-       <div class="hint">Older turns are dropped from this project's discussion.</div>`,
+       <div class="hint">Older turns are dropped from this session's discussion.</div>`,
       async () => {
         const n = parseInt($("#keepN").value.trim(), 10) || 10;
         bubble((await call("orch", { fn: "trim_discussion", arg: String(n) })).text, "sys");
@@ -1077,7 +1077,7 @@ const actions = {
   },
   clearContext() {
     modal("Clear context",
-      `<div class="hint">Erase this project's discussion memory? Files and outline are untouched.</div>`,
+      `<div class="hint">Erase this session's discussion memory? Files and outline are untouched.</div>`,
       async () => {
         bubble((await call("orch", { fn: "clear_discussion" })).text, "sys");
         loadHistory();
@@ -1131,7 +1131,7 @@ const actions = {
     const cur = (await call("orch", { fn: "get_guidelines" })).text || "";
     modal("Guidelines (guidelines.md)",
       `<textarea id="gtext" class="field" rows="14" style="min-height:240px">${escapeHtml(cur)}</textarea>
-       <div class="hint">Persistent project instructions — included in the model's context every prompt.</div>`,
+       <div class="hint">Persistent session instructions — included in the model's context every prompt.</div>`,
       async () => {
         await call("orch", { fn: "set_guidelines", arg: $("#gtext").value });
         bubble("Guidelines saved", "sys");
@@ -1141,13 +1141,13 @@ const actions = {
   async bestPractices() {
     const cur = (await call("orch", { fn: "get_best_practices" })).text || "";
     const active = (await call("orch", { fn: "preview_best_practices" })).text || "";
-    modal("Best practices (every project)",
+    modal("Best practices (every session)",
       `<textarea id="bptext" class="field" rows="9" style="min-height:170px" placeholder="- Your own rules, one per line, e.g. movement = floating joystick on the left half">${escapeHtml(cur)}</textarea>
        <div class="hint">Your rules apply to <b>every</b> project and override the built-ins. Built-in mobile-game practices (floating joystick, safe areas, delta-time loops…) auto-apply to game projects.</div>
-       <details style="margin-top:8px"><summary class="hint">What's active for this project</summary><pre class="small">${escapeHtml(active)}</pre></details>`,
+       <details style="margin-top:8px"><summary class="hint">What's active for this session</summary><pre class="small">${escapeHtml(active)}</pre></details>`,
       async () => {
         await call("orch", { fn: "set_best_practices", arg: $("#bptext").value });
-        bubble("Best practices saved — applied to every project", "sys");
+        bubble("Best practices saved — applied to every session", "sys");
         refreshStats();
       });
   },
@@ -1182,7 +1182,6 @@ const actions = {
         refreshStats();
       });
   },
-  templates() { showTemplates(); },
   async contextFiles() {
     let pinned = [];
     try { pinned = JSON.parse((await call("orch", { fn: "list_context_files" })).text); } catch (e) {}
@@ -1209,10 +1208,9 @@ const actions = {
         refreshHeader();
       });
   },
-  // Repo switching within a session is intentionally gone: a session belongs to
-  // one repo (its source of truth). To work on another repo, open Projects and
-  // start a session under it.
-  openProjects() { showProjects(); },
+  // Sessions are standalone — no repo binding required.
+  // Use the Sessions panel to switch between them.
+  openProjects() { showSessions(); },
   async deleteRepo() {
     bubble("Loading repos…", "sys");
     let repos = [];
@@ -1235,7 +1233,7 @@ const actions = {
       };
     });
   },
-  // The app's headline action: describe a game, we spin up a fresh project on
+  // The app's headline action: describe a game, we spin up a fresh session on
   // OUR engine and hand your description to the agent, which picks a view +
   // movement from the CONTRACTS recipe and glues game/ together (asking at most
   // a follow-up or two). No framework to choose — game-making is the default.
@@ -1257,42 +1255,42 @@ const actions = {
         const desc = $("#gmdesc").value.trim();
         if (!desc) { $("#gmdesc").focus(); return true; }
         const name = desc.split(/\s+/).slice(0, 4).join("-").toLowerCase().replace(/[^a-z0-9-]/g, "") || "my-game";
-        // Every project lives on a repo — pick/create one, then build the game.
+        closeSheet("#modal");
         pickRepoThen(async (repoOrName, isNew) => {
-          await startSessionOnRepo(repoOrName, isNew, name);
+          await call("session.create", { name });
+          const res = isNew
+            ? (await call("git.createRepo", { name: repoOrName })).text
+            : (await call("git.clone", { full: repoOrName })).text;
+          if (res) bubble(res, "sys");
+          await refreshHeader(); await loadHistory(); refreshStats();
           bubble((await call("orch", { fn: "apply_template", arg: "engine-3d" })).text, "sys");
           submit("Make this game on the existing engine (glue game/ against engine/CONTRACTS.md, don't rewrite the engine): " + desc);
           setTimeout(() => maybeOpenPreview(), 2000);
         });
-        return true;   // keep the sheet open; pickRepoThen takes it over
+        return true;
       });
     $("#modalBody").querySelectorAll(".gm-ex").forEach((el) => {
       el.onclick = () => { $("#gmdesc").value = el.textContent; $("#gmdesc").focus(); };
     });
   },
-  async newProject() {
-    let tpls = [];
-    try { tpls = JSON.parse((await call("orch", { fn: "list_templates" })).text); } catch (e) {}
-    const opts = [{ id: "", name: "Empty project", description: "Blank workspace" }].concat(tpls);
-    const rows = opts.map((t, i) =>
-      `<label class="list-item" style="align-items:flex-start">
-         <input type="radio" name="tpl" value="${escapeHtml(t.id)}" ${i === 1 ? "checked" : ""} style="margin-top:4px"/>
-         <span>${escapeHtml(t.name)}<div class="sub">${escapeHtml(t.description || "")}</div></span>
-       </label>`).join("");
-    modal("New project",
-      `<label>Name</label><input id="pname" type="text" placeholder="my-game" />
-       <div class="hint" style="margin-top:10px">Start from a template</div>${rows}`,
+  async newSession() {
+    modal("New session",
+      `<label>Name</label><input id="sn" type="text" placeholder="my-session" />
+       <div class="hint" style="margin-top:10px">A session lives on a repo — pick or create one next.</div>`,
       async () => {
-        const name = $("#pname").value.trim();
-        const sel = $("#modalBody").querySelector('input[name="tpl"]:checked');
-        const tpl = sel ? sel.value : "";
+        const name = $("#sn").value.trim() || "session";
+        // Close the name modal, then ask which repo — keeps the flow simple.
+        closeSheet("#modal");
         pickRepoThen(async (repoOrName, isNew) => {
-          await startSessionOnRepo(repoOrName, isNew, name || (isNew ? repoOrName : ""));
-          if (tpl) bubble((await call("orch", { fn: "apply_template", arg: tpl })).text, "sys");
-          bubble("New project ready. Describe what to build, or press ▶ to preview.", "sys");
-          setTimeout(() => maybeOpenPreview(), 1500);
+          await call("session.create", { name });
+          const res = isNew
+            ? (await call("git.createRepo", { name: repoOrName })).text
+            : (await call("git.clone", { full: repoOrName })).text;
+          if (res) bubble(res, "sys");
+          await refreshHeader(); await loadHistory(); refreshStats();
+          bubble(`Session "${name}" ready on ${isNew ? "new repo " + repoOrName : repoOrName}.`, "sys");
         });
-        return true;   // keep the sheet open; pickRepoThen takes it over
+        return true; // keep the sheet open; pickRepoThen takes it over
       });
   },
   async sessions() { openSessionPanel(); },
@@ -1406,52 +1404,25 @@ const actions = {
   },
 };
 
-// --- Projects → Sessions manager (repo owns its sessions) ----------------
-// A project IS a GitHub repo (the source of truth); a session is work under it.
-// Top level lists repos; drilling in lists that repo's sessions.
+// --- Sessions manager -----------------------------------------------------
+// Sessions are standalone — no repo/project grouping. Each session is its own
+// workspace. List is flat; switching is one tap.
 
-async function listSessionsGrouped() {
+async function showSessions() {
   const r = await call("session.list");
   const sessions = r.sessions || [];
-  const groups = {};
-  sessions.forEach((s) => {
-    const key = s.activeRepo || "";
-    (groups[key] = groups[key] || []).push(s);
-  });
-  return { groups, activeId: r.activeId };
-}
+  const activeId = r.activeId || "";
 
-async function showProjects() {
-  const { groups, activeId } = await listSessionsGrouped();
-  const repos = Object.keys(groups).filter((k) => k).sort();
-  const noRepo = groups[""] || [];
-  let html = repos.map((full) => {
-    const list = groups[full];
-    const active = list.some((s) => s.id === activeId);
-    return `<div class="list-item" data-repo="${escAttr(full)}">
-      <span>${active ? "● " : "○ "}${escapeHtml(full)}</span>
-      <span class="sub">${list.length} session${list.length > 1 ? "s" : ""}</span></div>`;
-  }).join("");
-  if (noRepo.length) {
-    html += `<div class="list-item" data-repo="__none__">
-      <span>○ Needs a repo</span><span class="sub">${noRepo.length}</span></div>`;
+  if (!sessions.length) {
+    modal("Sessions",
+      `<div class="hint">No sessions yet.</div>
+       <button class="pill ghost" id="newSessFromList" style="margin-top:10px">➕ New session</button>`);
+    const btn = $("#newSessFromList");
+    if (btn) btn.onclick = () => { closeSheet("#modal"); actions.newSession(); };
+    return;
   }
-  if (!html) html = `<div class="hint">No projects yet — start one on a GitHub repo.</div>`;
-  modal("Projects", html +
-    `<button class="pill ghost" id="newProj" style="margin-top:10px">➕ New project</button>`);
-  $("#modalBody").querySelectorAll("[data-repo]").forEach((el) => {
-    el.onclick = () => showRepoSessions(el.dataset.repo);
-  });
-  $("#newProj").onclick = () => pickRepoThen((repoOrName, isNew) =>
-    startSessionOnRepo(repoOrName, isNew));
-}
 
-async function showRepoSessions(repo) {
-  const { groups, activeId } = await listSessionsGrouped();
-  const key = repo === "__none__" ? "" : repo;
-  const list = groups[key] || [];
-  const title = repo === "__none__" ? "Needs a repo" : repo;
-  const items = list.map((s) => {
+  const items = sessions.map((s) => {
     const nm = escapeHtml(s.name);
     return `<div class="list-item sess-row">
       <span class="sess-pick" data-sid="${s.id}">${s.id === activeId ? "● " : "○ "}${nm}</span>
@@ -1459,13 +1430,11 @@ async function showRepoSessions(repo) {
         <b class="sess-btn" data-rename="${s.id}" data-name="${nm}" title="Rename">✎</b>
         <b class="sess-btn" data-del="${s.id}" data-name="${nm}" title="Delete">🗑</b>
       </span></div>`;
-  }).join("") || `<div class="hint">No sessions in this project yet.</div>`;
-  const newBtn = key
-    ? `<button class="pill ghost" id="newSess" style="margin-top:10px">➕ New session in ${escapeHtml(key)}</button>`
-    : "";
-  modal(title, `<div class="list-item" id="backProj"><span>‹ All projects</span></div>` + items + newBtn);
-  $("#backProj").onclick = () => showProjects();
-  const reopen = () => showRepoSessions(repo);
+  }).join("");
+
+  const reopen = () => showSessions();
+  modal("Sessions", items +
+    `<button class="pill ghost" id="newSessFromList" style="margin-top:10px">➕ New session</button>`);
   $("#modalBody").querySelectorAll("[data-sid]").forEach((el) => {
     el.onclick = async () => {
       await call("session.setActive", { id: el.dataset.sid });
@@ -1486,21 +1455,12 @@ async function showRepoSessions(repo) {
     el.onclick = (ev) => {
       ev.stopPropagation();
       modal("Delete session",
-        `<div class="hint">Permanently delete "<b>${el.dataset.name}</b>" — its local files, history and settings? The repo on GitHub is untouched. This cannot be undone.</div>`,
+        `<div class="hint">Permanently delete "<b>${el.dataset.name}</b>" — its files, history and settings? This cannot be undone.</div>`,
         async () => { await call("session.delete", { id: el.dataset.del }); reopen(); });
     };
   });
-  if (key) $("#newSess").onclick = () => promptNewSessionInRepo(key);
-}
-
-function promptNewSessionInRepo(full) {
-  modal("New session in " + full,
-    `<label>Name</label><input id="sn" type="text" placeholder="what you're working on" />`,
-    async () => {
-      const name = $("#sn").value.trim() || full.split("/").pop();
-      closeSheet("#modal");
-      await startSessionOnRepo(full, false, name);
-    });
+  const newBtn = $("#newSessFromList");
+  if (newBtn) newBtn.onclick = () => { closeSheet("#modal"); actions.newSession(); };
 }
 
 // --- Session side panel (slides in from the left, like Claude.ai) ----------
@@ -1579,47 +1539,26 @@ async function renderSessionPanel(filter) {
   }
 
   const q = (filter || "").trim().toLowerCase();
-  if (q) sessions = sessions.filter((s) => s.name.toLowerCase().includes(q) || (s.activeRepo || "").toLowerCase().includes(q));
+  if (q) sessions = sessions.filter((s) => s.name.toLowerCase().includes(q));
 
-  // Group by repo
-  const groups = {};
-  sessions.forEach((s) => {
-    const key = s.activeRepo || "Unassigned";
-    (groups[key] = groups[key] || []).push(s);
-  });
-
-  const repoKeys = Object.keys(groups).sort((a, b) => {
-    if (a === "Unassigned") return 1;
-    if (b === "Unassigned") return -1;
-    return a.localeCompare(b);
-  });
-
-  if (!repoKeys.length) {
+  if (!sessions.length) {
     list.innerHTML = `<div class="sp-empty">No sessions yet.<br><br><button class="pill ghost" id="spNewEmpty">➕ Create a session</button></div>`;
     const btn = list.querySelector("#spNewEmpty");
-    if (btn) btn.onclick = () => { closeSessionPanel(); actions.newProject(); };
+    if (btn) btn.onclick = () => { closeSessionPanel(); actions.newSession(); };
     return;
   }
 
   let html = "";
-  repoKeys.forEach((repo) => {
-    const items = groups[repo];
-    const shortRepo = repo === "Unassigned" ? repo : repo.split("/").pop();
-    html += `<div class="sp-group">
-      <span class="sp-repo-name">${escapeHtml(shortRepo)}</span>
-      <span class="sp-repo-count">${items.length}</span>
+  sessions.forEach((s) => {
+    const isActive = s.id === activeId;
+    html += `<div class="sp-session${isActive ? " active" : ""}" data-sid="${s.id}">
+      <span class="sp-sess-icon">${isActive ? "●" : "○"}</span>
+      <span class="sp-sess-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span>
+      <span class="sp-sess-actions">
+        <button class="sp-sess-act" data-sp-rename="${s.id}" data-sp-name="${escapeHtml(s.name)}" title="Rename">✎</button>
+        <button class="sp-sess-act danger" data-sp-del="${s.id}" data-sp-name="${escapeHtml(s.name)}" title="Delete">🗑</button>
+      </span>
     </div>`;
-    items.forEach((s) => {
-      const isActive = s.id === activeId;
-      html += `<div class="sp-session${isActive ? " active" : ""}" data-sid="${s.id}">
-        <span class="sp-sess-icon">${isActive ? "●" : "○"}</span>
-        <span class="sp-sess-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span>
-        <span class="sp-sess-actions">
-          <button class="sp-sess-act" data-sp-rename="${s.id}" data-sp-name="${escapeHtml(s.name)}" title="Rename">✎</button>
-          <button class="sp-sess-act danger" data-sp-del="${s.id}" data-sp-name="${escapeHtml(s.name)}" title="Delete">🗑</button>
-        </span>
-      </div>`;
-    });
   });
 
   list.innerHTML = html;
@@ -1662,7 +1601,7 @@ async function renderSessionPanel(filter) {
       const id = btn.dataset.spDel;
       const name = btn.dataset.spName;
       modal("Delete session",
-        `<div class="hint">Permanently delete "<b>${escapeHtml(name)}</b>" — its local files, history and settings? The repo on GitHub is untouched. This cannot be undone.</div>`,
+        `<div class="hint">Permanently delete "<b>${escapeHtml(name)}</b>" — its files, history and settings? This cannot be undone.</div>`,
         async () => {
           await call("session.delete", { id });
           closeSheet("#modal");
@@ -1674,21 +1613,19 @@ async function renderSessionPanel(filter) {
   });
 }
 
-// Choose (or create) the GitHub repo a new project lives on.
+// Choose (or create) the GitHub repo for a new session.
 async function pickRepoThen(cb) {
-  bubble("Loading repos…", "sys");
   let repos = [];
   try { repos = (await call("git.listRepos")).repos || []; } catch (e) {}
   const rows = repos.map((f) =>
     `<div class="list-item" data-repo="${escAttr(f)}"><span>${escapeHtml(f)}</span></div>`).join("");
   modal("Choose a repo",
-    `<div class="hint">Every project lives on a GitHub repo — its source of truth.</div>` +
+    `<div class="hint">Every session lives on a GitHub repo — its source of truth.</div>` +
     rows + `<button class="pill ghost" id="newRepoBtn" style="margin-top:10px">➕ Create new repo</button>`);
   $("#modalBody").querySelectorAll("[data-repo]").forEach((el) => {
     el.onclick = () => {
       const repo = el.dataset.repo;
       closeSheet("#modal");
-      // Immediate UI feedback: update the subtitle bar so the user sees the chosen repo.
       const sr = $("#subRepo"); if (sr) sr.textContent = repo;
       setStatus("Selected " + repo);
       cb(repo, false);
@@ -1699,38 +1636,11 @@ async function pickRepoThen(cb) {
       async () => {
         const name = $("#nrn").value.trim(); if (!name) return;
         closeSheet("#modal");
-        // Immediate UI feedback for a new repo name.
         const sr = $("#subRepo"); if (sr) sr.textContent = name;
         setStatus("Creating " + name + "…");
         cb(name, true);
       });
   };
-}
-
-// Create a session bound to a repo: clone an existing one, or create a new repo.
-// Returns the repo full name (existing) or the new repo's name.
-async function startSessionOnRepo(repoOrName, isNew, sessionName) {
-  const name = sessionName || (isNew ? repoOrName : repoOrName.split("/").pop());
-  bubble((isNew ? "Creating repo " : "Starting on ") + repoOrName + "…", "sys");
-  await call("session.create", { name });
-  const res = isNew
-    ? (await call("git.createRepo", { name: repoOrName })).text
-    : (await call("git.clone", { full: repoOrName })).text;
-  if (res) bubble(res, "sys");
-  await refreshHeader(); await loadHistory(); refreshStats();
-  return repoOrName;
-}
-
-function confirmClone(full) {
-  modal(full,
-    `<div class="hint">Clone into the current session (replaces local files), or just point at it?</div>`,
-    null);
-  const body = $("#modalBody");
-  body.innerHTML += `<div class="row" style="margin-top:12px">
-    <button class="pill" id="cloneBtn">Clone</button>
-    <button class="pill ghost" id="pointBtn">Point at it</button></div>`;
-  $("#cloneBtn").onclick = async () => { closeSheet("#modal"); await runText("Clone", "git.clone", { full }); await onRepoChanged(); };
-  $("#pointBtn").onclick = async () => { closeSheet("#modal"); await runText("Set repo", "git.setActiveRepo", { full }); await onRepoChanged(); };
 }
 
 async function filesModal(path) {
@@ -2635,7 +2545,7 @@ function openCtxMenu() {
 // GitHub actions, opened from the top-bar GitHub button.
 const GITHUB_ITEMS = [
   { label: "New repository", act: "newRepo" },
-  { label: "Projects", act: "openProjects" },
+  { label: "Sessions", act: "openProjects" },
   { label: "Delete repository", act: "deleteRepo" },
   //
   { label: "Switch / create branch", act: "switchBranch" },
@@ -2681,8 +2591,8 @@ function openGithubMenu() {
 // --- Command palette (search box in the menu) ----------------------------
 const ACTION_INDEX = [
   { label: "Make a game", act: "makeGame" },
-  { label: "Blank project", act: "newProject" },
-  { label: "Projects / sessions", act: "sessions" },
+  { label: "New session", act: "newSession" },
+  { label: "Sessions", act: "sessions" },
   { label: "Best practices", act: "bestPractices" },
   { label: "Guidelines", act: "guidelines" },
   { label: "Settings", act: "settings" },
@@ -2693,14 +2603,13 @@ const ACTION_INDEX = [
   { label: "🖥 Toggle preview pane", fn: togglePreview },
   { label: "± Diff (uncommitted)", fn: showDiff },
   { label: "🧪 Check runtime errors", fn: showRuntimeErrors },
-  { label: "📦 Quick-start templates", fn: showTemplates },
   { label: "Refresh map", act: "refreshMap" },
   { label: "Check web", act: "checkWeb" },
   { label: "Commit (AI message)", act: "commit" },
   { label: "Push", act: "push" },
   { label: "Pull", act: "pull" },
   { label: "New repository", act: "newRepo" },
-  { label: "Projects", act: "openProjects" },
+  { label: "Sessions", act: "openProjects" },
   { label: "Delete repository", act: "deleteRepo" },
   { label: "Merge → open PR", act: "createPR" },
   { label: "Diff (workspace)", act: "diff" },
@@ -2870,40 +2779,6 @@ function showRuntimeErrors() {
   });
 }
 
-// --- Template shortcuts: quick-start templates for common project types -----
-const QUICK_TEMPLATES = [
-  { id: "blank", name: "Empty project", desc: "Blank workspace", act: "newProject" },
-  { id: "web-game", name: "🎮 Web game (canvas)", desc: "HTML5 canvas game with input, loop, entities" },
-  { id: "web-app", name: "🌐 Web app", desc: "index.html + app.js CSS starter" },
-  { id: "python-web", name: "🐍 Python web app", desc: "Flask-like app.py with localrun support" },
-  { id: "engine-3d", name: "🎲 3D game (engine)", desc: "Full 3D engine twin-stick shooter base" },
-  { id: "chat-ui", name: "💬 Chat UI", desc: "Chat interface like this one" },
-];
-
-async function applyQuickTemplate(id) {
-  if (id === "blank" || id === "newProject") { actions.newProject(); return; }
-  // Every project lives on a repo — pick/create one, then apply the template.
-  pickRepoThen(async (repoOrName, isNew) => {
-    await startSessionOnRepo(repoOrName, isNew, id + "-" + Date.now().toString(36));
-    const r = await call("orch", { fn: "apply_template", arg: id });
-    bubble(r.text || "Template applied", "sys");
-    setTimeout(() => maybeOpenPreview(), 1500);
-  });
-}
-
-function showTemplates() {
-  const rows = QUICK_TEMPLATES.map((t) =>
-    `<div class="list-item" data-tpl="${escAttr(t.id)}">
-       <span><b>${escapeHtml(t.name)}</b><div class="sub">${escapeHtml(t.desc)}</div></span></div>`
-  ).join("");
-  modal("Quick-start templates",
-    rows + `<div class="hint">Creates a new session and applies the template. The agent sets up
-     the boilerplate — you can then describe what to build.</div>`);
-  $("#modalBody").querySelectorAll("[data-tpl]").forEach((el) => {
-    el.onclick = () => { closeSheet("#modal"); applyQuickTemplate(el.dataset.tpl); };
-  });
-}
-
 // --- Run generated script (Python or Node-like) ---------------------------
 async function runScript() {
   // Check for a runnable entry point: app.py first, then index.html.
@@ -2985,7 +2860,7 @@ $("#chatBackdrop").onclick = closeChat;
 $("#sessionTab").onclick = toggleSessionPanel;
 $("#sessionPanelClose").onclick = closeSessionPanel;
 $("#sessionBackdrop").onclick = closeSessionPanel;
-$("#sessionNewBtn").onclick = () => { closeSessionPanel(); actions.newProject(); };
+$("#sessionNewBtn").onclick = () => { closeSessionPanel(); actions.newSession(); };
 const _sessionSearch = $("#sessionSearch");
 if (_sessionSearch) _sessionSearch.addEventListener("input", (e) => renderSessionPanel(e.target.value));
 initSessionSwipe();
