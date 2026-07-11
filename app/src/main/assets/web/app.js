@@ -163,6 +163,8 @@ async function refreshHeader() {
   if (mn) mn.textContent = shortModel(m.orchestrator);
   const inm = $("#implName");
   if (inm) inm.textContent = m.implementer ? shortModel(m.implementer) : "single";
+  // Effort dropdown in the chat drawer.
+  try { updateEffortSelect((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
 }
 
 async function loadHistory() {
@@ -682,6 +684,17 @@ function updateCavemanLabel(on) {
 function updateEffortLabel(level) {
   const b = document.querySelector('[data-act="effort"]');
   if (b) b.textContent = "Effort: " + (level || "off");
+}
+function updateEffortSelect(level) {
+  const s = $("#effortSelect");
+  if (s) s.value = level || "off";
+}
+async function onEffortChange() {
+  const s = $("#effortSelect");
+  if (!s) return;
+  const r = await call("orch", { fn: "set_effort", arg: s.value });
+  bubble(r.text, "sys");
+  refreshStats();
 }
 
 function addApprove() {
@@ -1233,7 +1246,6 @@ const actions = {
          <button data-act="autocommit">Autocommit: —</button>
          <button data-act="speak">Speak replies: —</button>
          <button data-act="caveman">Caveman: —</button>
-         <button data-act="effort">Effort: —</button>
          <button data-act="frugal">Frugal: —</button>
        </div>`,
       async () => {
@@ -1259,7 +1271,6 @@ const actions = {
     try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
     updateSpeakLabel(autoSpeakOn());
     try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
-    try { updateEffortLabel((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
     try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
     try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}
     try { updateAutocleanLabel((await call("orch", { fn: "get_autoclean" })).text.trim() === "1"); } catch (e) {}
@@ -2398,7 +2409,6 @@ const ACTION_INDEX = [
   { label: "Autocommit toggle", act: "autocommit" },
   { label: "Speak replies toggle", act: "speak" },
   { label: "Caveman toggle", act: "caveman" },
-  { label: "Effort (cycle)", act: "effort" },
   { label: "Frugal toggle", act: "frugal" },
   { label: "Battery", act: "battery" },
   { label: "Update app", act: "updateApp" },
@@ -2738,6 +2748,8 @@ $("#micBtn").onclick = () => {
 $("#stopBtn").onclick = () => { $("#runlabel").textContent = "Stopping…"; call("orch", { fn: "interrupt" }); };
 const _exRefresh = $("#explorerRefresh");
 if (_exRefresh) _exRefresh.onclick = () => renderTree();
+const _effortSel = $("#effortSelect");
+if (_effortSel) _effortSel.onchange = onEffortChange;
 // Boot
 (async function () {
   try { await refreshHeader(); await loadHistory(); } catch (e) {}
@@ -2747,7 +2759,7 @@ if (_exRefresh) _exRefresh.onclick = () => renderTree();
   // Text/URL shared into the app before the UI was ready.
   try { const sh = await call("shared.consume"); if (sh && sh.text) receiveShared(sh.text); } catch (e) {}
   try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
-  try { updateEffortLabel((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
+  try { updateEffortSelect((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
   try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
   try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
   try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}
