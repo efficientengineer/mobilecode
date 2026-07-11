@@ -15,6 +15,7 @@
     "best_practices.py",
     "sysguide.py",
     "workflows.py",
+    "agentevals.py",
     "orchestrator.py"
   ],
   "web": [

@@ -1088,6 +1088,37 @@ def interrupt(_=None) -> str:
     return "Interrupting after the current step…"
 
 
+# --- agent diagnostics / evals (OTA-callable from the web via op "...") -----
+
+def diagnose_last_run(_=None) -> str:
+    """Score the last run's event log for spirals, verify-thrash, fallbacks,
+    crashes and waste. Deterministic; no model call."""
+    try:
+        import agentevals
+        return agentevals.analyze_run()
+    except Exception:
+        return "Diagnose failed:\n" + traceback.format_exc()
+
+
+def run_evals(names="") -> str:
+    """Run the scenario suite against the agent in throwaway workspaces and score
+    the outcomes. Optional comma-separated subset of scenario names."""
+    try:
+        import agentevals
+        return agentevals.run_scenarios(names or None)
+    except Exception:
+        return "Evals failed:\n" + traceback.format_exc()
+
+
+def judge_last_run(_=None) -> str:
+    """Have a stronger model grade the last run's reasoning/tool-use quality."""
+    try:
+        import agentevals
+        return agentevals.judge_run()
+    except Exception:
+        return "Judge failed:\n" + traceback.format_exc()
+
+
 def _interrupted() -> bool:
     return os.environ.get("AGENT_INTERRUPT", "0") == "1"
 

@@ -752,6 +752,21 @@ const actions = {
     const r = await call("orch", { fn: "get_diff" });
     modal("Uncommitted changes", `<pre class="filebody diff">${escapeHtml(r.text || "(none)")}</pre>`);
   },
+  async diagnoseRun() {
+    bubble("Diagnosing the last run…", "sys");
+    const r = await call("orch", { fn: "diagnose_last_run" });
+    modal("Run diagnosis", `<pre class="filebody">${escapeHtml(r.text || "(none)")}</pre>`);
+  },
+  async judgeRun() {
+    bubble("Grading the last run…", "sys");
+    const r = await call("orch", { fn: "judge_last_run" });
+    modal("LLM judge", `<pre class="filebody">${escapeHtml(r.text || "(none)")}</pre>`);
+  },
+  async runEvals() {
+    bubble("Running eval scenarios (this runs the agent a few times — hang on)…", "sys");
+    const r = await call("orch", { fn: "run_evals" });
+    modal("Eval scenarios", `<pre class="filebody">${escapeHtml(r.text || "(none)")}</pre>`);
+  },
   revertLast() {
     modal("Revert last commit",
       `<div class="hint">Undo the most recent commit? Files return to the previous commit's state.</div>`,
