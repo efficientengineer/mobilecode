@@ -309,20 +309,41 @@ class MainActivity : AppCompatActivity() {
         "session.meta" -> {
             val m = sessions.readMeta(sessions.activeId())
             val (lead, worker) = effectiveModels()
-            JSONObject().put("name", m.name).put("activeRepo", m.activeRepo)
+            // Emit "activeRepo" (unchanged key) so the web layer keeps working.
+            JSONObject().put("name", m.name).put("activeRepo", m.repo)
                 .put("orchestrator", lead).put("implementer", worker)
         }
         "session.list" -> {
             val arr = JSONArray()
             sessions.list().forEach {
-                arr.put(JSONObject().put("id", it.id).put("name", it.name).put("activeRepo", it.activeRepo))
+                arr.put(JSONObject().put("id", it.id).put("name", it.name).put("activeRepo", it.repo))
+            }
+            JSONObject().put("activeId", sessions.activeId()).put("sessions", arr)
+        }
+        "session.listRepos" -> {
+            JSONObject().put("repos", JSONArray(sessions.listRepos()))
+        }
+        "session.listSessions" -> {
+            val arr = JSONArray()
+            sessions.listSessions(arg.optString("repo")).forEach {
+                arr.put(JSONObject().put("id", it.id).put("name", it.name).put("activeRepo", it.repo))
             }
             JSONObject().put("activeId", sessions.activeId()).put("sessions", arr)
         }
         "session.create" -> withContext(Dispatchers.IO) {
-            val id = sessions.create(arg.optString("name"))
+            // Optional repo: when provided the session is bound to it immediately;
+            // otherwise it's created unassigned and bound later by git.clone /
+            // git.createRepo (write-once via SessionManager.assignRepo).
+            val repo = arg.optString("repo").trim()
+            val id = if (repo.isNotBlank()) sessions.create(repo, arg.optString("name"))
+                     else sessions.create(arg.optString("name"))
             sessions.setActive(id); prepareEnv()
             JSONObject().put("id", id)
+        }
+        "session.attachRepo" -> withContext(Dispatchers.IO) {
+            val ok = sessions.assignRepo(sessions.activeId(), arg.getString("repo").trim())
+            prepareEnv()
+            JSONObject().put("ok", ok)
         }
         "session.setActive" -> withContext(Dispatchers.IO) {
             sessions.setActive(arg.getString("id")); prepareEnv()
@@ -393,7 +414,12 @@ class MainActivity : AppCompatActivity() {
         "git.createRepo" -> withContext(Dispatchers.IO) {
             val r = py("git_ops").callAttr("create_repo", arg.getString("name"), true).toString()
             val prefix = listOf("Created ", "Using existing ").firstOrNull { r.startsWith(it) }
-            if (prefix != null) sessions.setActiveRepo(sessions.activeId(), r.removePrefix(prefix).trim())
+            if (prefix != null) {
+                // Write-once: bind this repo to the (unassigned) active session,
+                // moving its folder under the repo. No-op if already bound.
+                sessions.assignRepo(sessions.activeId(), r.removePrefix(prefix).trim())
+                prepareEnv()
+            }
             text(r)
         }
         "git.listRepos" -> withContext(Dispatchers.IO) {
@@ -402,13 +428,20 @@ class MainActivity : AppCompatActivity() {
         "git.clone" -> withContext(Dispatchers.IO) {
             val full = arg.getString("full")
             val r = py("git_ops").callAttr("clone_repo", full).toString()
-            sessions.setActiveRepo(sessions.activeId(), full)
+            // Bind the repo to the active session (write-once), then re-point the
+            // env at the (possibly moved) session folder.
+            sessions.assignRepo(sessions.activeId(), full)
+            prepareEnv()
             text(r)
         }
         "git.setActiveRepo" -> withContext(Dispatchers.IO) {
+            // Back-compat alias (older web builds). A session's repo is write-once,
+            // so this binds it if unassigned and is otherwise a no-op — it never
+            // re-points an already-bound session at a different repo.
             val full = arg.getString("full")
             val r = py("git_ops").callAttr("set_active_repo", full).toString()
-            sessions.setActiveRepo(sessions.activeId(), full)
+            sessions.assignRepo(sessions.activeId(), full)
+            prepareEnv()
             text(r)
         }
         "models.aggregate" -> withContext(Dispatchers.IO) {
