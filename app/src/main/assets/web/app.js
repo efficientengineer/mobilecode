@@ -109,6 +109,43 @@ function estTokens(s) {
   return Math.max(1, Math.round((s || "").length / 4));
 }
 
+// Copy text to the clipboard, with a WebView-safe fallback (navigator.clipboard
+// isn't always available/permitted in the Android WebView). Flashes the button.
+async function copyToClipboard(text, btn) {
+  let ok = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch (e) {}
+  if (!ok) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+    } catch (e) {}
+  }
+  if (btn) {
+    const prev = btn.textContent;
+    btn.textContent = ok ? "✓" : "✕";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = prev; btn.classList.remove("copied"); }, 1200);
+  }
+}
+
+function addCopyButton(bubbleEl, text) {
+  const cp = document.createElement("button");
+  cp.className = "copybtn";
+  cp.title = "Copy message";
+  cp.textContent = "⧉";
+  cp.onclick = (ev) => { ev.stopPropagation(); copyToClipboard(text, cp); };
+  bubbleEl.appendChild(cp);
+}
+
 function bubble(text, kind, runId, ctxText) {
   const d = document.createElement("div");
   d.className = "bubble " + kind;
@@ -120,6 +157,8 @@ function bubble(text, kind, runId, ctxText) {
     d.classList.add("tappable");
     d.onclick = () => openRun(runId);
   }
+  // Copy-to-clipboard button (copies the raw text, not the rendered markdown).
+  if (kind === "user" || kind === "agent") addCopyButton(d, text);
   chat.appendChild(d);
   // Per-message token estimate = what this turn costs in CONTEXT (the compact
   // form), not the full displayed text. UI only — never itself sent.
@@ -163,6 +202,9 @@ async function refreshHeader() {
   if (mn) mn.textContent = shortModel(m.orchestrator);
   const inm = $("#implName");
   if (inm) inm.textContent = m.implementer ? shortModel(m.implementer) : "single";
+  // Effort dropdowns — one per role.
+  try { updateEffortSelect("orchEffortSelect", (await call("orch", { fn: "get_orch_effort" })).text.trim()); } catch (e) {}
+  try { updateEffortSelect("implEffortSelect", (await call("orch", { fn: "get_impl_effort" })).text.trim()); } catch (e) {}
 }
 
 async function loadHistory() {
@@ -688,6 +730,24 @@ function updateEffortLabel(level) {
   const b = document.querySelector('[data-act="effort"]');
   if (b) b.textContent = "Effort: " + (level || "off");
 }
+function updateEffortSelect(selId, level) {
+  const s = $("#" + selId);
+  if (s) s.value = level || "off";
+}
+async function onOrchEffortChange() {
+  const s = $("#orchEffortSelect");
+  if (!s) return;
+  const r = await call("orch", { fn: "set_orch_effort", arg: s.value });
+  bubble(r.text, "sys");
+  refreshStats();
+}
+async function onImplEffortChange() {
+  const s = $("#implEffortSelect");
+  if (!s) return;
+  const r = await call("orch", { fn: "set_impl_effort", arg: s.value });
+  bubble(r.text, "sys");
+  refreshStats();
+}
 
 function addApprove() {
   const btn = document.createElement("button");
@@ -995,12 +1055,14 @@ const actions = {
     refreshStats();
   },
   async effort() {
-    // Cycle off → low → medium → high → off. Higher = more reasoning tokens
-    // (an Anthropic thinking budget / DeepSeek's Thinking switch), so crank it
-    // up for an Opus orchestrator/reviewer and drop it to save cost.
-    const r = await call("orch", { fn: "cycle_effort" });
+    // Cycle orchestrator effort: off → low → medium → high → off.
+    const cur = (await call("orch", { fn: "get_orch_effort" })).text.trim();
+    const levels = ["off", "low", "medium", "high"];
+    const idx = levels.indexOf(cur);
+    const next = levels[(idx + 1) % levels.length];
+    const r = await call("orch", { fn: "set_orch_effort", arg: next });
     bubble(r.text, "sys");
-    updateEffortLabel((await call("orch", { fn: "get_effort" })).text.trim());
+    updateEffortSelect("orchEffortSelect", next);
     refreshStats();
   },
   async guidelines() {
@@ -1244,7 +1306,6 @@ const actions = {
          <button data-act="autocommit">Autocommit: —</button>
          <button data-act="speak">Speak replies: —</button>
          <button data-act="caveman">Caveman: —</button>
-         <button data-act="effort">Effort: —</button>
          <button data-act="frugal">Frugal: —</button>
        </div>`,
       async () => {
@@ -1270,7 +1331,6 @@ const actions = {
     try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
     updateSpeakLabel(autoSpeakOn());
     try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
-    try { updateEffortLabel((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
     try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
     try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}
     try { updateAutocleanLabel((await call("orch", { fn: "get_autoclean" })).text.trim() === "1"); } catch (e) {}
@@ -2410,7 +2470,6 @@ const ACTION_INDEX = [
   { label: "Autocommit toggle", act: "autocommit" },
   { label: "Speak replies toggle", act: "speak" },
   { label: "Caveman toggle", act: "caveman" },
-  { label: "Effort (cycle)", act: "effort" },
   { label: "Frugal toggle", act: "frugal" },
   { label: "Battery", act: "battery" },
   { label: "Update app", act: "updateApp" },
@@ -2750,6 +2809,10 @@ $("#micBtn").onclick = () => {
 $("#stopBtn").onclick = () => { $("#runlabel").textContent = "Stopping…"; call("orch", { fn: "interrupt" }); };
 const _exRefresh = $("#explorerRefresh");
 if (_exRefresh) _exRefresh.onclick = () => renderTree();
+const _orchEffortSel = $("#orchEffortSelect");
+if (_orchEffortSel) _orchEffortSel.onchange = onOrchEffortChange;
+const _implEffortSel = $("#implEffortSelect");
+if (_implEffortSel) _implEffortSel.onchange = onImplEffortChange;
 // Boot
 (async function () {
   try { await refreshHeader(); await loadHistory(); } catch (e) {}
@@ -2759,7 +2822,8 @@ if (_exRefresh) _exRefresh.onclick = () => renderTree();
   // Text/URL shared into the app before the UI was ready.
   try { const sh = await call("shared.consume"); if (sh && sh.text) receiveShared(sh.text); } catch (e) {}
   try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
-  try { updateEffortLabel((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
+  try { updateEffortSelect("orchEffortSelect", (await call("orch", { fn: "get_orch_effort" })).text.trim()); } catch (e) {}
+  try { updateEffortSelect("implEffortSelect", (await call("orch", { fn: "get_impl_effort" })).text.trim()); } catch (e) {}
   try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
   try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
   try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}

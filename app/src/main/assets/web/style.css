@@ -169,9 +169,21 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
    --compose-pad) since the textarea grows as you type. */
 #chatDrawer.composing #chat { padding-bottom: var(--compose-pad, 150px); }
 .bubble {
+  position: relative;
   max-width: 82%; padding: 10px 13px; border-radius: 16px; white-space: pre-wrap;
   word-wrap: break-word; line-height: 1.35; font-size: 14.5px;
 }
+/* Copy-to-clipboard button on each user/agent message (like Claude Code). */
+.copybtn {
+  position: absolute; top: 4px; right: 4px; width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; padding: 0; cursor: pointer;
+  background: rgba(127,127,127,.18); color: var(--muted);
+  font-size: 12px; line-height: 1; opacity: .4; transition: opacity .12s;
+}
+.copybtn:hover, .copybtn:active { opacity: 1; }
+.copybtn.copied { opacity: 1; color: #4caf50; }
+.bubble.user .copybtn { background: rgba(255,255,255,.18); color: rgba(255,255,255,.9); }
 .bubble.user { align-self: flex-end; background: var(--user); color: #fff; border-bottom-right-radius: 5px; }
 .bubble.agent { align-self: flex-start; background: var(--agent); border-bottom-left-radius: 5px; }
 .bubble.sys { align-self: center; background: transparent; color: var(--muted); font-size: 12.5px; max-width: 92%; text-align: center; }
@@ -321,9 +333,12 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 #chatDrawer-head { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
   padding: 10px 14px 8px; font-weight: 700; }
 #chatDrawer-head .cd-title { font-size: 16px; }
-/* Model selectors live in the chat drawer (orchestrator + implementer). */
-#chatDrawer-models { flex-shrink: 0; display: flex; gap: 10px; padding: 0 12px 10px;
-  border-bottom: 1px solid var(--border); }
+/* Model selectors live in the chat drawer (orchestrator + implementer).
+   Two rows: orchestrator on top, implementer below; each row has the model
+   button + its own effort dropdown. */
+#chatDrawer-models { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px;
+  padding: 0 12px 8px; border-bottom: 1px solid var(--border); }
+.modelrow { display: flex; gap: 10px; }
 .modelcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .model-label { display: block; margin: 0; font-size: 11px; font-weight: 700; color: var(--muted);
   text-transform: uppercase; letter-spacing: .5px; }
@@ -333,6 +348,14 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 .modelbtn:active { background: var(--border); }
 .modelbtn span[id] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cd-head-actions { display: flex; gap: 6px; }
+/* Effort dropdown — sits alongside the model selectors in the chat drawer. */
+.effortcol { flex: 0 0 auto; max-width: 100px; }
+.effortselect { width: 100%; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 12px; padding: 7px 8px;
+  font-size: 13px; font-weight: 600; font-family: inherit; appearance: none;
+  -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%239aa0aa'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 8px center; padding-right: 24px; }
+.effortselect:focus { outline: none; border-color: var(--accent); }
 /* DeepSeek balance row in the drawer. */
 #chatDrawer-balance { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
   gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
