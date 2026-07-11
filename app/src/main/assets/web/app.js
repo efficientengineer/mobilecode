@@ -181,12 +181,18 @@ function shortModel(m) {
 }
 
 async function refreshHeader() {
-  // Fetch session meta + git branch in parallel.
-  const [m, brResult] = await Promise.all([
-    call("session.meta"),
-    call("git.currentBranch").catch(() => ({ text: "?" }))
-  ]);
-  const branch = brResult.text || "?";
+  // Fetch session meta + git branch independently (one failure shouldn't block the other).
+  let m = { name: "session", activeRepo: "", orchestrator: "", implementer: "" };
+  let branch = "?";
+  try { m = await call("session.meta"); } catch (e) {}
+  try { const br = await call("git.currentBranch"); branch = br.text || "?"; } catch (e) {}
+  // If the session doesn't know its repo yet, try the workspace's git remote origin.
+  if (!m.activeRepo) {
+    try {
+      const r = await call("py.call", { module: "git_ops", fn: "workspace_repo", args: [] });
+      if (r.text && r.text.trim() && r.text !== "(no repo)") m.activeRepo = r.text.trim();
+    } catch (e) {}
+  }
   // Always-visible subtitle bar: session · repo · branch
   const ss = $("#subSession");
   if (ss) ss.textContent = m.name || "session";
@@ -194,9 +200,12 @@ async function refreshHeader() {
   if (sr) sr.textContent = m.activeRepo || "no repo";
   const sb = $("#subBranch");
   if (sb) sb.textContent = branch;
-  // GitHub fab shows branch persistently.
+  // GitHub fab shows repo short-name + branch.
   const fab = $("#githubFab");
-  if (fab) fab.textContent = "GitHub ▾ · " + branch;
+  if (fab) {
+    const shortRepo = m.activeRepo ? m.activeRepo.split("/").pop() : "";
+    fab.textContent = "GitHub ▾" + (shortRepo ? " · " + shortRepo : "") + " · " + branch;
+  }
   // Model picker labels in the chat drawer.
   const mn = $("#modelName");
   if (mn) mn.textContent = shortModel(m.orchestrator);
