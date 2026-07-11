@@ -394,10 +394,12 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
     interrupted = False
     repair_left = REPAIR_ROUNDS
     steps = 0
-    # Anti-spiral: count identical tool calls (name + args) so we can nudge the
-    # model off a loop before it burns the whole step budget retrying the same
-    # failing action — the #1 way a run gets stuck. Nudge once per signature.
+    # Anti-spiral: count identical tool calls that also return the SAME result,
+    # so we nudge the model off a genuinely stuck loop — but NOT off a productive
+    # verify→fix→verify cycle (e.g. check_web run repeatedly while the errors
+    # shrink). The count resets whenever the result changes (= progress).
     call_counts = {}
+    last_result = {}
     nudged = set()
     REPEAT_LIMIT = 3
 
@@ -549,8 +551,12 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             messages.append({"role": "tool", "tool_call_id": tc["id"],
                              "name": tc["name"], "content": result,
                              "_path": _arg_path(tc.get("args"))})
-            # Track exact-repeat calls (skip read-only inspection, which is fine
-            # to repeat). When one crosses the limit, queue a one-time nudge.
+            # Track repeats that make NO progress (skip read-only inspection,
+            # which is fine to repeat). A repeat only counts when the SAME call
+            # returns the SAME result; any change in the result resets the count,
+            # so re-running a verify tool while you're actually fixing things is
+            # not mistaken for a spiral. When a no-progress repeat crosses the
+            # limit, queue a one-time nudge.
             if tc["name"] not in ("read_file", "list_files", "grep",
                                   "todo_write", "note_write"):
                 try:
@@ -558,14 +564,18 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                                                         sort_keys=True)[:400]
                 except Exception:
                     sig = tc["name"]
+                res_norm = " ".join((result or "").split())[:300]
+                if last_result.get(sig) is not None and last_result[sig] != res_norm:
+                    call_counts[sig] = 0            # result changed → progress
+                last_result[sig] = res_norm
                 call_counts[sig] = call_counts.get(sig, 0) + 1
                 if call_counts[sig] >= REPEAT_LIMIT and sig not in nudged:
                     nudged.add(sig)
                     _emit("loop_warn", name=tc["name"], count=call_counts[sig])
                     nudge = (
-                        f"\n\n[Loop guard] You've called `{tc['name']}` with the "
-                        f"same arguments {call_counts[sig]} times and it is not "
-                        "making progress. STOP repeating it. Either take a "
+                        f"\n\n[Loop guard] You've called `{tc['name']}` "
+                        f"{call_counts[sig]} times and it keeps returning the same "
+                        "result — no progress. STOP repeating it. Either take a "
                         "genuinely different approach, or if this needs a decision, "
                         "permission, or a tool you don't have, say so plainly and "
                         "stop — do not keep retrying.")
