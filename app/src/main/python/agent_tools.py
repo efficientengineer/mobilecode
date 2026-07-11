@@ -631,6 +631,9 @@ def t_delegate_edit(path="", instruction="", **_):
     worker = (os.environ.get("WORKER_MODEL") or "").strip()
     if not worker:
         return "(no implementer model configured — edit the file yourself)"
+    # Set effort for the implementer model before the LLM call.
+    os.environ["AGENT_EFFORT"] = os.environ.get("AGENT_IMPL_EFFORT",
+        os.environ.get("AGENT_EFFORT", "off"))
     fp = _resolve(path)
     current = fp.read_text(encoding="utf-8", errors="replace") if fp.exists() else ""
     system = (

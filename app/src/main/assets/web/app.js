@@ -163,8 +163,9 @@ async function refreshHeader() {
   if (mn) mn.textContent = shortModel(m.orchestrator);
   const inm = $("#implName");
   if (inm) inm.textContent = m.implementer ? shortModel(m.implementer) : "single";
-  // Effort dropdown in the chat drawer.
-  try { updateEffortSelect((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
+  // Effort dropdowns — one per role.
+  try { updateEffortSelect("orchEffortSelect", (await call("orch", { fn: "get_orch_effort" })).text.trim()); } catch (e) {}
+  try { updateEffortSelect("implEffortSelect", (await call("orch", { fn: "get_impl_effort" })).text.trim()); } catch (e) {}
 }
 
 async function loadHistory() {
@@ -685,14 +686,21 @@ function updateEffortLabel(level) {
   const b = document.querySelector('[data-act="effort"]');
   if (b) b.textContent = "Effort: " + (level || "off");
 }
-function updateEffortSelect(level) {
-  const s = $("#effortSelect");
+function updateEffortSelect(selId, level) {
+  const s = $("#" + selId);
   if (s) s.value = level || "off";
 }
-async function onEffortChange() {
-  const s = $("#effortSelect");
+async function onOrchEffortChange() {
+  const s = $("#orchEffortSelect");
   if (!s) return;
-  const r = await call("orch", { fn: "set_effort", arg: s.value });
+  const r = await call("orch", { fn: "set_orch_effort", arg: s.value });
+  bubble(r.text, "sys");
+  refreshStats();
+}
+async function onImplEffortChange() {
+  const s = $("#implEffortSelect");
+  if (!s) return;
+  const r = await call("orch", { fn: "set_impl_effort", arg: s.value });
   bubble(r.text, "sys");
   refreshStats();
 }
@@ -997,12 +1005,14 @@ const actions = {
     refreshStats();
   },
   async effort() {
-    // Cycle off → low → medium → high → off. Higher = more reasoning tokens
-    // (an Anthropic thinking budget / DeepSeek's Thinking switch), so crank it
-    // up for an Opus orchestrator/reviewer and drop it to save cost.
-    const r = await call("orch", { fn: "cycle_effort" });
+    // Cycle orchestrator effort: off → low → medium → high → off.
+    const cur = (await call("orch", { fn: "get_orch_effort" })).text.trim();
+    const levels = ["off", "low", "medium", "high"];
+    const idx = levels.indexOf(cur);
+    const next = levels[(idx + 1) % levels.length];
+    const r = await call("orch", { fn: "set_orch_effort", arg: next });
     bubble(r.text, "sys");
-    updateEffortLabel((await call("orch", { fn: "get_effort" })).text.trim());
+    updateEffortSelect("orchEffortSelect", next);
     refreshStats();
   },
   async guidelines() {
@@ -2748,8 +2758,10 @@ $("#micBtn").onclick = () => {
 $("#stopBtn").onclick = () => { $("#runlabel").textContent = "Stopping…"; call("orch", { fn: "interrupt" }); };
 const _exRefresh = $("#explorerRefresh");
 if (_exRefresh) _exRefresh.onclick = () => renderTree();
-const _effortSel = $("#effortSelect");
-if (_effortSel) _effortSel.onchange = onEffortChange;
+const _orchEffortSel = $("#orchEffortSelect");
+if (_orchEffortSel) _orchEffortSel.onchange = onOrchEffortChange;
+const _implEffortSel = $("#implEffortSelect");
+if (_implEffortSel) _implEffortSel.onchange = onImplEffortChange;
 // Boot
 (async function () {
   try { await refreshHeader(); await loadHistory(); } catch (e) {}
@@ -2759,7 +2771,8 @@ if (_effortSel) _effortSel.onchange = onEffortChange;
   // Text/URL shared into the app before the UI was ready.
   try { const sh = await call("shared.consume"); if (sh && sh.text) receiveShared(sh.text); } catch (e) {}
   try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
-  try { updateEffortSelect((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
+  try { updateEffortSelect("orchEffortSelect", (await call("orch", { fn: "get_orch_effort" })).text.trim()); } catch (e) {}
+  try { updateEffortSelect("implEffortSelect", (await call("orch", { fn: "get_impl_effort" })).text.trim()); } catch (e) {}
   try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
   try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
   try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}

@@ -84,22 +84,35 @@
       </span>
     </div>
     <div id="chatDrawer-models">
-      <div class="modelcol">
-        <label class="model-label">Orchestrator</label>
-        <button id="modelLead" class="modelbtn"><span id="modelName">…</span> ▾</button>
+      <div class="modelrow">
+        <div class="modelcol">
+          <label class="model-label">Orchestrator</label>
+          <button id="modelLead" class="modelbtn"><span id="modelName">…</span> ▾</button>
+        </div>
+        <div class="modelcol effortcol">
+          <label class="model-label">Effort</label>
+          <select id="orchEffortSelect" class="effortselect">
+            <option value="off">Off</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </div>
       </div>
-      <div class="modelcol">
-        <label class="model-label">Implementer</label>
-        <button id="modelImpl" class="modelbtn"><span id="implName">…</span> ▾</button>
-      </div>
-      <div class="modelcol effortcol">
-        <label class="model-label">Effort</label>
-        <select id="effortSelect" class="effortselect">
-          <option value="off">Off</option>
-          <option value="low">Low</option>
-          <option value="medium">Medium</option>
-          <option value="high">High</option>
-        </select>
+      <div class="modelrow">
+        <div class="modelcol">
+          <label class="model-label">Implementer</label>
+          <button id="modelImpl" class="modelbtn"><span id="implName">…</span> ▾</button>
+        </div>
+        <div class="modelcol effortcol">
+          <label class="model-label">Effort</label>
+          <select id="implEffortSelect" class="effortselect">
+            <option value="off">Off</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </div>
       </div>
     </div>
     <div id="chatDrawer-balance"><span class="db-label">DeepSeek balance</span><span id="balance" class="balmini">—</span></div>
