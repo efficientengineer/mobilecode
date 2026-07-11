@@ -316,17 +316,19 @@ _TRIAGE_SYSTEM = (
     "You are the routing triage for an on-device coding agent. Given the user's "
     "request and the project's file list, decide how to run it. Reply with ONLY "
     "JSON:\n"
-    '{"recommend":"single|multi|plan|chat","reason":"<one short sentence>",'
-    '"subtasks":[{"title":"<short>","instruction":"<self-contained task for one '
-    'file/feature>"}]}\n'
+    '{"recommend":"single|multi|plan|chat","confidence":"high|low",'
+    '"reason":"<one short sentence>","subtasks":[{"title":"<short>",'
+    '"instruction":"<self-contained task for one file/feature>"}]}\n'
     "- chat: a question or discussion that needs no file changes.\n"
     "- single: one coherent or small/surgical change — one agent does it.\n"
     "- multi: the work splits into 2+ INDEPENDENT files/features that can be "
     "built in parallel — list them as subtasks (one per file/feature).\n"
     "- plan: large or ambiguous enough that the user should approve a plan first.\n"
     "Only propose multi when the pieces are genuinely independent (no shared "
-    "assumptions that would collide when built separately). At most 6 subtasks. "
-    "Be terse."
+    "assumptions that would collide when built separately). At most 6 subtasks.\n"
+    'confidence="high" ONLY when the routing is obvious (a clearly surgical '
+    "single-file edit, or a plain question) so the app can run it without asking. "
+    'Use "low" whenever a reasonable person might pick a different route. Be terse.'
 )
 
 
@@ -334,7 +336,7 @@ def triage_prompt(task: str) -> str:
     """Classify a prompt and propose routing options. Returns JSON:
     {recommend, reason, subtasks:[{title,instruction}]}. Cheap + fast (worker
     model). Also stashes the split for `multi` mode to pick up."""
-    default = {"recommend": "single", "reason": "", "subtasks": []}
+    default = {"recommend": "single", "confidence": "low", "reason": "", "subtasks": []}
     try:
         root = _workspace()
         files = _list_repo_files(root, 80)
@@ -351,7 +353,10 @@ def triage_prompt(task: str) -> str:
             if isinstance(s, dict) and str(s.get("instruction", "")).strip():
                 subs.append({"title": str(s.get("title", "")).strip()[:80],
                              "instruction": str(s.get("instruction", "")).strip()})
-        out = {"recommend": rec,
+        conf = str(data.get("confidence", "low")).strip().lower()
+        if conf not in ("high", "low"):
+            conf = "low"
+        out = {"recommend": rec, "confidence": conf,
                "reason": str(data.get("reason", "")).strip()[:200],
                "subtasks": subs}
         try:

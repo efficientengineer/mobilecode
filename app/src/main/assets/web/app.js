@@ -348,9 +348,16 @@ async function routePrompt(task) {
   modal("Route this request", `<div class="hint">Analyzing your request…</div>`);
   let r;
   try { r = JSON.parse((await call("orch", { fn: "triage_prompt", arg: task })).text); }
-  catch (e) { r = { recommend: "single", reason: "", subtasks: [] }; }
+  catch (e) { r = { recommend: "single", confidence: "low", reason: "", subtasks: [] }; }
   const subs = r.subtasks || [];
   const rec = r.recommend || "single";
+  // Auto-skip the window when the route is obvious (a confident single edit or a
+  // plain question) — only ask when there's a real fork (multi/plan, or unsure).
+  if (r.confidence === "high" && (rec === "single" || rec === "chat")) {
+    closeSheet("#modal");
+    runTask(task, rec === "chat" ? "chat" : "code", true);
+    return;
+  }
   const subsHtml = subs.length
     ? `<div class="hint" style="margin-top:8px">Proposed split (${subs.length}):</div>` +
       subs.map((s) => `<div class="list-item"><span>${escapeHtml(s.title || s.instruction)}</span></div>`).join("")
