@@ -1321,6 +1321,7 @@ def _begin_run() -> None:
     os.environ["AGENT_FRUGAL"] = "1" if _frugal_on() else "0"
     os.environ["AGENT_EFFORT"] = _orch_effort()
     os.environ["AGENT_REVIEW"] = "1" if _review_on() else "0"
+    os.environ["AGENT_REVIEWER_MODEL"] = _reviewer_model_value()
 
 
 def _frugal_on() -> bool:
@@ -1515,6 +1516,32 @@ def set_routing(flag="1") -> str:
 
 def get_routing(_=None) -> str:
     return "1" if _routing_on() else "0"
+
+
+def _reviewer_model_value() -> str:
+    try:
+        return (_agent_dir() / "reviewer_model").read_text().strip()
+    except Exception:
+        return ""
+
+
+def get_reviewer_model(_=None) -> str:
+    """The chosen reviewer model, or '' meaning 'use the fallback model'."""
+    return _reviewer_model_value()
+
+
+def set_reviewer_model(model="") -> str:
+    m = (str(model) or "").strip()
+    fp = _agent_dir() / "reviewer_model"
+    try:
+        if m:
+            fp.write_text(m)
+        elif fp.exists():
+            fp.unlink()
+    except Exception:
+        pass
+    os.environ["AGENT_REVIEWER_MODEL"] = m
+    return "Reviewer model: " + (m or "(default — fallback model)")
 
 
 def cleanup_merged(_=None) -> str:

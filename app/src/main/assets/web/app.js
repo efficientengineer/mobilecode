@@ -1289,15 +1289,20 @@ const actions = {
   async sessions() { await showProjects(); },
   async models() {
     const meta = await call("session.meta");
+    let reviewer = "";
+    try { reviewer = (await call("orch", { fn: "get_reviewer_model" })).text.trim(); } catch (e) {}
     modal("Session models",
       `<label>Orchestrator model (planner)</label>
        <input id="mo" type="text" list="ml" value="${meta.orchestrator || ""}" />
        <label>Implementer model (blank = single agent)</label>
        <input id="mi" type="text" list="ml" value="${meta.implementer || ""}" />
+       <label>Reviewer model (blank = use fallback model)</label>
+       <input id="mr" type="text" list="ml" value="${escAttr(reviewer)}" />
        <datalist id="ml"></datalist>
-       <div class="hint">Models are aggregated from every provider you have a key for.</div>`,
+       <div class="hint">Models are aggregated from every provider you have a key for. The reviewer checks each change (and each parallel build) — pick a stronger/different model to catch the implementer's blind spots.</div>`,
       async () => {
         await call("session.setModels", { orchestrator: $("#mo").value.trim(), implementer: $("#mi").value.trim() });
+        await call("orch", { fn: "set_reviewer_model", arg: $("#mr").value.trim() });
         refreshHeader();
       });
     // Populate the shared datalist asynchronously.

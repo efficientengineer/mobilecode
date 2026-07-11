@@ -742,8 +742,22 @@ def t_delegate_parallel(files=None, **_):
     res = workflows.parallel_edits(items or [])
     if not res:
         return "(no files given — pass files=[{path, instruction}, ...])"
-    return "Parallel build (" + str(len(res)) + " files):\n" + \
-        "\n".join(f"- {r['result']}" for r in res)
+    lines = []
+    failed = []
+    for r in res:
+        line = f"- {r['result']}"
+        if "review_ok" in r:
+            if r["review_ok"]:
+                line += "  ✓ review passed"
+            else:
+                line += "  ✗ REVIEW FAILED: " + (r.get("review") or "").replace("\n", " ")[:200]
+                failed.append(r["path"])
+        lines.append(line)
+    head = "Parallel build (" + str(len(res)) + " files):\n"
+    tail = ("\n\nReviewer flagged: " + ", ".join(failed) +
+            " — fix these files (read them and correct against their spec), then "
+            "continue.") if failed else ""
+    return head + "\n".join(lines) + tail
 
 
 # --- git tools (wrap git_ops so the agent can orchestrate git itself) --------
@@ -927,6 +941,35 @@ def review_changes(model: str, task: str):
         return False, ""   # never let review failure block a run
     block = text.lstrip().upper().startswith("VERDICT: BLOCK")
     return block, text.strip()
+
+
+_REVIEW_FILE_SYSTEM = (
+    "You are a code reviewer checking ONE file against the spec it was built "
+    "from. Does the file actually satisfy the spec? Report only REAL problems: "
+    "missing or wrong behavior, bugs, security issues, or the file not doing what "
+    "the spec asked. Ignore style. Be terse.\n"
+    "FIRST LINE must be exactly `VERDICT: PASS` or `VERDICT: FAIL`, then the "
+    "issues (or 'ok')."
+)
+
+
+def review_file(model: str, path: str, spec: str):
+    """Review one built file against its spec. Returns (ok: bool, report: str).
+    Never blocks on its own failure (returns ok=True if it can't read/review)."""
+    try:
+        fp = _resolve(path)
+        content = fp.read_text(encoding="utf-8", errors="replace") if fp.is_file() else ""
+    except Exception:
+        return True, ""
+    if not content.strip():
+        return False, f"{path} is empty or was not created"
+    user = f"SPEC:\n{str(spec)[:2000]}\n\nFILE {path}:\n{content[:12000]}"
+    try:
+        text, _reason = llm.chat_text(model, _REVIEW_FILE_SYSTEM, user, max_tokens=800)
+    except Exception:
+        return True, ""
+    ok = not text.lstrip().upper().startswith("VERDICT: FAIL")
+    return ok, text.strip()
 
 
 def _step_verify() -> str:

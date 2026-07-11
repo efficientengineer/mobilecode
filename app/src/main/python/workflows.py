@@ -36,6 +36,17 @@ def _worker():
     return (os.environ.get("WORKER_MODEL") or "").strip() or _lead()
 
 
+def _reviewer():
+    """The reviewer model: the chosen one, else the fallback, else the lead."""
+    return (os.environ.get("AGENT_REVIEWER_MODEL") or "").strip() \
+        or (os.environ.get("AGENT_FALLBACK_MODEL") or "").strip() or _lead()
+
+
+def _review_enabled():
+    return (os.environ.get("AGENT_REVIEW", "1") != "0"
+            and os.environ.get("AGENT_FRUGAL", "0") != "1")
+
+
 def _cap(n, default=4):
     try:
         n = int(n)
@@ -161,7 +172,29 @@ def parallel_edits(items):
                                             instruction=it.get("instruction", ""))
         except Exception as e:
             r = f"(failed: {type(e).__name__}: {e})"
-        return {"path": it["path"], "result": r}
+        return {"path": it["path"], "instruction": it.get("instruction", ""), "result": r}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(valid), _MAX_PARALLEL)) as ex:
-        return list(ex.map(one, valid))
+        built = list(ex.map(one, valid))
+
+    # Reviewer POOL: one reviewer per built file, checking it against ITS spec,
+    # in parallel — so parallel implementers get parallel reviews. Only when
+    # review is enabled and there are ≥2 outputs (a single file is cheaper to
+    # review as part of the end-of-run diff review).
+    if _review_enabled() and len(built) >= 2:
+        model = _reviewer()
+
+        def rev(entry):
+            try:
+                ok, report = agent_tools.review_file(model, entry["path"],
+                                                     entry["instruction"])
+            except Exception:
+                ok, report = True, ""
+            entry["review_ok"] = ok
+            entry["review"] = report
+            return entry
+
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(len(built), _MAX_PARALLEL)) as ex:
+            built = list(ex.map(rev, built))
+    return built
