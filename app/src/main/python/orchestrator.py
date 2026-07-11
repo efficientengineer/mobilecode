@@ -698,9 +698,20 @@ def _compact_discussion(mode: str = "") -> list:
 
 
 def _full_context(task_hint: str = "", mode: str = "") -> str:
-    """Assemble the per-prompt context: guidelines + outline + attached + discussion."""
+    """Assemble the per-prompt context: repo + guidelines + outline + attached + discussion."""
     root = _workspace()
     parts = []
+    # Start with the active repo so the agent always knows where it is, without
+    # needing to call git_status. This is the #1 piece of context users expect to
+    # see and the agent frequently misses.
+    try:
+        import git_ops
+        full = git_ops._remote_full_name(root)
+        if full:
+            branch = git_ops.current_branch()
+            parts.append(f"Active repo: {full} (branch: {branch})")
+    except Exception:
+        pass
     mem_name, mem = _memory(root)
     if mem:
         parts.append(f"PROJECT GUIDELINES ({mem_name}):\n" + mem)

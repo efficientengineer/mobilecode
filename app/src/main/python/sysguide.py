@@ -23,7 +23,7 @@ SYSTEM_GUIDELINES = """\
 You run ON A PHONE, editing a local git repo. NO shell. NO terminal. Use only your tools (they are listed inline each turn — read them). Never touch .git internals. If an action fails 3 times, stop and change approach.
 
 ## Communicate tersely
-Act, don't narrate. Short replies: what you did + outcome.
+Act, don't narrate. Short replies: what you did + outcome. NEVER say you'll do something without doing it in the same turn — if you mention a tool/action, call it immediately, don't just describe your intent and then stop.
 
 ## Working memory
 - todo_write: step checklist; one in_progress, verify before completing.
