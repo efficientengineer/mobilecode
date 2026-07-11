@@ -1065,6 +1065,15 @@ def _clear_events() -> None:
         pass
 
 
+def clear_run_events(_=None) -> str:
+    """Clear the live run-events feed. The web layer calls this right before it
+    starts polling a new run, so the poller can't replay the PREVIOUS run's
+    events (its final 'say'/deltas) as a stale duplicate bubble before this run's
+    _begin_run clears them. Harmless if already empty."""
+    _clear_events()
+    return "ok"
+
+
 def get_events(cursor="0") -> str:
     """Return events with index > cursor (for live progress polling)."""
     try:
