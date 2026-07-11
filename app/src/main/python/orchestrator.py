@@ -318,7 +318,7 @@ def _outline_file(root: Path = None) -> Path:
 
 
 def _caveman_on() -> bool:
-    return os.environ.get("AGENT_CAVEMAN", "0") == "1" or (_agent_dir() / "caveman").exists()
+    return os.environ.get("AGENT_CAVEMAN", "1") == "1" or (_agent_dir() / "caveman").exists()
 
 
 # Conservative filler set: articles, auxiliaries, politeness, and connectors.
@@ -432,10 +432,10 @@ def _memory(root: Path = None):
 # All knobs are plain numbers; changing them costs zero tokens. Defaults are
 # tuned to keep recent context useful while capping the payload.
 _COMPACT_DEFAULTS = {
-    "maxTurns": 12,       # hard cap on discussion turns kept (any mode)
-    "codeTurns": 6,       # tighter cap in code/plan modes (outline carries state)
-    "charBudget": 6000,   # total char budget for the discussion block
-    "perTurn": 800,       # truncate any single turn longer than this
+    "maxTurns": 8,        # hard cap on discussion turns kept (any mode)
+    "codeTurns": 4,       # tighter cap in code/plan modes (outline carries state)
+    "charBudget": 4000,   # total char budget for the discussion block
+    "perTurn": 500,       # truncate any single turn longer than this
     # In-run pruning (read by agentloop): once the loop's own transcript
     # exceeds loopBudget chars, old tool results are elided in one batch,
     # protecting the last keepSteps model turns.
