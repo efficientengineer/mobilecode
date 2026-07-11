@@ -434,6 +434,9 @@ def judge_run(path=None, model=None) -> str:
              or os.environ.get("AGENT_FALLBACK_MODEL")
              or os.environ.get("LEAD_MODEL") or "deepseek/deepseek-v4-pro")
     import llm
+    # Judge uses orchestrator effort — it's an evaluator, not a worker.
+    os.environ["AGENT_EFFORT"] = os.environ.get("AGENT_ORCH_EFFORT",
+        os.environ.get("AGENT_EFFORT", "medium"))
     text, _reasoning = llm.chat_text(
         judge, _JUDGE_SYSTEM,
         "Here is the agent run trace to grade:\n\n" + trace, max_tokens=1200)

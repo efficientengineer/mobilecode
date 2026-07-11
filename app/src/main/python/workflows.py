@@ -62,6 +62,9 @@ def fan_out(prompt, n=4, system="", model=None, max_tokens=1500, angles=None):
         else:
             p += f"\n\n(You are variant {i + 1} of {n} — be genuinely different from the others.)"
         try:
+            # Set effort for the worker model.
+            os.environ["AGENT_EFFORT"] = os.environ.get("AGENT_IMPL_EFFORT",
+                os.environ.get("AGENT_EFFORT", "off"))
             text, _ = llm.chat_text(model, system, p, max_tokens=max_tokens)
         except Exception as e:
             text = f"(variant {i + 1} failed: {type(e).__name__})"
@@ -119,6 +122,9 @@ def score(candidates, criteria="", model=None):
               '"why":"..."}],"best":<n>}, best first.')
     goal = f"GOAL / CRITERIA:\n{criteria}\n\n" if criteria else ""
     try:
+        # Set effort for the lead (orchestrator) model.
+        os.environ["AGENT_EFFORT"] = os.environ.get("AGENT_ORCH_EFFORT",
+            os.environ.get("AGENT_EFFORT", "medium"))
         text, _ = llm.chat_text(model, system, goal + "CANDIDATES:\n" + numbered,
                                 max_tokens=1000)
     except Exception:

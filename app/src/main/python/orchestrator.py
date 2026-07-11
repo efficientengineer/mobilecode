@@ -63,12 +63,13 @@ _LAST_REASON = ""
 _LAST_EDIT_CTX = ""
 
 
-# Reasoning "effort" is the single knob the UI drives. llm.py turns it into a
-# real request-level setting per provider — an Anthropic thinking budget that
-# grows with the level, or DeepSeek V4's Thinking/Non-Thinking switch — so "high"
-# spends more tokens for deeper reasoning (good for an Opus orchestrator/reviewer)
-# and "off" stops reasoning, and its cost, entirely. It persists in a marker file
-# like frugal, and is republished to the env each run for llm.py to read.
+# Reasoning "effort" is now per-role — orchestrator and implementer each have
+# their own effort level. llm.py turns it into a real request-level setting per
+# provider — an Anthropic thinking budget that grows with the level, or DeepSeek
+# V4's Thinking/Non-Thinking switch — so "high" spends more tokens for deeper
+# reasoning and "off" stops reasoning, and its cost, entirely. Each persists in
+# its own marker file, and the right one is published to AGENT_EFFORT before
+# every LLM call so llm.py sees it.
 _EFFORT_LEVELS = ["off", "low", "medium", "high"]
 
 _EFFORT_HINT = {
@@ -79,59 +80,128 @@ _EFFORT_HINT = {
 }
 
 
-def _effort_value() -> str:
-    e = (os.environ.get("AGENT_EFFORT", "") or "").strip().lower()
-    if e == "max":
-        return "high"
-    if e in _EFFORT_LEVELS:
-        return e
+def _read_effort_file(name: str) -> str:
+    """Read an effort level from a marker file, or '' if missing/invalid."""
     try:
-        m = (_agent_dir() / "effort").read_text().strip().lower()
-        if m in _EFFORT_LEVELS:
-            return m
+        v = (_agent_dir() / name).read_text().strip().lower()
+        return v if v in _EFFORT_LEVELS else ""
+    except Exception:
+        return ""
+
+
+def _write_effort_file(name: str, level: str) -> None:
+    try:
+        (_agent_dir() / name).write_text(level)
     except Exception:
         pass
-    # Back-compat: derive from the legacy on/off Thinking toggle.
-    return "medium" if os.environ.get("AGENT_THINKING", "0") == "1" else "off"
 
 
-def get_effort(_=None) -> str:
+def _orch_effort() -> str:
+    """Orchestrator effort from env or file, falling back to legacy global."""
+    e = (os.environ.get("AGENT_ORCH_EFFORT", "") or "").strip().lower()
+    if e == "max": return "high"
+    if e in _EFFORT_LEVELS: return e
+    v = _read_effort_file("effort_orch")
+    if v: return v
+    # Fall back to the old single global file / legacy toggle.
     return _effort_value()
 
 
+def _impl_effort() -> str:
+    """Implementer effort from env or file, falling back to orch effort."""
+    e = (os.environ.get("AGENT_IMPL_EFFORT", "") or "").strip().lower()
+    if e == "max": return "high"
+    if e in _EFFORT_LEVELS: return e
+    v = _read_effort_file("effort_impl")
+    if v: return v
+    # Default: same as orchestrator effort.
+    return _orch_effort()
+
+
+def _effort_value() -> str:
+    """Legacy global effort — reads the old 'effort' file for backward compat."""
+    e = (os.environ.get("AGENT_EFFORT", "") or "").strip().lower()
+    if e == "max": return "high"
+    if e in _EFFORT_LEVELS: return e
+    v = _read_effort_file("effort")
+    if v: return v
+    return "medium" if os.environ.get("AGENT_THINKING", "0") == "1" else "off"
+
+
+# --- bridge functions (called from the WebView via orch.<fn>) -----------------
+
+
+def get_effort(_=None) -> str:
+    """Legacy: returns orchestrator effort (backward compat)."""
+    return _orch_effort()
+
+
 def set_effort(level="medium") -> str:
-    lvl = (str(level) or "").strip().lower()
-    if lvl == "max":
-        lvl = "high"
-    if lvl not in _EFFORT_LEVELS:
-        lvl = "medium"
-    os.environ["AGENT_EFFORT"] = lvl
-    # Keep the legacy toggle in agreement for anything still reading it.
-    os.environ["AGENT_THINKING"] = "0" if lvl == "off" else "1"
-    try:
-        (_agent_dir() / "effort").write_text(lvl)
-    except Exception:
-        pass
-    return "Effort: " + lvl + _EFFORT_HINT.get(lvl, "")
+    """Legacy: sets orchestrator effort (backward compat)."""
+    return _set_orch_effort(level)
 
 
 def cycle_effort(_=None) -> str:
-    cur = _effort_value()
+    """Legacy: cycles orchestrator effort (backward compat)."""
+    cur = _orch_effort()
     idx = _EFFORT_LEVELS.index(cur) if cur in _EFFORT_LEVELS else 0
-    return set_effort(_EFFORT_LEVELS[(idx + 1) % len(_EFFORT_LEVELS)])
+    return _set_orch_effort(_EFFORT_LEVELS[(idx + 1) % len(_EFFORT_LEVELS)])
+
+
+def get_orch_effort(_=None) -> str:
+    return _orch_effort()
+
+
+def set_orch_effort(level="medium") -> str:
+    return _set_orch_effort(level)
+
+
+def _set_orch_effort(level="medium") -> str:
+    lvl = (str(level) or "").strip().lower()
+    if lvl == "max": lvl = "high"
+    if lvl not in _EFFORT_LEVELS: lvl = "medium"
+    os.environ["AGENT_ORCH_EFFORT"] = lvl
+    _write_effort_file("effort_orch", lvl)
+    return "Orchestrator effort: " + lvl + _EFFORT_HINT.get(lvl, "")
+
+
+def get_impl_effort(_=None) -> str:
+    return _impl_effort()
+
+
+def set_impl_effort(level="medium") -> str:
+    return _set_impl_effort(level)
+
+
+def _set_impl_effort(level="medium") -> str:
+    lvl = (str(level) or "").strip().lower()
+    if lvl == "max": lvl = "high"
+    if lvl not in _EFFORT_LEVELS: lvl = "medium"
+    os.environ["AGENT_IMPL_EFFORT"] = lvl
+    _write_effort_file("effort_impl", lvl)
+    return "Implementer effort: " + lvl + _EFFORT_HINT.get(lvl, "")
 
 
 def _thinking_on() -> bool:
-    return _effort_value() != "off"
+    return _orch_effort() != "off"
 
 
 def set_thinking(flag="1") -> str:
-    # Legacy on/off entry point, now expressed through effort (on == medium).
-    return set_effort("medium" if str(flag) in ("1", "true", "on") else "off")
+    return _set_orch_effort("medium" if str(flag) in ("1", "true", "on") else "off")
 
 
 def get_thinking(_=None) -> str:
     return "1" if _thinking_on() else "0"
+
+
+def _publish_effort_for(model: str) -> None:
+    """Set AGENT_EFFORT env to the right role's level before an LLM call.
+    llm.py reads AGENT_EFFORT at request time — we flip it per-call so each model
+    gets its own reasoning budget."""
+    if model == LEAD_MODEL or model == (os.environ.get("LEAD_MODEL", "")):
+        os.environ["AGENT_EFFORT"] = _orch_effort()
+    else:
+        os.environ["AGENT_EFFORT"] = _impl_effort()
 
 # Keys are injected by the Kotlin layer into the environment before we run.
 # (For a public app they come from the user's own settings, never hardcoded.)
@@ -189,6 +259,7 @@ def _call(model: str, system: str, user: str, max_tokens: int = 4000) -> str:
     continuation, usage accounting come for free). Kept for outline/commit
     message generation and chat mode."""
     global _LAST_REASON
+    _publish_effort_for(model)
     text, reasoning = llm.chat_text(model, system, user, max_tokens=max_tokens)
     _LAST_REASON = reasoning
     return text
@@ -1148,9 +1219,10 @@ def _begin_run() -> None:
         except Exception:
             pass
     # Publish frugal + effort state to the env so llm.py (no workspace concept)
-    # sees them at request time.
+    # sees them at request time. Per-call _publish_effort_for() overrides
+    # AGENT_EFFORT before each LLM call; this is just the initial default.
     os.environ["AGENT_FRUGAL"] = "1" if _frugal_on() else "0"
-    os.environ["AGENT_EFFORT"] = _effort_value()
+    os.environ["AGENT_EFFORT"] = _orch_effort()
 
 
 def _frugal_on() -> bool:
@@ -1523,6 +1595,7 @@ def _chat_reply(task: str) -> str:
     system = ("You are a helpful coding assistant. Answer conversationally and "
               "concisely. Do not create or modify files.")
     user = (f"{context}\n\n" if context else "") + "USER: " + task
+    _publish_effort_for(LEAD_MODEL)
     text, reason = llm.chat_text(LEAD_MODEL, system, user,
                                  on_delta=lambda c: _emit("delta", text=c))
     global _LAST_REASON
