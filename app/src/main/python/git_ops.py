@@ -357,24 +357,122 @@ def clone_repo(full_name: str) -> str:
         return _scrub("Clone failed:\n" + traceback.format_exc())
 
 
+def _remote_ref_sha(full: str, branch: str):
+    """Current commit sha of refs/heads/<branch> on GitHub, or None if the branch
+    doesn't exist. Used to VERIFY a push actually landed."""
+    try:
+        d = _api("GET", f"/repos/{full}/git/ref/heads/{branch}")
+        return ((d.get("object") or {}).get("sha")) or None
+    except _GitHubApiError as e:
+        if e.code == 404:
+            return None
+        raise
+
+
+def _rest_push(root: Path, full: str, branch: str, force: bool = False) -> str:
+    """Push via the GitHub REST Git Data API instead of the git wire protocol.
+
+    dulwich's porcelain.push over HTTPS can silently no-op on some devices (the
+    receive-pack path fails while clone/fetch/pull work). This fallback uploads
+    the change over plain HTTPS to api.github.com — which is known-good on device
+    (it's how PRs are opened) — by recreating the current commit's tree on top of
+    the remote default branch and moving the branch ref to it.
+
+    It builds ONE commit whose tree equals the local HEAD tree, parented on the
+    remote default head, so the resulting PR diff is exactly default..your work.
+    Only changed blobs are uploaded (base_tree + delta), so it's cheap."""
+    import base64
+    from dulwich.repo import Repo
+    from dulwich.diff_tree import tree_changes
+
+    remote = _auth_url(full)
+    try:
+        porcelain.fetch(str(root), remote)     # refresh origin/<default> locally
+    except Exception:
+        pass
+    r = Repo(str(root))
+    default = _default_branch(full)
+    base_ref = f"refs/remotes/origin/{default}".encode()
+    if base_ref not in r.refs:
+        base_ref = f"refs/heads/{default}".encode()
+    if base_ref not in r.refs:
+        raise RuntimeError(f"no local base ref for {default} to build on")
+    base_commit = r.refs[base_ref]
+    base_tree = r[base_commit].tree
+    head = r.head()
+    head_tree = r[head].tree
+
+    entries = []
+    for ch in tree_changes(r.object_store, base_tree, head_tree):
+        new, old = ch.new, ch.old
+        if new is not None and new.sha is not None and new.path is not None:
+            content = r[new.sha].data
+            blob = _api("POST", f"/repos/{full}/git/blobs",
+                        {"content": base64.b64encode(content).decode(),
+                         "encoding": "base64"})
+            entries.append({"path": new.path.decode("utf-8", "replace"),
+                            "mode": "%06o" % new.mode, "type": "blob",
+                            "sha": blob["sha"]})
+        elif old is not None and old.path is not None:      # deletion
+            entries.append({"path": old.path.decode("utf-8", "replace"),
+                            "mode": "100644", "type": "blob", "sha": None})
+    if not entries:
+        return (f"Nothing to push — {branch} has no changes vs {default}.")
+
+    tree = _api("POST", f"/repos/{full}/git/trees",
+                {"base_tree": base_commit.decode(), "tree": entries})
+    msg = r[head].message.decode("utf-8", "replace") or f"Changes on {branch}"
+    commit_obj = _api("POST", f"/repos/{full}/git/commits",
+                      {"message": msg, "tree": tree["sha"],
+                       "parents": [base_commit.decode()]})
+    new_sha = commit_obj["sha"]
+    try:
+        _api("POST", f"/repos/{full}/git/refs",
+             {"ref": f"refs/heads/{branch}", "sha": new_sha})
+        return f"Pushed {branch} to {full} (via REST API)"
+    except _GitHubApiError as e:
+        if e.code != 422:                 # 422 == ref already exists → update it
+            raise
+        try:
+            _api("PATCH", f"/repos/{full}/git/refs/heads/{branch}",
+                 {"sha": new_sha, "force": bool(force)})
+            return f"Pushed {branch} to {full} (via REST API)"
+        except _GitHubApiError as e2:
+            if e2.code == 422 and not force:
+                return (f"Push rejected — remote {branch} has commits you don't "
+                        "have. Pull first, or use Force push if you're sure.")
+            raise
+
+
 def push(force: bool = False) -> str:
     """Push the current branch to origin under its own name (no force by
-    default — history on the remote is never silently rewritten)."""
+    default — history on the remote is never silently rewritten).
+
+    Tries the native git push first, then VERIFIES the branch actually landed on
+    GitHub. If it didn't (dulwich can silently no-op on device), falls back to a
+    REST-API push over plain HTTPS, which is reliable on device."""
     try:
         root = _workspace()
         full = _remote_full_name(root)
         if not full:
             return "No repo set for this workspace (create or select one first)."
         branch = current_branch()
+        from dulwich.repo import Repo
+        local_head = Repo(str(root)).head().decode()
         refspec = f"refs/heads/{branch}:refs/heads/{branch}"
+        native_err = None
         try:
             porcelain.push(str(root), _auth_url(full), refspec, force=bool(force))
         except Exception as e:
-            if force:
-                raise
-            return (f"Push rejected ({e}).\nThe remote {branch} has commits you "
-                    "don't have — Pull first, or use Force push if you're sure.")
-        return f"Pushed {branch} to {full}"
+            native_err = e
+        # Trust but verify: only "Pushed" if the remote ref really equals HEAD.
+        try:
+            if _remote_ref_sha(full, branch) == local_head:
+                return f"Pushed {branch} to {full}"
+        except Exception:
+            pass  # verification call failed — fall through to the REST push
+        # Native push silently no-op'd (or errored) — use the REST fallback.
+        return _rest_push(root, full, branch, force=bool(force))
     except Exception:
         return _scrub("Push failed:\n" + traceback.format_exc())
 
