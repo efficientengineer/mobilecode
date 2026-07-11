@@ -79,6 +79,8 @@
     <div id="sessionPanel-head">
       <span class="sp-title">Sessions</span>
       <span class="sp-head-actions">
+        <button id="sessionRenameBtn" class="txtbtn xs" title="Rename checked">✎ Rename</button>
+        <button id="sessionDeleteBtn" class="txtbtn xs danger" title="Delete checked">🗑 Delete</button>
         <button id="sessionNewBtn" class="txtbtn xs" title="New session">＋ New</button>
         <button id="sessionPanelClose" class="txtbtn xs" title="Close">✕</button>
       </span>
@@ -137,6 +139,12 @@
     <div id="chatDrawer-balance"><span class="db-label">DeepSeek balance</span><span id="balance" class="balmini">—</span></div>
 
     <main id="chat"></main>
+
+    <div id="ctxFooter">
+      <span id="ctxTurns">—</span>
+      <span class="ctx-sep">·</span>
+      <span id="ctxTokens" title="Context tokens (compact discussion + outline + memory)">— ctx tokens</span>
+    </div>
 
     <div id="todos" class="hidden">
       <div id="todos-head">

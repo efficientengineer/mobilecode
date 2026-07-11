@@ -38,12 +38,21 @@
 
 4. **Renaming a file**: remove the old name (via `"remove"`) and add the new name to the appropriate list. Do both in the same manifest update.
 
+### Version bumping — REQUIRED on every OTA change
+
+**Every time you add, remove, rename, or change the contents of ANY file listed in `ota_manifest.json` (python, web, extra, remove, or the loader), you MUST bump `content_version` in `ota_manifest.json`.** The version is a simple integer — increment it by 1.
+
+Why: `ota.py` compares its locally-stored `content_version` (written after the last successful update) against the remote manifest's `content_version`. If they match, it reports `dirty=0` — the device sees no update available and the "Update" button does nothing. Bumping the version is the signal that tells every device "there's new code to fetch."
+
+**This is NOT optional.** Forgetting to bump `content_version` means your changes never reach any device. The agent must bump it as part of the same commit that changes the files.
+
 ### NEVER do these
 
 - **Never** hardcode a file list in Kotlin that duplicates the manifest. The `manifestList()` helper already falls back to reading `ota_manifest.json` from the repo; the hardcoded fallback list in `legacyUpdateAgent()` is ONLY a last-resort bootstrap to restore `ota.py`.
 - **Never** edit a Kotlin file to add/remove a Python or web module — that would require an APK rebuild, defeating the whole point of OTA.
 - **Never** put OTA-updatable logic in Kotlin. All update logic (fetch, verify, atomic write, self-update, pruning) lives in `ota.py` which itself is OTA-updatable.
 - **Never** skip the manifest when adding a file. If it's not in `ota_manifest.json`, it won't reach the device.
+- **Never** change an OTA-updatable file without bumping `content_version` in the same commit. No bump = no update = broken button.
 
 ### Update flow (what happens when user taps "Update Agent" / "Update UI")
 

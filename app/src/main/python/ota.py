@@ -39,6 +39,7 @@ import urllib.request
 _PY_PREFIX = "app/src/main/python/"
 _WEB_PREFIX = "app/src/main/assets/web/"
 _ME = "ota.py"
+_VERSION_FILE = ".ota_version"
 
 
 # --- environment -------------------------------------------------------------
@@ -114,6 +115,45 @@ def _atomic_write(fp, data):
     with open(tmp, "wb") as f:
         f.write(data)
     os.replace(tmp, fp)  # atomic on POSIX
+
+
+# --- version tracking ---------------------------------------------------------
+
+def _local_version_path():
+    """Return the absolute path to the local version file."""
+    return os.path.join(_roots()["py"], _VERSION_FILE)
+
+
+def _read_local_version():
+    """Read the local version integer from the version file, return 0 on failure."""
+    try:
+        with open(_local_version_path(), "r") as f:
+            return int(f.read().strip())
+    except Exception:
+        return 0
+
+
+def _write_local_version(v):
+    """Write the version integer atomically to the version file."""
+    fp = _local_version_path()
+    os.makedirs(os.path.dirname(fp) or ".", exist_ok=True)
+    tmp = fp + ".ota-tmp"
+    with open(tmp, "w") as f:
+        f.write(str(v))
+    os.replace(tmp, fp)
+
+
+def version_info():
+    """Return a string describing local vs remote content version for the UI badge.
+    Example: "local=0 remote=1 dirty=1" or "local=0 remote=? dirty=0" on failure."""
+    local = _read_local_version()
+    try:
+        manifest = _load_manifest()
+        remote = manifest.get("content_version", 0)
+        dirty = "1" if local < remote else "0"
+        return f"local={local} remote={remote} dirty={dirty}"
+    except Exception:
+        return f"local={local} remote=? dirty=0"
 
 
 # --- self-update --------------------------------------------------------------
@@ -202,6 +242,9 @@ def update(kind="all", _fresh=False):
                     removed += 1
             except Exception:
                 pass  # a bad remove entry must never break the update
+
+    # Persist the manifest's content_version locally after a successful update.
+    _write_local_version(manifest.get("content_version", 0))
 
     parts = [f"{n} {r}" for r, n in sorted(per_root.items())]
     detail = (", ".join(parts) or "0") + f" written · {skipped} unchanged"
