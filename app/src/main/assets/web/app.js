@@ -407,6 +407,9 @@ async function runTask(task, mode) {
   clearTodos();
   $("#runbar").classList.remove("hidden");
   $("#runlabel").textContent = mode === "plan" ? "Planning…" : "Working…";
+  // Clear the previous run's event feed BEFORE polling, so the poller can't
+  // replay the last agent message as a stale duplicate until this run streams.
+  try { await call("orch", { fn: "clear_run_events" }); } catch (e) {}
   const live = document.createElement("div");
   live.className = "live";
   live.textContent = "Starting…";
@@ -481,6 +484,7 @@ async function driveLive(label, promiseFactory) {
   clearTodos();
   $("#runbar").classList.remove("hidden");
   $("#runlabel").textContent = label;
+  try { await call("orch", { fn: "clear_run_events" }); } catch (e) {}
   const live = document.createElement("div");
   live.className = "live"; live.textContent = "Starting…";
   chat.appendChild(live);
