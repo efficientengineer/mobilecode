@@ -176,6 +176,78 @@ def analyze_run(path=None) -> str:
     return format_report(analyze_events(events))
 
 
+# --- automatic post-run diagnosis -------------------------------------------
+# Called by the orchestrator at the end of EVERY run, so issues surface without
+# anyone remembering to tap "Diagnose". It (a) records a one-line verdict to a
+# rolling history file for trend review, and (b) returns a short warning to
+# append to the reply ONLY when the run had real problems — silent on clean runs.
+
+_HISTORY_MAX = 200
+
+
+def _history_path() -> Path:
+    return _agent_dir() / "diagnoses.jsonl"
+
+
+def _append_history(metrics: dict, run_id: str = "") -> None:
+    try:
+        fp = _history_path()
+        rec = {"run_id": run_id, "verdict": metrics["verdict"],
+               "steps": metrics["steps"],
+               "flags": [f["code"] for f in metrics["flags"]]}
+        lines = fp.read_text(encoding="utf-8").splitlines() if fp.exists() else []
+        lines.append(json.dumps(rec))
+        fp.write_text("\n".join(lines[-_HISTORY_MAX:]) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def auto_note(path=None, surface="red", run_id="") -> str:
+    """Analyze the just-finished run, log it, and return a short warning to show
+    the user — but only when there's something worth flagging. surface='red'
+    (default) speaks up only on serious issues; 'all' also reports warnings."""
+    events = load_events(path)
+    if not events:
+        return ""
+    m = analyze_events(events)
+    _append_history(m, run_id)
+    reds = [f for f in m["flags"] if f["level"] == "red"]
+    show = reds if surface != "all" else m["flags"]
+    if not show:
+        return ""
+    body = "\n".join(f"  • {f['detail']}" for f in show[:5])
+    return ("\n⚠️ Auto-diagnosis — this run showed problems:\n" + body
+            + "\n(Open ☰ → Agent tests → Diagnose run for the full scorecard.)")
+
+
+def diagnosis_history(_=None) -> str:
+    """Recent runs' verdicts — spot recurring failure patterns over time."""
+    fp = _history_path()
+    if not fp.exists():
+        return "No run history yet."
+    rows = []
+    for line in fp.read_text(encoding="utf-8").splitlines()[-20:]:
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            pass
+    if not rows:
+        return "No run history yet."
+    out = ["=== Recent runs (newest last) ==="]
+    for r in rows:
+        flags = (" · " + ",".join(r["flags"])) if r.get("flags") else ""
+        out.append(f"steps {r.get('steps', '?'):>3}  {r.get('verdict', '')}{flags}")
+    codes = {}
+    for r in rows:
+        for c in r.get("flags", []):
+            codes[c] = codes.get(c, 0) + 1
+    if codes:
+        top = sorted(codes.items(), key=lambda kv: -kv[1])
+        out.append("\nMost common issues: "
+                   + ", ".join(f"{c}×{n}" for c, n in top))
+    return "\n".join(out)
+
+
 # --- 2. scenario suite -------------------------------------------------------
 # Each scenario is self-contained: a task string + a checker that inspects the
 # resulting workspace and returns (passed, note). Scenarios run in a throwaway

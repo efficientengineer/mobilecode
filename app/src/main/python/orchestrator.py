@@ -1243,6 +1243,36 @@ def get_autocommit(_=None) -> str:
     return "1" if _autocommit_on() else "0"
 
 
+def _autodiagnose_on() -> bool:
+    """Auto-diagnosis is the default; a marker file (or env=0) turns it off."""
+    if os.environ.get("AGENT_AUTODIAGNOSE", "1") == "0":
+        return False
+    return not (_agent_dir() / "noautodiagnose").exists()
+
+
+def set_autodiagnose(flag="1") -> str:
+    on = str(flag) in ("1", "true", "True", "on")
+    marker = _agent_dir() / "noautodiagnose"
+    if on and marker.exists():
+        marker.unlink()
+    elif not on:
+        marker.write_text("1")
+    return "Auto-diagnosis " + ("on" if on else "off")
+
+
+def get_autodiagnose(_=None) -> str:
+    return "1" if _autodiagnose_on() else "0"
+
+
+def diagnosis_history(_=None) -> str:
+    """Recent runs' auto-diagnosis verdicts (spot recurring failure patterns)."""
+    try:
+        import agentevals
+        return agentevals.diagnosis_history()
+    except Exception:
+        return "History failed:\n" + traceback.format_exc()
+
+
 def _changed_paths(root: Path) -> list:
     """Working-tree paths that differ from the index/HEAD (via dulwich status)."""
     try:
@@ -1388,6 +1418,19 @@ def _finish_run(task: str, res: dict, run_id: str) -> str:
             encoding="utf-8")
     except Exception:
         pass
+
+    # Auto-diagnosis: score this run and, if it showed real problems, surface a
+    # short warning inline (no button-tapping needed). Always silent on clean
+    # runs; every run's verdict is logged to .agent/diagnoses.jsonl for trends.
+    if _autodiagnose_on():
+        try:
+            import agentevals
+            note = agentevals.auto_note(_events_file(), run_id=run_id)
+            if note:
+                lines.append(note)
+                _emit("diagnosis", text=note)
+        except Exception:
+            pass
 
     full = "\n".join(lines)
     _LAST_EDIT_CTX = (("Interrupted. " if res.get("interrupted") else "") +
