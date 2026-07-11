@@ -5,6 +5,32 @@
 // via window.nativeResolve / nativeReject; async events via nativeEvent.
 let _req = 0;
 const _pending = {};
+
+// --- Version check (OTA update availability) -----------------------------
+// Calls ota.version_info and updates the "Update app" button badge.
+async function checkVersion() {
+  try {
+    const r = await call("py.call", {module:"ota", fn:"version_info", args:[]});
+    const parts = (r.text || "").split(/\s+/);
+    const obj = {};
+    parts.forEach(p => {
+      const kv = p.split("=");
+      if (kv.length === 2) obj[kv[0]] = kv[1];
+    });
+    const dirty = obj.dirty === "1";
+    updateAppBadge(dirty);
+    return dirty;
+  } catch (e) {
+    return null;
+  }
+}
+
+function updateAppBadge(dirty) {
+  const btn = document.querySelector('[data-act="updateApp"]');
+  if (btn) {
+    btn.textContent = dirty ? "⬆ Update app" : "Update app ✓";
+  }
+}
 function call(action, arg) {
   return new Promise((resolve, reject) => {
     const id = "r" + (++_req);
@@ -1052,6 +1078,7 @@ const actions = {
   async updateApp() {
     bubble("Updating everything (manifest-driven OTA)…", "sys");
     setStatus("Updating…");
+    call("notify", {title: "OTA Update", body: "Fetching latest code…"});
     try {
       // One verb updates every runtime file (python + web + extras) per the
       // repo's ota_manifest.json; the host reloads the WebView afterwards.
@@ -1061,12 +1088,18 @@ const actions = {
         // Older APK without updateAll — fall back to the two legacy verbs.
         const a = await call("updateAgent");
         bubble(a.text || "Agent updated", "sys");
+        call("notify", {title: "OTA Update", body: (a.text || "Agent updated").slice(0,120)});
         await call("updateUI"); // reloads the WebView
       } else {
-        bubble(t || "Updated", "sys");
+        const summary = (t || "Updated").slice(0,120);
+        bubble(summary, "sys");
+        call("notify", {title: "OTA Update", body: summary});
+        // WebView reloads automatically via Kotlin's updateAll.
       }
     } catch (e) {
-      bubble("Update failed: " + e.message, "sys");
+      const msg = "Update failed: " + e.message;
+      bubble(msg, "sys");
+      call("notify", {title: "OTA Update", body: msg});
       setStatus("");
     }
   },
@@ -3020,3 +3053,8 @@ if (_implEffortSel) _implEffortSel.onchange = onImplEffortChange;
   try { _routingOn = (await call("orch", { fn: "get_routing" })).text.trim() === "1"; updateRoutingLabel(_routingOn); } catch (e) {}
   updateSpeakLabel(autoSpeakOn());
 })();
+
+// --- OTA version polling -------------------------------------------------
+// Check on load + every 5 min whether a newer OTA version is available.
+checkVersion();
+setInterval(checkVersion, 5 * 60 * 1000);
