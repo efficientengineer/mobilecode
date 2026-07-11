@@ -333,6 +333,14 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 .modelbtn:active { background: var(--border); }
 .modelbtn span[id] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cd-head-actions { display: flex; gap: 6px; }
+/* Effort dropdown — sits alongside the model selectors in the chat drawer. */
+.effortcol { flex: 0 0 auto; max-width: 100px; }
+.effortselect { width: 100%; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 12px; padding: 7px 8px;
+  font-size: 13px; font-weight: 600; font-family: inherit; appearance: none;
+  -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%239aa0aa'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 8px center; padding-right: 24px; }
+.effortselect:focus { outline: none; border-color: var(--accent); }
 /* DeepSeek balance row in the drawer. */
 #chatDrawer-balance { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
   gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
