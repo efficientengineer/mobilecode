@@ -72,6 +72,20 @@ def _thinking_on() -> bool:
     return os.environ.get("AGENT_THINKING", "0") == "1"
 
 
+def _review_on() -> bool:
+    # Independent code review is on by default; frugal mode (cost-saving) and an
+    # explicit AGENT_REVIEW=0 turn it off.
+    return not _frugal_on() and os.environ.get("AGENT_REVIEW", "1") != "0"
+
+
+def _reviewer_model(active: str) -> str:
+    """A STRONGER/DIFFERENT model to review the lead's work when configured;
+    falls back to the run's fallback model, then the active lead."""
+    return (os.environ.get("AGENT_REVIEWER_MODEL", "").strip()
+            or os.environ.get("AGENT_FALLBACK_MODEL", "").strip()
+            or active)
+
+
 def _arg_path(args):
     for k in ("path", "file", "filename", "file_path", "filepath", "target"):
         v = (args or {}).get(k)
@@ -393,6 +407,7 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
     plan_out = None
     interrupted = False
     repair_left = REPAIR_ROUNDS
+    review_left = 1          # independent code review runs at most once per run
     steps = 0
     # Anti-spiral: count identical tool calls (name + args) so we can nudge the
     # model off a loop before it burns the whole step budget retrying the same
@@ -516,6 +531,29 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                                      "local files that do not exist. Create them "
                                      "or fix the paths, then finish:\n" + web_hard})
                     continue
+                # (4) Independent code review by a stronger/different model, once
+                # the mechanical checks pass. A BLOCK verdict on real correctness/
+                # security issues is fed back as one repair round; runs at most
+                # once so it can't loop.
+                if review_left > 0 and _review_on() and agent_tools.TOUCHED:
+                    review_left -= 1
+                    reviewer = _reviewer_model(active)
+                    _emit("review_start", model=reviewer)
+                    try:
+                        block, report = agent_tools.review_changes(reviewer, task)
+                    except Exception:
+                        block, report = False, ""
+                    if report:
+                        _emit("review", block=block, detail=_clip(report, 500))
+                    if block:
+                        _emit("verify_failed", which="review", detail=_clip(report, 500))
+                        messages.append({"role": "assistant", "content": final_text,
+                                         "reasoning": r.get("reasoning", "")})
+                        messages.append({"role": "user", "content":
+                                         "A code review of your change found issues "
+                                         "that must be fixed before finishing. "
+                                         "Address each, then finish:\n" + report})
+                        continue
             if write and not plan:
                 _emit("verify_ok")
             break

@@ -855,6 +855,77 @@ def _newly_completed(prev, clean) -> list:
             if t["status"] == "completed" and was.get(t["content"]) != "completed"]
 
 
+# --- independent code review (a second model reviews the diff) --------------
+
+def _head_content(root: Path, rel: str):
+    """The file's content at HEAD (before this run's edits), or None if it's a
+    new file / no repo. Used to diff the run's changes for review."""
+    try:
+        from dulwich.repo import Repo
+        from dulwich.object_store import tree_lookup_path
+        r = Repo(str(root))
+        _mode, sha = tree_lookup_path(r.get_object, r[r.head()].tree, rel.encode())
+        return r[sha].data.decode("utf-8", "replace")
+    except Exception:
+        return None
+
+
+def build_review_diff(paths=None, max_files=15, cap=8000) -> str:
+    """Unified diff (working tree vs HEAD) of the files this run touched, so a
+    reviewer sees exactly what changed rather than whole files."""
+    import difflib
+    root = _workspace()
+    rels = sorted(paths if paths is not None else TOUCHED)[:max_files]
+    chunks = []
+    for rel in rels:
+        fp = root / rel
+        new = None
+        if fp.exists() and fp.is_file():
+            try:
+                new = fp.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+        old = _head_content(root, rel)
+        if old == new:
+            continue
+        diff = difflib.unified_diff(
+            (old or "").splitlines(keepends=True),
+            (new or "").splitlines(keepends=True),
+            fromfile=(f"a/{rel}" if old is not None else "/dev/null"),
+            tofile=(f"b/{rel}" if new is not None else "/dev/null"))
+        chunks.append("".join(diff)[:cap])
+    return "\n".join(chunks)
+
+
+_REVIEW_SYSTEM = (
+    "You are a senior code reviewer. You are given the TASK the author was asked "
+    "to do and a unified DIFF of their change. Review ONLY the change for REAL "
+    "problems: correctness bugs, missed edge cases, broken/again-failing behavior, "
+    "security issues, or a change that doesn't actually accomplish the task. "
+    "Ignore style, naming, and nitpicks. Be concise.\n"
+    "For each real issue: `file:line — problem` and its severity "
+    "(blocker/major/minor).\n"
+    "FIRST LINE of your reply MUST be exactly `VERDICT: BLOCK` if there is at "
+    "least one blocker or major correctness/security issue that must be fixed "
+    "before shipping, otherwise `VERDICT: PASS`. Then the findings (or 'LGTM')."
+)
+
+
+def review_changes(model: str, task: str):
+    """Have `model` review this run's diff. Returns (block: bool, report: str).
+    (False, "") when there's nothing to review."""
+    diff = build_review_diff()
+    if not diff.strip():
+        return False, ""
+    user = (f"TASK:\n{task[:2000]}\n\nDIFF:\n{diff[:24000]}")
+    try:
+        text, _reason = llm.chat_text(model, _REVIEW_SYSTEM, user, max_tokens=1500)
+    except Exception:
+        return False, ""   # never let review failure block a run
+    block = text.lstrip().upper().startswith("VERDICT: BLOCK")
+    return block, text.strip()
+
+
 def _step_verify() -> str:
     """Fast, forward-reference-SAFE self-check for a just-completed step: does the
     code you just wrote actually parse / is it structurally complete?

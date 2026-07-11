@@ -656,6 +656,11 @@ function updateAutocleanLabel(on) {
   if (b) b.textContent = "Auto-clean after merge: " + (on ? "on" : "off");
 }
 
+function updateReviewLabel(on) {
+  const b = document.querySelector('[data-act="codeReview"]');
+  if (b) b.textContent = "Code review: " + (on ? "on" : "off");
+}
+
 function updateSpeakLabel(on) {
   const b = document.querySelector('[data-act="speak"]');
   if (b) b.textContent = "Speak replies: " + (on ? "on" : "off");
@@ -839,6 +844,12 @@ const actions = {
     const next = cur === "1" ? "0" : "1";
     bubble((await call("orch", { fn: "set_autoclean", arg: next })).text, "sys");
     updateAutocleanLabel(next === "1");
+  },
+  async codeReview() {
+    const cur = (await call("orch", { fn: "get_review" })).text.trim();
+    const next = cur === "1" ? "0" : "1";
+    bubble((await call("orch", { fn: "set_review", arg: next })).text, "sys");
+    updateReviewLabel(next === "1");
   },
   forcePush() {
     modal("Force push",
@@ -1263,6 +1274,7 @@ const actions = {
     try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
     try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}
     try { updateAutocleanLabel((await call("orch", { fn: "get_autoclean" })).text.trim() === "1"); } catch (e) {}
+    try { updateReviewLabel((await call("orch", { fn: "get_review" })).text.trim() === "1"); } catch (e) {}
   },
 };
 
@@ -2752,5 +2764,6 @@ if (_exRefresh) _exRefresh.onclick = () => renderTree();
   try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
   try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}
   try { updateAutocleanLabel((await call("orch", { fn: "get_autoclean" })).text.trim() === "1"); } catch (e) {}
+  try { updateReviewLabel((await call("orch", { fn: "get_review" })).text.trim() === "1"); } catch (e) {}
   updateSpeakLabel(autoSpeakOn());
 })();
