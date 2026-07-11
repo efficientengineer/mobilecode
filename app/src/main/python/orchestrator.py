@@ -1223,6 +1223,7 @@ def _begin_run() -> None:
     # AGENT_EFFORT before each LLM call; this is just the initial default.
     os.environ["AGENT_FRUGAL"] = "1" if _frugal_on() else "0"
     os.environ["AGENT_EFFORT"] = _orch_effort()
+    os.environ["AGENT_REVIEW"] = "1" if _review_on() else "0"
 
 
 def _frugal_on() -> bool:
@@ -1375,6 +1376,28 @@ def set_autoclean(flag="1") -> str:
 
 def get_autoclean(_=None) -> str:
     return "1" if _autoclean_on() else "0"
+
+
+def _review_on() -> bool:
+    """Independent code review is the default; a marker file (or env=0) turns it
+    off. Frugal mode also suppresses it (checked in agentloop)."""
+    if os.environ.get("AGENT_REVIEW", "") == "0":
+        return False
+    return not (_agent_dir() / "noreview").exists()
+
+
+def set_review(flag="1") -> str:
+    on = str(flag) in ("1", "true", "True", "on")
+    marker = _agent_dir() / "noreview"
+    if on and marker.exists():
+        marker.unlink()
+    elif not on:
+        marker.write_text("1")
+    return "Code review " + ("on" if on else "off")
+
+
+def get_review(_=None) -> str:
+    return "1" if _review_on() else "0"
 
 
 def cleanup_merged(_=None) -> str:
