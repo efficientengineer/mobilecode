@@ -301,6 +301,28 @@ def current_branch() -> str:
         return "master"
 
 
+def workspace_repo() -> str:
+    """Return the GitHub repo full name (owner/repo) from the workspace's git
+    remote origin, or '(no repo)' when there is no git repo or origin."""
+    import re
+    root = _workspace()
+    if not (root / ".git").exists():
+        return "(no repo)"
+    try:
+        from dulwich.config import ConfigFile
+        cfg = ConfigFile.from_path(str(root / ".git" / "config"))
+        # dulwich stores config as (section, subsection), name → value
+        for (section, name), value in cfg.items():
+            if section == (b"remote", b"origin") and name == b"url":
+                url = value.decode()
+                m = re.search(r'github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$', url)
+                if m:
+                    return m.group(1)
+        return "(no repo)"
+    except Exception:
+        return "(no repo)"
+
+
 def _default_branch(full: str) -> str:
     try:
         return _api("GET", f"/repos/{full}").get("default_branch", "main")
