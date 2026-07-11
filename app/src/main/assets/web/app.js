@@ -3141,8 +3141,18 @@ function composeReset() {
 }
 $("#composeClose").onclick = () => { stopDictation(); composeReset(); };
 $("#sendBtn").onclick = () => {
+  composeOpen(true);
+};
+$("#simpleSubmitBtn").onclick = () => {
   const t = $("#input").value.trim();
-  if (!t) { composeOpen(true); return; }   // nothing pending → open the box
+  if (!t) { composeOpen(true); return; }
+  stopDictation();
+  composeReset();
+  runTask(t, "code", true);
+};
+$("#smartSubmitBtn").onclick = () => {
+  const t = $("#input").value.trim();
+  if (!t) { composeOpen(true); return; }
   stopDictation();
   composeReset();
   submit(t);

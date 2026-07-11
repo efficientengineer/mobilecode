@@ -24,6 +24,8 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 .txtbtn:active { background: var(--border); }
 .pill { background: var(--accent); color: #fff; border-radius: 20px; padding: 8px 16px; font-weight: 600; }
 .pill.ghost { background: var(--panel2); color: var(--text); }
+.pill.simple-submit { background: #16a34a; color: #fff; }
+.pill.simple-submit:active { background: #15803d; }
 .pill:active { opacity: .8; }
 
 /* Floating controls (menu / model picker / actions catch-all). */
