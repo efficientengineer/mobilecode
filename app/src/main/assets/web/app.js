@@ -333,9 +333,51 @@ async function refreshBalance() {
 // --- Run state machine (live progress + interrupt) ----------------------
 let running = false;
 
+let _routingOn = false;   // synced from get_routing on load / toggle
+
 function submit(task) {
   if (running) { steerRun(task); return; }
+  if (_routingOn) { routePrompt(task); return; }
   runTask(task, currentMode);
+}
+
+// Triage the prompt, then present routing options as buttons (single agent /
+// multiple agents / plan / just answer) — the user picks how to run it.
+async function routePrompt(task) {
+  bubble(task, "user");                       // show the message right away
+  modal("Route this request", `<div class="hint">Analyzing your request…</div>`);
+  let r;
+  try { r = JSON.parse((await call("orch", { fn: "triage_prompt", arg: task })).text); }
+  catch (e) { r = { recommend: "single", confidence: "low", reason: "", subtasks: [] }; }
+  const subs = r.subtasks || [];
+  const rec = r.recommend || "single";
+  // Auto-skip the window when the route is obvious (a confident single edit or a
+  // plain question) — only ask when there's a real fork (multi/plan, or unsure).
+  if (r.confidence === "high" && (rec === "single" || rec === "chat")) {
+    closeSheet("#modal");
+    runTask(task, rec === "chat" ? "chat" : "code", true);
+    return;
+  }
+  const subsHtml = subs.length
+    ? `<div class="hint" style="margin-top:8px">Proposed split (${subs.length}):</div>` +
+      subs.map((s) => `<div class="list-item"><span>${escapeHtml(s.title || s.instruction)}</span></div>`).join("")
+    : "";
+  const b = (id, label, hot) =>
+    `<button class="pill ${hot ? "" : "ghost"}" id="${id}" style="margin:4px 6px 0 0">${label}</button>`;
+  const rlabel = (m, base) => (rec === m ? "★ " : "") + base;
+  modal("Route this request",
+    (r.reason ? `<div class="hint">${escapeHtml(r.reason)}</div>` : "") + subsHtml +
+    `<div class="row" style="margin-top:12px;flex-wrap:wrap">
+       ${b("rSingle", rlabel("single", "🧠 Single agent"), rec === "single")}
+       ${b("rMulti", rlabel("multi", "🧩 Multiple agents" + (subs.length ? ` (${subs.length})` : "")), rec === "multi")}
+       ${b("rPlan", rlabel("plan", "📋 Plan first"), rec === "plan")}
+       ${b("rChat", rlabel("chat", "💬 Just answer"), rec === "chat")}
+     </div>`);
+  const pick = (fn) => { closeSheet("#modal"); fn(); };
+  $("#rSingle").onclick = () => pick(() => runTask(task, "code", true));
+  $("#rMulti").onclick = () => pick(() => runTask(task, "multi", true));
+  $("#rPlan").onclick = () => pick(() => runTask(task, "plan", true));
+  $("#rChat").onclick = () => pick(() => runTask(task, "chat", true));
 }
 
 // While a run is in flight, a new message steers it — the agent folds it into
@@ -443,9 +485,9 @@ function makeLivePoller(live) {
            pendingCommit: () => pending };
 }
 
-async function runTask(task, mode) {
+async function runTask(task, mode, alreadyShown) {
   running = true;
-  bubble(task, "user");
+  if (!alreadyShown) bubble(task, "user");
   clearTodos();
   $("#runbar").classList.remove("hidden");
   $("#runlabel").textContent = mode === "plan" ? "Planning…" : "Working…";
@@ -703,6 +745,11 @@ function updateReviewLabel(on) {
   if (b) b.textContent = "Code review: " + (on ? "on" : "off");
 }
 
+function updateRoutingLabel(on) {
+  const b = document.querySelector('[data-act="routing"]');
+  if (b) b.textContent = "Prompt routing: " + (on ? "on" : "off");
+}
+
 function updateSpeakLabel(on) {
   const b = document.querySelector('[data-act="speak"]');
   if (b) b.textContent = "Speak replies: " + (on ? "on" : "off");
@@ -910,6 +957,12 @@ const actions = {
     const next = cur === "1" ? "0" : "1";
     bubble((await call("orch", { fn: "set_review", arg: next })).text, "sys");
     updateReviewLabel(next === "1");
+  },
+  async routing() {
+    const next = _routingOn ? "0" : "1";
+    bubble((await call("orch", { fn: "set_routing", arg: next })).text, "sys");
+    _routingOn = next === "1";
+    updateRoutingLabel(_routingOn);
   },
   forcePush() {
     modal("Force push",
@@ -1335,6 +1388,7 @@ const actions = {
     try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}
     try { updateAutocleanLabel((await call("orch", { fn: "get_autoclean" })).text.trim() === "1"); } catch (e) {}
     try { updateReviewLabel((await call("orch", { fn: "get_review" })).text.trim() === "1"); } catch (e) {}
+    try { _routingOn = (await call("orch", { fn: "get_routing" })).text.trim() === "1"; updateRoutingLabel(_routingOn); } catch (e) {}
   },
 };
 
@@ -2829,5 +2883,6 @@ if (_implEffortSel) _implEffortSel.onchange = onImplEffortChange;
   try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}
   try { updateAutocleanLabel((await call("orch", { fn: "get_autoclean" })).text.trim() === "1"); } catch (e) {}
   try { updateReviewLabel((await call("orch", { fn: "get_review" })).text.trim() === "1"); } catch (e) {}
+  try { _routingOn = (await call("orch", { fn: "get_routing" })).text.trim() === "1"; updateRoutingLabel(_routingOn); } catch (e) {}
   updateSpeakLabel(autoSpeakOn());
 })();
