@@ -2662,16 +2662,34 @@ document.querySelectorAll("[data-close]").forEach((b) => {
 // --- Floating compose box (shared by Send / Speak / ❓) --------------------
 // The bottom bar has no inline text field. First Send/Speak press opens the
 // box; Send again submits its text; the ✕ cancels the message.
+// Reserve space at the bottom of #chat equal to the floating compose box's
+// footprint (it's position:absolute, so #chat doesn't otherwise know it's there),
+// and keep the view pinned to the bottom so the last message stays clear of it.
+function syncComposePad() {
+  const drawer = $("#chatDrawer");
+  if (!drawer || !drawer.classList.contains("composing")) return;
+  const box = $("#composeBox");
+  // composeBox sits 62px above the drawer bottom (over the composer bar); reserve
+  // that plus its height plus a small gap.
+  const pad = 62 + (box ? box.offsetHeight : 80) + 16;
+  drawer.style.setProperty("--compose-pad", pad + "px");
+  if (chat) chat.scrollTop = chat.scrollHeight;
+}
 function composeOpen(focus) {
   const b = $("#composeBox");
   if (b) b.classList.remove("hidden");
   if (focus !== false) { const i = $("#input"); if (i) i.focus(); }
+  const drawer = $("#chatDrawer");
+  if (drawer) drawer.classList.add("composing");
+  syncComposePad();
 }
 function composeReset() {
   const i = $("#input");
   if (i) { i.value = ""; i.style.height = "auto"; }
   const b = $("#composeBox");
   if (b) b.classList.add("hidden");
+  const drawer = $("#chatDrawer");
+  if (drawer) { drawer.classList.remove("composing"); drawer.style.removeProperty("--compose-pad"); }
 }
 $("#composeClose").onclick = () => { stopDictation(); composeReset(); };
 $("#sendBtn").onclick = () => {
@@ -2691,6 +2709,7 @@ $("#askBtn").onclick = () => {
 $("#input").addEventListener("input", (e) => {
   e.target.style.height = "auto";
   e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px";
+  syncComposePad();   // grow the reserved chat space with the textarea
 });
 const _usageChip = $("#usage");
 if (_usageChip) _usageChip.onclick = showUsageDetail;
