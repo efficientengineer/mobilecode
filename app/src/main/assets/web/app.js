@@ -1295,7 +1295,7 @@ const actions = {
         return true;   // keep the sheet open; pickRepoThen takes it over
       });
   },
-  async sessions() { await showProjects(); },
+  async sessions() { openSessionPanel(); },
   async models() {
     const meta = await call("session.meta");
     let reviewer = "";
@@ -1501,6 +1501,177 @@ function promptNewSessionInRepo(full) {
       closeSheet("#modal");
       await startSessionOnRepo(full, false, name);
     });
+}
+
+// --- Session side panel (slides in from the left, like Claude.ai) ----------
+// Fold-out session browser with swipe gesture, search, and quick CRUD.
+
+let _sessionPanelOpen = false;
+let _sessionTouchStart = null;
+
+function sessionPanelIsOpen() {
+  const p = $("#sessionPanel");
+  return !!(p && p.classList.contains("open"));
+}
+
+function openSessionPanel() {
+  const p = $("#sessionPanel");
+  if (!p) return;
+  p.classList.add("open");
+  const b = $("#sessionBackdrop");
+  if (b) b.classList.remove("hidden");
+  const t = $("#sessionTab");
+  if (t) t.classList.add("panel-open");
+  _sessionPanelOpen = true;
+  renderSessionPanel();
+}
+
+function closeSessionPanel() {
+  const p = $("#sessionPanel");
+  if (p) p.classList.remove("open");
+  const b = $("#sessionBackdrop");
+  if (b) b.classList.add("hidden");
+  const t = $("#sessionTab");
+  if (t) t.classList.remove("panel-open");
+  _sessionPanelOpen = false;
+}
+
+function toggleSessionPanel() {
+  sessionPanelIsOpen() ? closeSessionPanel() : openSessionPanel();
+}
+
+// Swipe-to-open: detect a rightward swipe from the left ~30px edge.
+function initSessionSwipe() {
+  document.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1) return;
+    const x = e.touches[0].clientX;
+    if (x > 32 || sessionPanelIsOpen()) return;
+    _sessionTouchStart = { x, y: e.touches[0].clientY, time: Date.now() };
+  }, { passive: true });
+
+  document.addEventListener("touchend", (e) => {
+    if (!_sessionTouchStart) return;
+    const last = e.changedTouches[0];
+    if (!last) { _sessionTouchStart = null; return; }
+    const dx = last.clientX - _sessionTouchStart.x;
+    const dy = Math.abs(last.clientY - _sessionTouchStart.y);
+    const dt = Date.now() - _sessionTouchStart.time;
+    // Rightward swipe of at least 60px, mostly horizontal, within 400ms
+    if (dx > 60 && dy < dx * 0.6 && dt < 400) {
+      openSessionPanel();
+    }
+    _sessionTouchStart = null;
+  }, { passive: true });
+}
+
+async function renderSessionPanel(filter) {
+  const list = $("#sessionList");
+  if (!list) return;
+  let sessions = [];
+  let activeId = "";
+  try {
+    const r = await call("session.list");
+    sessions = r.sessions || [];
+    activeId = r.activeId || "";
+  } catch (e) {
+    list.innerHTML = `<div class="sp-empty">Could not load sessions.</div>`;
+    return;
+  }
+
+  const q = (filter || "").trim().toLowerCase();
+  if (q) sessions = sessions.filter((s) => s.name.toLowerCase().includes(q) || (s.activeRepo || "").toLowerCase().includes(q));
+
+  // Group by repo
+  const groups = {};
+  sessions.forEach((s) => {
+    const key = s.activeRepo || "Unassigned";
+    (groups[key] = groups[key] || []).push(s);
+  });
+
+  const repoKeys = Object.keys(groups).sort((a, b) => {
+    if (a === "Unassigned") return 1;
+    if (b === "Unassigned") return -1;
+    return a.localeCompare(b);
+  });
+
+  if (!repoKeys.length) {
+    list.innerHTML = `<div class="sp-empty">No sessions yet.<br><br><button class="pill ghost" id="spNewEmpty">➕ Create a session</button></div>`;
+    const btn = list.querySelector("#spNewEmpty");
+    if (btn) btn.onclick = () => { closeSessionPanel(); actions.newProject(); };
+    return;
+  }
+
+  let html = "";
+  repoKeys.forEach((repo) => {
+    const items = groups[repo];
+    const shortRepo = repo === "Unassigned" ? repo : repo.split("/").pop();
+    html += `<div class="sp-group">
+      <span class="sp-repo-name">${escapeHtml(shortRepo)}</span>
+      <span class="sp-repo-count">${items.length}</span>
+    </div>`;
+    items.forEach((s) => {
+      const isActive = s.id === activeId;
+      html += `<div class="sp-session${isActive ? " active" : ""}" data-sid="${s.id}">
+        <span class="sp-sess-icon">${isActive ? "●" : "○"}</span>
+        <span class="sp-sess-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span>
+        <span class="sp-sess-actions">
+          <button class="sp-sess-act" data-sp-rename="${s.id}" data-sp-name="${escapeHtml(s.name)}" title="Rename">✎</button>
+          <button class="sp-sess-act danger" data-sp-del="${s.id}" data-sp-name="${escapeHtml(s.name)}" title="Delete">🗑</button>
+        </span>
+      </div>`;
+    });
+  });
+
+  list.innerHTML = html;
+
+  // Wire clicks: switch session
+  list.querySelectorAll(".sp-session").forEach((el) => {
+    el.onclick = async (ev) => {
+      // Don't switch if clicking an action button
+      if (ev.target.closest(".sp-sess-act")) return;
+      const id = el.dataset.sid;
+      if (id === activeId) return;
+      await call("session.setActive", { id });
+      closeSessionPanel();
+      await refreshHeader();
+      await loadHistory();
+    };
+  });
+
+  // Wire rename
+  list.querySelectorAll("[data-sp-rename]").forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const id = btn.dataset.spRename;
+      const name = btn.dataset.spName;
+      modal("Rename session",
+        `<label>Name</label><input id="spRnInput" type="text" value="${escapeHtml(name)}" />`,
+        async () => {
+          const n = $("#spRnInput").value.trim();
+          if (!n) return;
+          await call("session.rename", { id, name: n });
+          renderSessionPanel($("#sessionSearch")?.value || "");
+        });
+    };
+  });
+
+  // Wire delete
+  list.querySelectorAll("[data-sp-del]").forEach((btn) => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const id = btn.dataset.spDel;
+      const name = btn.dataset.spName;
+      modal("Delete session",
+        `<div class="hint">Permanently delete "<b>${escapeHtml(name)}</b>" — its local files, history and settings? The repo on GitHub is untouched. This cannot be undone.</div>`,
+        async () => {
+          await call("session.delete", { id });
+          closeSheet("#modal");
+          await refreshHeader();
+          await loadHistory();
+          renderSessionPanel($("#sessionSearch")?.value || "");
+        });
+    };
+  });
 }
 
 // Choose (or create) the GitHub repo a new project lives on.
@@ -2810,6 +2981,14 @@ if (_advToggle) _advToggle.onclick = () => {
 $("#chatFab").onclick = toggleChat;
 $("#chatDrawerClose").onclick = closeChat;
 $("#chatBackdrop").onclick = closeChat;
+// Session panel (slides in from the left)
+$("#sessionTab").onclick = toggleSessionPanel;
+$("#sessionPanelClose").onclick = closeSessionPanel;
+$("#sessionBackdrop").onclick = closeSessionPanel;
+$("#sessionNewBtn").onclick = () => { closeSessionPanel(); actions.newProject(); };
+const _sessionSearch = $("#sessionSearch");
+if (_sessionSearch) _sessionSearch.addEventListener("input", (e) => renderSessionPanel(e.target.value));
+initSessionSwipe();
 document.querySelectorAll("[data-act]").forEach((b) => {
   b.onclick = () => { closeSheet("#menu"); (actions[b.dataset.act] || (() => {}))(); };
 });
