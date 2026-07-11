@@ -290,6 +290,98 @@ def _strip_fence(text: str) -> str:
     return t
 
 
+def _parse_json(text: str):
+    """Best-effort JSON from a model reply (tolerates code fences / prose)."""
+    t = _strip_fence(text or "").strip()
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    i, j = t.find("{"), t.rfind("}")
+    if 0 <= i < j:
+        try:
+            return json.loads(t[i:j + 1])
+        except Exception:
+            return None
+    return None
+
+
+# --- prompt routing / triage --------------------------------------------------
+# On send, a quick, cheap triage classifies the request and proposes HOW to run
+# it (single agent / fan out to several / plan first / just answer). The web
+# layer shows the options as buttons; the user picks. This keeps the smart
+# routing explicit and user-controlled instead of a hidden gate on every prompt.
+
+_TRIAGE_SYSTEM = (
+    "You are the routing triage for an on-device coding agent. Given the user's "
+    "request and the project's file list, decide how to run it. Reply with ONLY "
+    "JSON:\n"
+    '{"recommend":"single|multi|plan|chat","reason":"<one short sentence>",'
+    '"subtasks":[{"title":"<short>","instruction":"<self-contained task for one '
+    'file/feature>"}]}\n'
+    "- chat: a question or discussion that needs no file changes.\n"
+    "- single: one coherent or small/surgical change — one agent does it.\n"
+    "- multi: the work splits into 2+ INDEPENDENT files/features that can be "
+    "built in parallel — list them as subtasks (one per file/feature).\n"
+    "- plan: large or ambiguous enough that the user should approve a plan first.\n"
+    "Only propose multi when the pieces are genuinely independent (no shared "
+    "assumptions that would collide when built separately). At most 6 subtasks. "
+    "Be terse."
+)
+
+
+def triage_prompt(task: str) -> str:
+    """Classify a prompt and propose routing options. Returns JSON:
+    {recommend, reason, subtasks:[{title,instruction}]}. Cheap + fast (worker
+    model). Also stashes the split for `multi` mode to pick up."""
+    default = {"recommend": "single", "reason": "", "subtasks": []}
+    try:
+        root = _workspace()
+        files = _list_repo_files(root, 80)
+        user = (f"REQUEST:\n{str(task)[:1500]}\n\nPROJECT FILES:\n"
+                + "\n".join(files[:80]))
+        data = _parse_json(_call(_impl_model(), _TRIAGE_SYSTEM, user, max_tokens=800))
+        if not isinstance(data, dict):
+            return json.dumps(default)
+        rec = str(data.get("recommend", "single")).strip().lower()
+        if rec not in ("single", "multi", "plan", "chat"):
+            rec = "single"
+        subs = []
+        for s in (data.get("subtasks") or [])[:6]:
+            if isinstance(s, dict) and str(s.get("instruction", "")).strip():
+                subs.append({"title": str(s.get("title", "")).strip()[:80],
+                             "instruction": str(s.get("instruction", "")).strip()})
+        out = {"recommend": rec,
+               "reason": str(data.get("reason", "")).strip()[:200],
+               "subtasks": subs}
+        try:
+            (_agent_dir() / "routing.json").write_text(json.dumps(out))
+        except Exception:
+            pass
+        return json.dumps(out)
+    except Exception:
+        return json.dumps(default)
+
+
+def _multi_directive() -> str:
+    """The fan-out directive for `multi` mode, seeded with the triage split."""
+    subs = []
+    try:
+        r = json.loads((_agent_dir() / "routing.json").read_text())
+        subs = r.get("subtasks") or []
+    except Exception:
+        pass
+    split = "\n".join(
+        f"- {s.get('title') or s['instruction'][:40]}: {s['instruction']}"
+        for s in subs if s.get("instruction"))
+    return ("MULTI-AGENT MODE: build the INDEPENDENT pieces of this task IN "
+            "PARALLEL with delegate_parallel (one worker per file), then verify "
+            "and review each result and integrate them. "
+            + (f"Proposed split:\n{split}\n" if split else "")
+            + "If the code shows the pieces are actually coupled, adjust the "
+            "split or do them yourself — correctness over parallelism.")
+
+
 def _apply_sr_blocks(current: str, text: str):
     """Apply SEARCH/REPLACE blocks. Returns (new_text, applied, total) or None."""
     blocks = _sr_pattern().findall(text)
@@ -1400,6 +1492,26 @@ def get_review(_=None) -> str:
     return "1" if _review_on() else "0"
 
 
+def _routing_on() -> bool:
+    """Prompt routing (triage → choose single/multi/plan/chat) default on; a
+    marker file turns it off."""
+    return not (_agent_dir() / "norouting").exists()
+
+
+def set_routing(flag="1") -> str:
+    on = str(flag) in ("1", "true", "True", "on")
+    marker = _agent_dir() / "norouting"
+    if on and marker.exists():
+        marker.unlink()
+    elif not on:
+        marker.write_text("1")
+    return "Prompt routing " + ("on" if on else "off")
+
+
+def get_routing(_=None) -> str:
+    return "1" if _routing_on() else "0"
+
+
 def cleanup_merged(_=None) -> str:
     """Origin is the source of truth: once the current feature branch's PR is
     merged, drop the local feature files — switch to the default branch, pull the
@@ -1700,9 +1812,13 @@ def run_task(task: str) -> str:
             _append_discussion("agent", result)
             return result
 
-        extra = ("" if mode == "code" else
-                 "If the user's message is a question or discussion that needs "
-                 "no file changes, just answer it in plain text without tools.")
+        if mode == "multi":
+            extra = _multi_directive()
+        elif mode == "code":
+            extra = ""
+        else:
+            extra = ("If the user's message is a question or discussion that needs "
+                     "no file changes, just answer it in plain text without tools.")
         res = agentloop.run(task, context=context, write=True, extra_system=extra,
                             on_say=_say_cb)
         run_id = _new_run_id()
