@@ -109,6 +109,43 @@ function estTokens(s) {
   return Math.max(1, Math.round((s || "").length / 4));
 }
 
+// Copy text to the clipboard, with a WebView-safe fallback (navigator.clipboard
+// isn't always available/permitted in the Android WebView). Flashes the button.
+async function copyToClipboard(text, btn) {
+  let ok = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch (e) {}
+  if (!ok) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+    } catch (e) {}
+  }
+  if (btn) {
+    const prev = btn.textContent;
+    btn.textContent = ok ? "✓" : "✕";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = prev; btn.classList.remove("copied"); }, 1200);
+  }
+}
+
+function addCopyButton(bubbleEl, text) {
+  const cp = document.createElement("button");
+  cp.className = "copybtn";
+  cp.title = "Copy message";
+  cp.textContent = "⧉";
+  cp.onclick = (ev) => { ev.stopPropagation(); copyToClipboard(text, cp); };
+  bubbleEl.appendChild(cp);
+}
+
 function bubble(text, kind, runId, ctxText) {
   const d = document.createElement("div");
   d.className = "bubble " + kind;
@@ -120,6 +157,8 @@ function bubble(text, kind, runId, ctxText) {
     d.classList.add("tappable");
     d.onclick = () => openRun(runId);
   }
+  // Copy-to-clipboard button (copies the raw text, not the rendered markdown).
+  if (kind === "user" || kind === "agent") addCopyButton(d, text);
   chat.appendChild(d);
   // Per-message token estimate = what this turn costs in CONTEXT (the compact
   // form), not the full displayed text. UI only — never itself sent.
