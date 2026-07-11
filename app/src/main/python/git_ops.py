@@ -362,6 +362,11 @@ def clone_repo(full_name: str) -> str:
     """Clone (or refresh) a repo into the active workspace."""
     try:
         root = _workspace()
+        # Preserve meta.json across the clean+clone so SessionManager.assignRepo
+        # can still find this session afterward. Without it the session is never
+        # bound to the repo and the UI resets to "no repo" after the clone.
+        meta_path = root / "meta.json"
+        meta_bytes = meta_path.read_bytes() if meta_path.exists() else None
         # Clean the workspace so clone lands in an empty dir.
         for child in root.iterdir():
             if child.is_dir() and child.name == ".git":
@@ -374,6 +379,9 @@ def clone_repo(full_name: str) -> str:
                 shutil.rmtree(child, ignore_errors=True)
         porcelain.clone(_auth_url(full_name), str(root))
         _set_origin(root, full_name)
+        # Restore meta.json so assignRepo / refreshHeader can bind the session.
+        if meta_bytes is not None:
+            meta_path.write_bytes(meta_bytes)
         return f"Cloned {full_name}"
     except Exception:
         return _scrub("Clone failed:\n" + traceback.format_exc())
