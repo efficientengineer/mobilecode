@@ -169,9 +169,21 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
    --compose-pad) since the textarea grows as you type. */
 #chatDrawer.composing #chat { padding-bottom: var(--compose-pad, 150px); }
 .bubble {
+  position: relative;
   max-width: 82%; padding: 10px 13px; border-radius: 16px; white-space: pre-wrap;
   word-wrap: break-word; line-height: 1.35; font-size: 14.5px;
 }
+/* Copy-to-clipboard button on each user/agent message (like Claude Code). */
+.copybtn {
+  position: absolute; top: 4px; right: 4px; width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; padding: 0; cursor: pointer;
+  background: rgba(127,127,127,.18); color: var(--muted);
+  font-size: 12px; line-height: 1; opacity: .4; transition: opacity .12s;
+}
+.copybtn:hover, .copybtn:active { opacity: 1; }
+.copybtn.copied { opacity: 1; color: #4caf50; }
+.bubble.user .copybtn { background: rgba(255,255,255,.18); color: rgba(255,255,255,.9); }
 .bubble.user { align-self: flex-end; background: var(--user); color: #fff; border-bottom-right-radius: 5px; }
 .bubble.agent { align-self: flex-start; background: var(--agent); border-bottom-left-radius: 5px; }
 .bubble.sys { align-self: center; background: transparent; color: var(--muted); font-size: 12.5px; max-width: 92%; text-align: center; }
