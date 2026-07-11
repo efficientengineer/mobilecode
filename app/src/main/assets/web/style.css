@@ -187,9 +187,21 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 .bubble.user { align-self: flex-end; background: var(--user); color: #fff; border-bottom-right-radius: 5px; }
 .bubble.agent { align-self: flex-start; background: var(--agent); border-bottom-left-radius: 5px; }
 .bubble.sys { align-self: center; background: transparent; color: var(--muted); font-size: 12.5px; max-width: 92%; text-align: center; }
-.tok { font-size: 10.5px; color: var(--muted); opacity: .65; margin: -4px 3px 2px; }
-.tok.user { align-self: flex-end; }
-.tok.agent { align-self: flex-start; }
+/* Context-token footer below chat — replaces per-message token estimates. */
+#ctxFooter {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 3px 10px;
+  font-size: 10.5px;
+  color: var(--muted);
+  opacity: .65;
+  border-top: 1px solid var(--border);
+}
+#ctxFooter.hidden { display: none; }
+.ctx-sep { opacity: .4; }
 
 .balchip { background: #0d3a24; color: #4ade80; border: 1px solid #14532d;
   border-radius: 16px; padding: 6px 14px; font-size: 14px; font-weight: 800;

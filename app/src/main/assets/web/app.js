@@ -146,7 +146,7 @@ function addCopyButton(bubbleEl, text) {
   bubbleEl.appendChild(cp);
 }
 
-function bubble(text, kind, runId, ctxText) {
+function bubble(text, kind, runId) {
   const d = document.createElement("div");
   d.className = "bubble " + kind;
   // Agent replies render markdown (code blocks, bold, lists); user/sys stay
@@ -160,14 +160,6 @@ function bubble(text, kind, runId, ctxText) {
   // Copy-to-clipboard button (copies the raw text, not the rendered markdown).
   if (kind === "user" || kind === "agent") addCopyButton(d, text);
   chat.appendChild(d);
-  // Per-message token estimate = what this turn costs in CONTEXT (the compact
-  // form), not the full displayed text. UI only — never itself sent.
-  if ((kind === "user" || kind === "agent") && ctxText !== false) {
-    const t = document.createElement("div");
-    t.className = "tok " + kind;
-    t.textContent = "~" + estTokens(ctxText != null ? ctxText : text) + " ctx tokens";
-    chat.appendChild(t);
-  }
   chat.scrollTop = chat.scrollHeight;
   // New agent reply while the drawer is closed → flag it on the 💬 button.
   if (kind === "agent" && !_loadingHistory && !chatIsOpen()) setChatUnread(true);
@@ -224,10 +216,7 @@ async function loadHistory() {
     const r = JSON.parse((await call("orch", { fn: "get_discussion" })).text);
     turns = r.turns || [];
     turns.forEach((t) =>
-      // display-only turns (mid-run narration) are agent bubbles that cost no
-      // context, so suppress their per-message token estimate (ctxText=false).
-      bubble(t.text, t.role === "user" ? "user" : "agent", t.run_id || null,
-        t.display_only ? false : t.ctx));
+      bubble(t.text, t.role === "user" ? "user" : "agent", t.run_id || null));
   } catch (e) {}
   _loadingHistory = false;
   refreshStats();
@@ -286,6 +275,31 @@ function showUsageDetail() {
      ${perModel}
      <div class="hint">A high <b>cached %</b> means repeated context is being billed at a fraction of the price — the prompt cache is working. The by-model split shows orchestrator vs implementer spend. Actual dollars show in the balance chip.</div>`);
 }
+async function refreshCtxFooter() {
+  const el = $("#ctxFooter");
+  if (!el) return;
+  try {
+    const c = JSON.parse((await call("orch", { fn: "context_counts" })).text);
+    const turnsEl = $("#ctxTurns");
+    const tokensEl = $("#ctxTokens");
+    if (turnsEl) {
+      const sent = c.sentTurns || 0, total = c.turns || 0;
+      turnsEl.textContent = sent + (sent !== total ? "/" + total : "") + " turns";
+    }
+    if (tokensEl) {
+      const disc = c.discussionTokens || 0, outl = c.outlineTokens || 0, mem = c.memoryTokens || 0;
+      const total = disc + outl + mem;
+      tokensEl.textContent = "~" + fmtK(total) + " ctx tokens";
+      tokensEl.title = "discussion " + disc + " · outline " + outl + " · memory " + mem
+        + (c.caveman ? " · caveman mode" : "");
+    }
+    el.classList.remove("hidden");
+  } catch (e) {
+    const el2 = $("#ctxFooter");
+    if (el2) el2.classList.add("hidden");
+  }
+}
+
 function refreshStats() {
   // The old #stats readout was removed with the top bar; the two orch bridge
   // calls that fed it (context_counts + list_context_files) were pure waste on
@@ -293,6 +307,7 @@ function refreshStats() {
   refreshBalance();
   refreshUsage();
   refreshAttachBar();
+  refreshCtxFooter();
 }
 
 async function refreshAttachBar() {
