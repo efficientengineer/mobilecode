@@ -1273,6 +1273,71 @@ def diagnosis_history(_=None) -> str:
         return "History failed:\n" + traceback.format_exc()
 
 
+# --- origin-as-truth: clean up local files once a feature is merged ---------
+
+def _autoclean_on() -> bool:
+    """Auto-clean after merge is the default; a marker file (or env=0) turns it off."""
+    if os.environ.get("AGENT_AUTOCLEAN", "1") == "0":
+        return False
+    return not (_agent_dir() / "noautoclean").exists()
+
+
+def set_autoclean(flag="1") -> str:
+    on = str(flag) in ("1", "true", "True", "on")
+    marker = _agent_dir() / "noautoclean"
+    if on and marker.exists():
+        marker.unlink()
+    elif not on:
+        marker.write_text("1")
+    return "Auto-clean after merge " + ("on" if on else "off")
+
+
+def get_autoclean(_=None) -> str:
+    return "1" if _autoclean_on() else "0"
+
+
+def cleanup_merged(_=None) -> str:
+    """Origin is the source of truth: once the current feature branch's PR is
+    merged, drop the local feature files — switch to the default branch, pull the
+    now-canonical state, and delete the merged branch (local + remote). Always
+    refuses when there are uncommitted changes, so in-progress work is never lost.
+    Safe to call anytime; a no-op unless the branch is actually merged."""
+    try:
+        import git_ops
+        root = _workspace()
+        full = git_ops._remote_full_name(root)
+        if not full:
+            return "No repo set for this workspace."
+        branch = git_ops.current_branch()
+        default = git_ops._default_branch(full)
+        if branch == default:
+            return f"On {default} — nothing to clean up."
+        if git_ops._changed(root):
+            return (f"Uncommitted changes on {branch} — not cleaning up. Commit, "
+                    "push and merge them (or discard) first.")
+        if not git_ops.pr_merged(branch):
+            return (f"The PR for {branch} isn't merged yet — leaving your local "
+                    "feature files in place.")
+        steps = [git_ops.checkout(default).splitlines()[0],
+                 git_ops.pull().splitlines()[0],
+                 git_ops.delete_branch(branch, remote=True).splitlines()[0]]
+        _emit("cleaned", branch=branch, default=default)
+        return (f"✅ {branch} was merged — cleaned up local files and synced to "
+                f"{default}.\n  " + "\n  ".join(steps))
+    except Exception:
+        return "Cleanup failed:\n" + traceback.format_exc()
+
+
+def cleanup_if_merged(_=None) -> str:
+    """Auto-cleanup entry point: honor the toggle, then cleanup_merged. Returns an
+    empty string when the toggle is off or there's nothing to do, so callers can
+    surface the result only when it's meaningful."""
+    if not _autoclean_on():
+        return ""
+    msg = cleanup_merged()
+    return msg if msg.startswith("✅") else ""
+
+
 def _changed_paths(root: Path) -> list:
     """Working-tree paths that differ from the index/HEAD (via dulwich status)."""
     try:

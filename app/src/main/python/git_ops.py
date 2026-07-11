@@ -914,6 +914,21 @@ def create_pr(title: str = "", body: str = "") -> str:
         return "Create PR failed:\n" + traceback.format_exc()
 
 
+def pr_merged(branch: str = "") -> bool:
+    """True if the PR whose head is <branch> (default: current) has been merged."""
+    try:
+        full = _remote_full_name(_workspace())
+        if not full:
+            return False
+        branch = (branch or current_branch()).strip()
+        owner = full.split("/")[0]
+        prs = _api("GET",
+                   f"/repos/{full}/pulls?head={owner}:{branch}&state=all&per_page=1")
+        return bool(prs and prs[0].get("merged_at"))
+    except Exception:
+        return False
+
+
 def pr_status(_=None) -> str:
     """State + CI verdict of the open PR for the current branch, if any."""
     try:
