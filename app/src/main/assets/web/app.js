@@ -1045,18 +1045,10 @@ const actions = {
         refreshHeader();
       });
   },
-  async switchRepo() {
-    bubble("Loading repos…", "sys");
-    let repos = [];
-    try { repos = (await call("git.listRepos")).repos || []; }
-    catch (e) { bubble("Couldn't load repos: " + e.message, "sys"); return; }
-    if (!repos.length) { bubble("No repos found (check GitHub token).", "sys"); return; }
-    modal("Switch repo",
-      repos.map((f) => `<div class="list-item" data-repo="${escAttr(f)}"><span>${escapeHtml(f)}</span></div>`).join(""));
-    $("#modalBody").querySelectorAll("[data-repo]").forEach((el) => {
-      el.onclick = () => { closeSheet("#modal"); confirmClone(el.dataset.repo); };
-    });
-  },
+  // Repo switching within a session is intentionally gone: a session belongs to
+  // one repo (its source of truth). To work on another repo, open Projects and
+  // start a session under it.
+  openProjects() { showProjects(); },
   async deleteRepo() {
     bubble("Loading repos…", "sys");
     let repos = [];
@@ -1101,11 +1093,14 @@ const actions = {
         const desc = $("#gmdesc").value.trim();
         if (!desc) { $("#gmdesc").focus(); return true; }
         const name = desc.split(/\s+/).slice(0, 4).join("-").toLowerCase().replace(/[^a-z0-9-]/g, "") || "my-game";
-        await call("session.create", { name });
-        bubble((await call("orch", { fn: "apply_template", arg: "engine-3d" })).text, "sys");
-        await refreshHeader(); await loadHistory(); refreshStats();
-        submit("Make this game on the existing engine (glue game/ against engine/CONTRACTS.md, don't rewrite the engine): " + desc);
-        setTimeout(() => maybeOpenPreview(), 2000);
+        // Every project lives on a repo — pick/create one, then build the game.
+        pickRepoThen(async (repoOrName, isNew) => {
+          await startSessionOnRepo(repoOrName, isNew, name);
+          bubble((await call("orch", { fn: "apply_template", arg: "engine-3d" })).text, "sys");
+          submit("Make this game on the existing engine (glue game/ against engine/CONTRACTS.md, don't rewrite the engine): " + desc);
+          setTimeout(() => maybeOpenPreview(), 2000);
+        });
+        return true;   // keep the sheet open; pickRepoThen takes it over
       });
     $("#modalBody").querySelectorAll(".gm-ex").forEach((el) => {
       el.onclick = () => { $("#gmdesc").value = el.textContent; $("#gmdesc").focus(); };
@@ -1127,68 +1122,16 @@ const actions = {
         const name = $("#pname").value.trim();
         const sel = $("#modalBody").querySelector('input[name="tpl"]:checked');
         const tpl = sel ? sel.value : "";
-        await call("session.create", { name });
-        if (tpl) bubble((await call("orch", { fn: "apply_template", arg: tpl })).text, "sys");
-        await refreshHeader(); await loadHistory(); refreshStats();
-        bubble("New project ready. Describe what to build, or press ▶ to preview.", "sys");
-        // Try to auto-open preview if the template produced a runnable project.
-        setTimeout(() => maybeOpenPreview(), 1500);
+        pickRepoThen(async (repoOrName, isNew) => {
+          await startSessionOnRepo(repoOrName, isNew, name || (isNew ? repoOrName : ""));
+          if (tpl) bubble((await call("orch", { fn: "apply_template", arg: tpl })).text, "sys");
+          bubble("New project ready. Describe what to build, or press ▶ to preview.", "sys");
+          setTimeout(() => maybeOpenPreview(), 1500);
+        });
+        return true;   // keep the sheet open; pickRepoThen takes it over
       });
   },
-  async sessions() {
-    const r = await call("session.list");
-    const items = (r.sessions || []).map((s) => {
-      const dot = s.id === r.activeId ? "● " : "○ ";
-      const repo = s.activeRepo ? " (" + s.activeRepo + ")" : "";
-      const nm = escapeHtml(s.name);
-      return `<div class="list-item sess-row">
-        <span class="sess-pick" data-sid="${s.id}">${dot}${nm}${escapeHtml(repo)}</span>
-        <span class="sess-actions">
-          <b class="sess-btn" data-rename="${s.id}" data-name="${nm}" title="Rename">✎</b>
-          <b class="sess-btn" data-del="${s.id}" data-name="${nm}" title="Delete">🗑</b>
-        </span></div>`;
-    }).join("");
-    modal("Sessions", items +
-      `<button class="pill ghost" id="newSess" style="margin-top:10px">New session</button>`);
-    const reopen = async () => { await refreshHeader(); await loadHistory(); actions.sessions(); };
-    $("#modalBody").querySelectorAll("[data-sid]").forEach((el) => {
-      el.onclick = async () => {
-        await call("session.setActive", { id: el.dataset.sid });
-        closeSheet("#modal"); await refreshHeader(); await loadHistory();
-      };
-    });
-    $("#modalBody").querySelectorAll("[data-rename]").forEach((el) => {
-      el.onclick = (ev) => {
-        ev.stopPropagation();
-        modal("Rename session",
-          `<label>Name</label><input id="rn2" type="text" value="${el.dataset.name}" />`,
-          async () => {
-            const name = $("#rn2").value.trim(); if (!name) return;
-            await call("session.rename", { id: el.dataset.rename, name });
-            reopen();
-          });
-      };
-    });
-    $("#modalBody").querySelectorAll("[data-del]").forEach((el) => {
-      el.onclick = (ev) => {
-        ev.stopPropagation();
-        modal("Delete session",
-          `<div class="hint">Permanently delete "<b>${el.dataset.name}</b>" — its repo workspace,
-           history, and settings? This cannot be undone.</div>`,
-          async () => {
-            await call("session.delete", { id: el.dataset.del });
-            reopen();
-          });
-      };
-    });
-    $("#newSess").onclick = () => {
-      modal("New session", `<label>Name</label><input id="sn" type="text" placeholder="session name" />`,
-        async () => {
-          await call("session.create", { name: $("#sn").value.trim() });
-          await refreshHeader(); await loadHistory();
-        });
-    };
-  },
+  async sessions() { await showProjects(); },
   async models() {
     const meta = await call("session.meta");
     modal("Session models",
@@ -1292,6 +1235,136 @@ const actions = {
     try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}
   },
 };
+
+// --- Projects → Sessions manager (repo owns its sessions) ----------------
+// A project IS a GitHub repo (the source of truth); a session is work under it.
+// Top level lists repos; drilling in lists that repo's sessions.
+
+async function listSessionsGrouped() {
+  const r = await call("session.list");
+  const sessions = r.sessions || [];
+  const groups = {};
+  sessions.forEach((s) => {
+    const key = s.activeRepo || "";
+    (groups[key] = groups[key] || []).push(s);
+  });
+  return { groups, activeId: r.activeId };
+}
+
+async function showProjects() {
+  const { groups, activeId } = await listSessionsGrouped();
+  const repos = Object.keys(groups).filter((k) => k).sort();
+  const noRepo = groups[""] || [];
+  let html = repos.map((full) => {
+    const list = groups[full];
+    const active = list.some((s) => s.id === activeId);
+    return `<div class="list-item" data-repo="${escAttr(full)}">
+      <span>${active ? "● " : "○ "}${escapeHtml(full)}</span>
+      <span class="sub">${list.length} session${list.length > 1 ? "s" : ""}</span></div>`;
+  }).join("");
+  if (noRepo.length) {
+    html += `<div class="list-item" data-repo="__none__">
+      <span>○ Needs a repo</span><span class="sub">${noRepo.length}</span></div>`;
+  }
+  if (!html) html = `<div class="hint">No projects yet — start one on a GitHub repo.</div>`;
+  modal("Projects", html +
+    `<button class="pill ghost" id="newProj" style="margin-top:10px">➕ New project</button>`);
+  $("#modalBody").querySelectorAll("[data-repo]").forEach((el) => {
+    el.onclick = () => showRepoSessions(el.dataset.repo);
+  });
+  $("#newProj").onclick = () => pickRepoThen((repoOrName, isNew) =>
+    startSessionOnRepo(repoOrName, isNew));
+}
+
+async function showRepoSessions(repo) {
+  const { groups, activeId } = await listSessionsGrouped();
+  const key = repo === "__none__" ? "" : repo;
+  const list = groups[key] || [];
+  const title = repo === "__none__" ? "Needs a repo" : repo;
+  const items = list.map((s) => {
+    const nm = escapeHtml(s.name);
+    return `<div class="list-item sess-row">
+      <span class="sess-pick" data-sid="${s.id}">${s.id === activeId ? "● " : "○ "}${nm}</span>
+      <span class="sess-actions">
+        <b class="sess-btn" data-rename="${s.id}" data-name="${nm}" title="Rename">✎</b>
+        <b class="sess-btn" data-del="${s.id}" data-name="${nm}" title="Delete">🗑</b>
+      </span></div>`;
+  }).join("") || `<div class="hint">No sessions in this project yet.</div>`;
+  const newBtn = key
+    ? `<button class="pill ghost" id="newSess" style="margin-top:10px">➕ New session in ${escapeHtml(key)}</button>`
+    : "";
+  modal(title, `<div class="list-item" id="backProj"><span>‹ All projects</span></div>` + items + newBtn);
+  $("#backProj").onclick = () => showProjects();
+  const reopen = () => showRepoSessions(repo);
+  $("#modalBody").querySelectorAll("[data-sid]").forEach((el) => {
+    el.onclick = async () => {
+      await call("session.setActive", { id: el.dataset.sid });
+      closeSheet("#modal"); await refreshHeader(); await loadHistory();
+    };
+  });
+  $("#modalBody").querySelectorAll("[data-rename]").forEach((el) => {
+    el.onclick = (ev) => {
+      ev.stopPropagation();
+      modal("Rename session", `<label>Name</label><input id="rn2" type="text" value="${el.dataset.name}" />`,
+        async () => {
+          const n = $("#rn2").value.trim(); if (!n) return;
+          await call("session.rename", { id: el.dataset.rename, name: n }); reopen();
+        });
+    };
+  });
+  $("#modalBody").querySelectorAll("[data-del]").forEach((el) => {
+    el.onclick = (ev) => {
+      ev.stopPropagation();
+      modal("Delete session",
+        `<div class="hint">Permanently delete "<b>${el.dataset.name}</b>" — its local files, history and settings? The repo on GitHub is untouched. This cannot be undone.</div>`,
+        async () => { await call("session.delete", { id: el.dataset.del }); reopen(); });
+    };
+  });
+  if (key) $("#newSess").onclick = () => promptNewSessionInRepo(key);
+}
+
+function promptNewSessionInRepo(full) {
+  modal("New session in " + full,
+    `<label>Name</label><input id="sn" type="text" placeholder="what you're working on" />`,
+    async () => {
+      const name = $("#sn").value.trim() || full.split("/").pop();
+      closeSheet("#modal");
+      await startSessionOnRepo(full, false, name);
+    });
+}
+
+// Choose (or create) the GitHub repo a new project lives on.
+async function pickRepoThen(cb) {
+  bubble("Loading repos…", "sys");
+  let repos = [];
+  try { repos = (await call("git.listRepos")).repos || []; } catch (e) {}
+  const rows = repos.map((f) =>
+    `<div class="list-item" data-repo="${escAttr(f)}"><span>${escapeHtml(f)}</span></div>`).join("");
+  modal("Choose a repo",
+    `<div class="hint">Every project lives on a GitHub repo — its source of truth.</div>` +
+    rows + `<button class="pill ghost" id="newRepoBtn" style="margin-top:10px">➕ Create new repo</button>`);
+  $("#modalBody").querySelectorAll("[data-repo]").forEach((el) => {
+    el.onclick = () => { closeSheet("#modal"); cb(el.dataset.repo, false); };
+  });
+  $("#newRepoBtn").onclick = () => {
+    modal("New GitHub repo", `<label>Repo name</label><input id="nrn" type="text" placeholder="my-project" />`,
+      async () => { const name = $("#nrn").value.trim(); if (!name) return; closeSheet("#modal"); cb(name, true); });
+  };
+}
+
+// Create a session bound to a repo: clone an existing one, or create a new repo.
+// Returns the repo full name (existing) or the new repo's name.
+async function startSessionOnRepo(repoOrName, isNew, sessionName) {
+  const name = sessionName || (isNew ? repoOrName : repoOrName.split("/").pop());
+  bubble((isNew ? "Creating repo " : "Starting on ") + repoOrName + "…", "sys");
+  await call("session.create", { name });
+  const res = isNew
+    ? (await call("git.createRepo", { name: repoOrName })).text
+    : (await call("git.clone", { full: repoOrName })).text;
+  if (res) bubble(res, "sys");
+  await refreshHeader(); await loadHistory(); refreshStats();
+  return repoOrName;
+}
 
 function confirmClone(full) {
   modal(full,
@@ -2207,7 +2280,7 @@ function openCtxMenu() {
 // GitHub actions, opened from the top-bar GitHub button.
 const GITHUB_ITEMS = [
   { label: "New repository", act: "newRepo" },
-  { label: "Switch repository", act: "switchRepo" },
+  { label: "Projects", act: "openProjects" },
   { label: "Delete repository", act: "deleteRepo" },
   //
   { label: "Switch / create branch", act: "switchBranch" },
@@ -2271,7 +2344,7 @@ const ACTION_INDEX = [
   { label: "Push", act: "push" },
   { label: "Pull", act: "pull" },
   { label: "New repository", act: "newRepo" },
-  { label: "Switch repository", act: "switchRepo" },
+  { label: "Projects", act: "openProjects" },
   { label: "Delete repository", act: "deleteRepo" },
   { label: "Merge → open PR", act: "createPR" },
   { label: "Diff (workspace)", act: "diff" },
@@ -2453,14 +2526,13 @@ const QUICK_TEMPLATES = [
 
 async function applyQuickTemplate(id) {
   if (id === "blank" || id === "newProject") { actions.newProject(); return; }
-  await call("session.create", { name: id + "-" + Date.now().toString(36) });
-  await refreshHeader();
-  const r = await call("orch", { fn: "apply_template", arg: id });
-  bubble(r.text || "Template applied", "sys");
-  await loadHistory();
-  refreshStats();
-  // Try to open the preview if the template produced a runnable project.
-  setTimeout(() => maybeOpenPreview(), 1500);
+  // Every project lives on a repo — pick/create one, then apply the template.
+  pickRepoThen(async (repoOrName, isNew) => {
+    await startSessionOnRepo(repoOrName, isNew, id + "-" + Date.now().toString(36));
+    const r = await call("orch", { fn: "apply_template", arg: id });
+    bubble(r.text || "Template applied", "sys");
+    setTimeout(() => maybeOpenPreview(), 1500);
+  });
 }
 
 function showTemplates() {
