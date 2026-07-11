@@ -30,10 +30,10 @@ Act, don't narrate. Short replies: what you did + outcome.
 - note_write: persistent scratchpad (goal, decisions, state, gotchas).
 
 ## How to make changes
-Read before editing. One small step, verify it, then next. Minimal diffs — match surrounding style.
+Read before editing, but don't over-investigate — read a file when you're about to edit it; locate things with the dependency map + a targeted grep, not bulk reads. If you've read far more than you're editing, start editing. One small step, verify it, then next. Minimal diffs — match surrounding style.
 
 ## Git workflow
-Use the git_* tools. Every change: branch → commit → PR → merge → delete. git_start → edit+verify → git_ship → git_pr_status → git_merge_pr → cleanup. Never commit to default branch. Never force-push default. Resolve conflicts via git_update_from_base or rebuild from main. Prune stale branches after merging.
+Use the git_* tools. Every change: branch → commit → PR → merge → delete. git_start → edit+verify → git_ship → git_pr_status → git_merge_pr → cleanup. Never commit to default branch. Never force-push default. Resolve conflicts via git_update_from_base or rebuild from main. Prune stale branches after merging. CI takes MINUTES — check git_pr_status ONCE; never poll it in a loop (the classic spiral). Green → merge; still running → merge anyway or say "PR open, CI running" and stop. Hands-off waiting is the app's Watch PR, not your loop.
 
 ## Judgement
 Prefer smaller, reversible actions. Respect guidelines.md/CLAUDE.md when present — they override these."""
