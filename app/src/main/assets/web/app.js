@@ -642,6 +642,11 @@ function updateAutocommitLabel(on) {
   if (b) b.textContent = "Autocommit: " + (on ? "on" : "off");
 }
 
+function updateAutodiagnoseLabel(on) {
+  const b = document.querySelector('[data-act="autoDiagnose"]');
+  if (b) b.textContent = "Auto-diagnose: " + (on ? "on" : "off");
+}
+
 function updateSpeakLabel(on) {
   const b = document.querySelector('[data-act="speak"]');
   if (b) b.textContent = "Speak replies: " + (on ? "on" : "off");
@@ -752,6 +757,21 @@ const actions = {
     const r = await call("orch", { fn: "get_diff" });
     modal("Uncommitted changes", `<pre class="filebody diff">${escapeHtml(r.text || "(none)")}</pre>`);
   },
+  async diagnoseRun() {
+    bubble("Diagnosing the last run…", "sys");
+    const r = await call("orch", { fn: "diagnose_last_run" });
+    modal("Run diagnosis", `<pre class="filebody">${escapeHtml(r.text || "(none)")}</pre>`);
+  },
+  async judgeRun() {
+    bubble("Grading the last run…", "sys");
+    const r = await call("orch", { fn: "judge_last_run" });
+    modal("LLM judge", `<pre class="filebody">${escapeHtml(r.text || "(none)")}</pre>`);
+  },
+  async runEvals() {
+    bubble("Running eval scenarios (this runs the agent a few times — hang on)…", "sys");
+    const r = await call("orch", { fn: "run_evals" });
+    modal("Eval scenarios", `<pre class="filebody">${escapeHtml(r.text || "(none)")}</pre>`);
+  },
   revertLast() {
     modal("Revert last commit",
       `<div class="hint">Undo the most recent commit? Files return to the previous commit's state.</div>`,
@@ -834,6 +854,16 @@ const actions = {
     const next = cur === "1" ? "0" : "1";
     bubble((await call("orch", { fn: "set_autocommit", arg: next })).text, "sys");
     updateAutocommitLabel(next === "1");
+  },
+  async autoDiagnose() {
+    const cur = (await call("orch", { fn: "get_autodiagnose" })).text.trim();
+    const next = cur === "1" ? "0" : "1";
+    bubble((await call("orch", { fn: "set_autodiagnose", arg: next })).text, "sys");
+    updateAutodiagnoseLabel(next === "1");
+  },
+  async runHistory() {
+    const r = await call("orch", { fn: "diagnosis_history" });
+    modal("Run history", `<pre class="filebody">${escapeHtml(r.text || "(none)")}</pre>`);
   },
   speak() {
     const next = autoSpeakOn() ? "0" : "1";
@@ -1259,6 +1289,7 @@ const actions = {
     try { updateCavemanLabel((await call("orch", { fn: "get_caveman" })).text.trim() === "1"); } catch (e) {}
     try { updateEffortLabel((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
     try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
+    try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}
   },
 };
 
@@ -2596,5 +2627,6 @@ if (_exRefresh) _exRefresh.onclick = () => renderTree();
   try { updateEffortLabel((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
   try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
   try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
+  try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}
   updateSpeakLabel(autoSpeakOn());
 })();
