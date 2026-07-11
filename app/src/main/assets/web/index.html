@@ -70,6 +70,25 @@
   <!-- Preview fab (floating, near the other fabs) -->
   <button id="previewFab" class="fab hidden" title="Toggle preview" style="right:144px">🖥</button>
 
+  <!-- Session panel toggle tab (fold-out from left edge, like Claude.ai) -->
+  <button id="sessionTab" title="Sessions"><span id="sessionTabIcon">☰</span></button>
+
+  <!-- Session panel (slides in from the left) -->
+  <div id="sessionBackdrop" class="hidden"></div>
+  <aside id="sessionPanel">
+    <div id="sessionPanel-head">
+      <span class="sp-title">Sessions</span>
+      <span class="sp-head-actions">
+        <button id="sessionNewBtn" class="txtbtn xs" title="New session">＋ New</button>
+        <button id="sessionPanelClose" class="txtbtn xs" title="Close">✕</button>
+      </span>
+    </div>
+    <div id="sessionPanel-search">
+      <input id="sessionSearch" type="text" placeholder="Filter sessions…" autocomplete="off" />
+    </div>
+    <div id="sessionList"></div>
+  </aside>
+
   <!-- Floating chat button (opens the agent drawer) -->
   <button id="chatFab" title="Agent chat"><span id="chatFabIcon">💬</span><span id="chatUnread" class="unread hidden"></span></button>
 
