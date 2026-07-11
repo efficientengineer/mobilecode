@@ -1514,11 +1514,25 @@ async function pickRepoThen(cb) {
     `<div class="hint">Every project lives on a GitHub repo — its source of truth.</div>` +
     rows + `<button class="pill ghost" id="newRepoBtn" style="margin-top:10px">➕ Create new repo</button>`);
   $("#modalBody").querySelectorAll("[data-repo]").forEach((el) => {
-    el.onclick = () => { closeSheet("#modal"); cb(el.dataset.repo, false); };
+    el.onclick = () => {
+      const repo = el.dataset.repo;
+      closeSheet("#modal");
+      // Immediate UI feedback: update the subtitle bar so the user sees the chosen repo.
+      const sr = $("#subRepo"); if (sr) sr.textContent = repo;
+      setStatus("Selected " + repo);
+      cb(repo, false);
+    };
   });
   $("#newRepoBtn").onclick = () => {
     modal("New GitHub repo", `<label>Repo name</label><input id="nrn" type="text" placeholder="my-project" />`,
-      async () => { const name = $("#nrn").value.trim(); if (!name) return; closeSheet("#modal"); cb(name, true); });
+      async () => {
+        const name = $("#nrn").value.trim(); if (!name) return;
+        closeSheet("#modal");
+        // Immediate UI feedback for a new repo name.
+        const sr = $("#subRepo"); if (sr) sr.textContent = name;
+        setStatus("Creating " + name + "…");
+        cb(name, true);
+      });
   };
 }
 
