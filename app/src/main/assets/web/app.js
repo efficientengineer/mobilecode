@@ -647,6 +647,11 @@ function updateAutodiagnoseLabel(on) {
   if (b) b.textContent = "Auto-diagnose: " + (on ? "on" : "off");
 }
 
+function updateAutocleanLabel(on) {
+  const b = document.querySelector('[data-act="autoClean"]');
+  if (b) b.textContent = "Auto-clean after merge: " + (on ? "on" : "off");
+}
+
 function updateSpeakLabel(on) {
   const b = document.querySelector('[data-act="speak"]');
   if (b) b.textContent = "Speak replies: " + (on ? "on" : "off");
@@ -807,9 +812,29 @@ const actions = {
       async () => {
         const m = ($("#mm") && $("#mm").value) || "merge";
         bubble("Merging PR…", "sys");
-        bubble((await call("py.call", { module: "git_ops", fn: "merge_pr", args: [m] })).text, "sys");
+        const res = (await call("py.call", { module: "git_ops", fn: "merge_pr", args: [m] })).text;
+        bubble(res, "sys");
+        // Origin is the source of truth: once merged, drop the local feature
+        // files (auto-clean, if enabled) so local never drifts from origin.
+        if (/merged/i.test(res)) {
+          try {
+            const clean = (await call("orch", { fn: "cleanup_if_merged" })).text;
+            if (clean && clean.trim()) bubble(clean, "sys");
+          } catch (e) {}
+        }
         refreshHeader();
       });
+  },
+  async cleanupMerged() {
+    bubble("Checking if this feature is merged…", "sys");
+    bubble((await call("orch", { fn: "cleanup_merged" })).text, "sys");
+    refreshHeader();
+  },
+  async autoClean() {
+    const cur = (await call("orch", { fn: "get_autoclean" })).text.trim();
+    const next = cur === "1" ? "0" : "1";
+    bubble((await call("orch", { fn: "set_autoclean", arg: next })).text, "sys");
+    updateAutocleanLabel(next === "1");
   },
   forcePush() {
     modal("Force push",
@@ -1290,6 +1315,7 @@ const actions = {
     try { updateEffortLabel((await call("orch", { fn: "get_effort" })).text.trim()); } catch (e) {}
     try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
     try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}
+    try { updateAutocleanLabel((await call("orch", { fn: "get_autoclean" })).text.trim() === "1"); } catch (e) {}
   },
 };
 
@@ -2220,6 +2246,7 @@ const GITHUB_ITEMS = [
   { label: "Start branch", act: "startBranch" },
   { label: "PR status", act: "prStatus" },
   { label: "Merge PR", act: "mergePR" },
+  { label: "Clean up merged", act: "cleanupMerged" },
   { label: "Watch PR", act: "watchPr" },
   { label: "Build in cloud", act: "cloudBuild" },
   { label: "Build status", act: "buildStatus" },
@@ -2278,6 +2305,7 @@ const ACTION_INDEX = [
   { label: "Start branch", act: "startBranch" },
   { label: "PR status", act: "prStatus" },
   { label: "Merge PR", act: "mergePR" },
+  { label: "Clean up merged", act: "cleanupMerged" },
   { label: "Watch PR", act: "watchPr" },
   { label: "Build in cloud", act: "cloudBuild" },
   { label: "Build status", act: "buildStatus" },
@@ -2628,5 +2656,6 @@ if (_exRefresh) _exRefresh.onclick = () => renderTree();
   try { updateAutocommitLabel((await call("orch", { fn: "get_autocommit" })).text.trim() === "1"); } catch (e) {}
   try { updateFrugalLabel((await call("orch", { fn: "get_frugal" })).text.trim() === "1"); } catch (e) {}
   try { updateAutodiagnoseLabel((await call("orch", { fn: "get_autodiagnose" })).text.trim() === "1"); } catch (e) {}
+  try { updateAutocleanLabel((await call("orch", { fn: "get_autoclean" })).text.trim() === "1"); } catch (e) {}
   updateSpeakLabel(autoSpeakOn());
 })();
