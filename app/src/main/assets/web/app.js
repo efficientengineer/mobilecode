@@ -512,6 +512,8 @@ function makeLivePoller(live) {
         const r = JSON.parse((await call("orch", { fn: "get_events", arg: String(cursor) })).text);
         cursor = r.cursor;
         (r.events || []).forEach((e) => {
+          // Log tool events to the action log panel
+          logToolEvent(e);
           // Assistant text: accumulate; render once per batch (below), not per
           // delta — re-parsing the whole growing buffer per token is O(n²).
           if (e.kind === "delta") { stream += e.text || ""; streamDirty = true; return; }
@@ -1657,6 +1659,145 @@ async function renderSessionPanel(filter) {
     });
     return ids;
   };
+}
+
+// --- Action log panel (slides in from the right) --------------------------
+// Records all tool uses, file writes/deletes/modifications from agent runs.
+
+const ACTION_LOG_KEY = "va_action_log";
+const ACTION_LOG_MAX = 500;  // keep last N entries
+
+let _actionLog = [];
+let _actionLogPanelOpen = false;
+
+function loadActionLog() {
+  try {
+    _actionLog = JSON.parse(localStorage.getItem(ACTION_LOG_KEY) || "[]");
+  } catch (e) {
+    _actionLog = [];
+  }
+}
+
+function saveActionLog() {
+  try {
+    // Trim to max
+    if (_actionLog.length > ACTION_LOG_MAX) _actionLog = _actionLog.slice(-ACTION_LOG_MAX);
+    localStorage.setItem(ACTION_LOG_KEY, JSON.stringify(_actionLog));
+  } catch (e) {}
+}
+
+function logAction(kind, detail, path) {
+  const entry = {
+    kind: kind,        // "read", "write", "delete", "tool", "git"
+    detail: detail,    // short description
+    path: path || "",  // file path (optional)
+    time: Date.now(),
+  };
+  _actionLog.push(entry);
+  saveActionLog();
+  // If the panel is open, re-render
+  if (_actionLogPanelOpen) renderActionLogPanel();
+}
+
+// Hook: call this from event processing to auto-log tool events
+function logToolEvent(e) {
+  switch (e.kind) {
+    case "tool_start":
+      if (e.name === "read_file" && e.detail) {
+        logAction("read", "Read", e.detail);
+      } else if (e.name === "write_file" && e.detail) {
+        logAction("write", "Wrote", e.detail);
+      } else if (e.name === "str_replace" && e.detail) {
+        logAction("write", "Edited", e.detail);
+      } else if (e.name === "delete_file" && e.detail) {
+        logAction("delete", "Deleted", e.detail);
+      } else if (e.name === "delegate_edit" && e.detail) {
+        logAction("write", "Delegated edit", e.detail);
+      } else if (e.name && (e.name.startsWith("git_") || e.name === "git_ship" || e.name === "git_start")) {
+        logAction("git", e.name.replace(/^git_/, ""), e.detail || "");
+      } else if (e.name) {
+        logAction("tool", e.name, e.detail || "");
+      }
+      break;
+    case "tool_done":
+      // Optionally log results, but tool_start already captures the action
+      break;
+    case "commit_start":
+      logAction("git", "Commit", e.detail || "");
+      break;
+    case "done":
+      logAction("git", "Committed", e.commit || "");
+      break;
+  }
+}
+
+function actionLogPanelIsOpen() {
+  const p = $("#actionLogPanel");
+  return !!(p && p.classList.contains("open"));
+}
+
+function openActionLogPanel() {
+  const p = $("#actionLogPanel");
+  if (!p) return;
+  p.classList.add("open");
+  const b = $("#actionLogBackdrop");
+  if (b) b.classList.remove("hidden");
+  const t = $("#actionLogTab");
+  if (t) t.classList.add("panel-open");
+  _actionLogPanelOpen = true;
+  renderActionLogPanel();
+}
+
+function closeActionLogPanel() {
+  const p = $("#actionLogPanel");
+  if (p) p.classList.remove("open");
+  const b = $("#actionLogBackdrop");
+  if (b) b.classList.add("hidden");
+  const t = $("#actionLogTab");
+  if (t) t.classList.remove("panel-open");
+  _actionLogPanelOpen = false;
+}
+
+function toggleActionLogPanel() {
+  actionLogPanelIsOpen() ? closeActionLogPanel() : openActionLogPanel();
+}
+
+function clearActionLog() {
+  _actionLog = [];
+  saveActionLog();
+  if (_actionLogPanelOpen) renderActionLogPanel();
+}
+
+const ACTION_LOG_ICONS = {
+  read: "📖", write: "✏️", delete: "🗑", tool: "⚙️", git: "🔧",
+};
+
+function renderActionLogPanel() {
+  const list = $("#actionLogList");
+  if (!list) return;
+
+  if (!_actionLog.length) {
+    list.innerHTML = `<div class="alp-empty">No actions recorded yet.<br><br>Actions from agent runs will appear here.</div>`;
+    return;
+  }
+
+  // Show newest first
+  const entries = [..._actionLog].reverse();
+
+  list.innerHTML = entries.map((e) => {
+    const icon = ACTION_LOG_ICONS[e.kind] || "⚙️";
+    const cls = "alp-entry alp-" + e.kind;
+    const timeStr = new Date(e.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const pathHtml = e.path ? `<div class="alp-path">${escapeHtml(e.path)}</div>` : "";
+    return `<div class="${cls}">
+      <span class="alp-icon">${icon}</span>
+      <span class="alp-body">
+        <span class="alp-detail">${escapeHtml(e.detail)}</span>
+        ${pathHtml}
+      </span>
+      <span class="alp-time">${timeStr}</span>
+    </div>`;
+  }).join("");
 }
 
 // Choose (or create) the GitHub repo for a new session.
@@ -2949,6 +3090,17 @@ $("#sessionRenameBtn").onclick = () => {
 const _sessionSearch = $("#sessionSearch");
 if (_sessionSearch) _sessionSearch.addEventListener("input", (e) => renderSessionPanel(e.target.value));
 initSessionSwipe();
+// Action log panel (slides in from the right)
+$("#actionLogTab").onclick = toggleActionLogPanel;
+$("#actionLogPanelClose").onclick = closeActionLogPanel;
+$("#actionLogBackdrop").onclick = closeActionLogPanel;
+$("#actionLogClearBtn").onclick = () => {
+  if (_actionLog.length) {
+    modal("Clear action log",
+      `<div class="hint">Delete all ${_actionLog.length} recorded actions? This cannot be undone.</div>`,
+      () => { clearActionLog(); closeSheet("#modal"); });
+  }
+};
 document.querySelectorAll("[data-act]").forEach((b) => {
   b.onclick = () => { closeSheet("#menu"); (actions[b.dataset.act] || (() => {}))(); };
 });
@@ -3036,6 +3188,7 @@ const _implEffortSel = $("#implEffortSelect");
 if (_implEffortSel) _implEffortSel.onchange = onImplEffortChange;
 // Boot
 (async function () {
+  loadActionLog();
   try { await refreshHeader(); await loadHistory(); } catch (e) {}
   // If a run outlived the previous UI (backgrounded, rotated on an old build,
   // OTA reload), pick its progress back up instead of looking dead.
