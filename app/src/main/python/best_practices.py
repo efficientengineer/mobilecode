@@ -161,6 +161,18 @@ PRACTICES = [
               "portrait", "rotat"],
      "text": "Verify on a real mid-range phone in both orientations with a notch "
              "— the desktop preview misrepresents size, touch, and speed."},
+    # --- tunables in one place (any mobile web project) ---
+    {"scope": "web", "core": True,
+     "tags": ["speed", "fast", "slow", "tune", "tweak", "adjust", "balanc",
+              "difficult", "config", "number", "constant", "value", "setting",
+              "bigger", "smaller", "size", "spawn", "rate", "color", "colour",
+              "feel", "gravity", "jump", "damage", "health", "score"],
+     "text": "EVERY tunable number (speeds, sizes, spawn rates, colors, "
+             "difficulty, damage) goes in config.js — one flat window.config "
+             "object — and logic reads config.<name>. Never bury a magic "
+             "constant in a logic file; add a named knob instead. Then "
+             "'make it faster'-style requests are one-line config edits the "
+             "user can even do themselves."},
     # --- security (any mobile web project) ---
     {"scope": "web", "core": True,
      "tags": ["api", "key", "secret", "token", "password", "auth", "login",
