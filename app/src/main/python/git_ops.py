@@ -1232,24 +1232,51 @@ def balances() -> str:
 
 
 def balance_value(_=None) -> str:
-    """Structured balance for the UI. JSON: {deepseek: number|null, currency}."""
+    """Structured balance for the UI.
+    JSON: {deepseek: n|null, anthropic: n|null, openai: n|null, currency: str}
+    Anthropic does not expose a balance API — always null."""
     import urllib.request
+    import urllib.error
+
+    out: dict = {"deepseek": None, "anthropic": None, "openai": None, "currency": ""}
+
+    # -- DeepSeek ----------------------------------------------------------------
     ds_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-    out = {"deepseek": None, "currency": ""}
     if ds_key:
         try:
             req = urllib.request.Request(
                 "https://api.deepseek.com/user/balance",
-                headers={"Authorization": f"Bearer {ds_key}", "Accept": "application/json"},
+                headers={"Authorization": f"Bearer {ds_key}",
+                         "Accept": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=20) as r:
+            with urllib.request.urlopen(req, timeout=15) as r:
                 info = json.loads(r.read().decode())
             infos = info.get("balance_infos", [])
             if infos:
                 out["deepseek"] = float(infos[0].get("total_balance", 0) or 0)
-                out["currency"] = infos[0].get("currency", "")
+                out["currency"] = infos[0].get("currency", "") or out["currency"]
         except Exception:
             pass
+
+    # -- OpenAI (credit grants — may fail for keys without billing access) -------
+    oa_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if oa_key:
+        try:
+            req = urllib.request.Request(
+                "https://api.openai.com/v1/dashboard/billing/credit_grants",
+                headers={"Authorization": f"Bearer {oa_key}",
+                         "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as r:
+                info = json.loads(r.read().decode())
+            grants = info.get("grants", {}).get("data", []) if isinstance(info, dict) else []
+            total = sum(float(g.get("amount", 0) or 0) for g in grants)
+            out["openai"] = total
+        except Exception:
+            pass
+
+    # Anthropic — no balance API; stays null.
+
     return json.dumps(out)
 
 
