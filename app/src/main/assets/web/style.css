@@ -311,7 +311,7 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 /* Session panel toggle tab (right edge, vertical "Sessions" text) */
 #sessionTab {
   position: fixed;
-  z-index: 65;
+  z-index: 58;
   right: 0;
   top: 50%;
   transform: translateY(-50%);
@@ -343,7 +343,8 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   color: var(--text);
 }
 #sessionTab.panel-open {
-  /* Tab stays pinned at the right edge for one-handed access; panel slides under it */
+  /* Pop above the session panel so the tab stays tappable, but still below the chat drawer. */
+  z-index: 61;
   opacity: 1;
   pointer-events: auto;
   background: var(--panel);
@@ -544,14 +545,14 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 #chatFab { position: fixed; z-index: 20; right: 14px; bottom: 16px; width: 56px; height: 56px;
   border-radius: 28px; background: var(--accent); color: #fff; font-size: 24px; border: none;
   display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(0,0,0,.5); }
-#chatFab.chat-open { z-index: 65; }
+#chatFab.chat-open { z-index: 67; }
 #chatFab:active { opacity: .85; }
 #chatFab .unread { position: absolute; top: 8px; right: 10px; width: 12px; height: 12px;
   border-radius: 6px; background: #f87171; border: 2px solid var(--accent); }
 #chatFab .unread.hidden { display: none; }
-#chatBackdrop { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 55; }
+#chatBackdrop { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 57; }
 #chatBackdrop.hidden { display: none; }
-#chatDrawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 60;
+#chatDrawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 62;
   width: min(440px, 92vw); background: var(--panel); border-left: 1px solid var(--border);
   display: flex; flex-direction: column; transform: translateX(100%);
   transition: transform .22s ease; box-shadow: -6px 0 24px rgba(0,0,0,.4); }
