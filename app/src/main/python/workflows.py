@@ -29,12 +29,7 @@ _LENSES = ["minimalist and elegant", "chaotic and playful", "narrative-driven",
 
 
 def _free_default() -> str:
-    has_key = bool(
-        os.environ.get("ANTHROPIC_API_KEY", "").strip() or
-        os.environ.get("DEEPSEEK_API_KEY", "").strip() or
-        os.environ.get("OPENAI_API_KEY", "").strip()
-    )
-    return "deepseek/deepseek-v4-pro" if has_key else "deepseek/deepseek-chat"
+    return "deepseek/deepseek-chat"
 
 
 def _lead():
