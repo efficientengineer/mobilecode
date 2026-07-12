@@ -754,13 +754,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     // --- Speech -----------------------------------------------------------
-    // Naive single-shot dictation: one recognizer session per Speak press,
-    // ended by the trailing-silence window (default 7s). The old auto-restart
-    // loop kept re-triggering the mic and raced the toggle (you often had to
-    // press twice), so it's gone — the session ends when you stop talking.
+    // Continuous dictation: the recognizer auto-restarts on every onEndOfSpeech
+    // / onResults so the mic stays open until the user taps Stop. Accumulated
+    // text is sent as speech-partial updates; the UI builds the final string.
+    // The old single-shot design fired onResults after ~1 s of silence and
+    // closed the mic, which made long dictation impossible.
 
     private var dictating = false
     private var speechIntent: Intent? = null
+    // Running transcript accumulated across recognizer restarts.
+    private var spokenWords = mutableListOf<String>()
 
     private fun silenceMs(): Int =
         getSharedPreferences("keys", MODE_PRIVATE)
@@ -771,8 +774,6 @@ class MainActivity : AppCompatActivity() {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            // Trailing silence before ending (honored on some devices; auto-
-            // restart covers the rest). Tunable in Settings, no APK needed.
             val ms = silenceMs()
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, ms)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, ms)
@@ -785,46 +786,82 @@ class MainActivity : AppCompatActivity() {
             return
         }
         dictating = true
+        spokenWords.clear()
         if (speech == null) {
             speech = SpeechRecognizer.createSpeechRecognizer(this).apply {
                 setRecognitionListener(object : RecognitionListener {
                     override fun onResults(results: Bundle?) {
                         val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             ?.firstOrNull()?.trim().orEmpty()
-                        if (t.isNotEmpty()) event("speech-final", t)
-                        // Single shot: the session is over — reset the toggle.
-                        dictating = false
-                        event("status", "")
-                        event("dictation", "off")
+                        if (t.isNotEmpty()) {
+                            spokenWords.add(t)
+                            event("speech-partial", spokenWords.joinToString(" "))
+                        }
+                        // Restart immediately — the user hasn't pressed Stop.
+                        if (dictating) restartRecognizer()
                     }
                     override fun onError(error: Int) {
-                        dictating = false
-                        event("status", "")
-                        event("dictation", "off")   // tell the UI to reset the mic
+                        if (!dictating) {
+                            event("status", "")
+                            event("dictation", "off")
+                            return
+                        }
+                        // Transient errors (e.g. no match, network timeout) —
+                        // restart rather than killing the session.
+                        when (error) {
+                            SpeechRecognizer.ERROR_NO_MATCH,
+                            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+                                if (dictating) restartRecognizer()
+                            }
+                            else -> {
+                                dictating = false
+                                event("status", "Speech error $error")
+                                event("dictation", "off")
+                            }
+                        }
                     }
                     override fun onReadyForSpeech(params: Bundle?) { event("status", "Listening…") }
-                    override fun onEndOfSpeech() {}
+                    override fun onEndOfSpeech() {
+                        // Silence detected — the recognizer will fire onResults
+                        // shortly. Don't stop; onResults will auto-restart.
+                    }
                     override fun onBeginningOfSpeech() {}
                     override fun onRmsChanged(rmsdB: Float) {}
                     override fun onBufferReceived(buffer: ByteArray?) {}
                     override fun onPartialResults(partialResults: Bundle?) {
                         val t = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             ?.firstOrNull()?.trim().orEmpty()
-                        if (t.isNotEmpty()) event("speech-partial", t)
+                        if (t.isNotEmpty()) {
+                            // Merge with accumulated words: show full transcript so far.
+                            val parts = mutableListOf<String>().apply { addAll(spokenWords); add(t) }
+                            event("speech-partial", parts.joinToString(" "))
+                        }
                     }
                     override fun onEvent(eventType: Int, params: Bundle?) {}
                 })
             }
         }
         speechIntent = buildSpeechIntent()
-        // Cancel any lingering session first — a busy recognizer silently ignores
-        // startListening, which is why the button sometimes needed two presses.
         try { speech?.cancel() } catch (_: Throwable) {}
         try { speech?.startListening(speechIntent) } catch (_: Throwable) {}
     }
 
+    private fun restartRecognizer() {
+        try { speech?.cancel() } catch (_: Throwable) {}
+        // Small delay to let the recognizer fully release before restarting.
+        android.os.Handler(mainLooper).postDelayed({
+            if (dictating) {
+                try { speech?.startListening(speechIntent) } catch (_: Throwable) {}
+            }
+        }, 200)
+    }
+
     private fun stopDictation() {
         dictating = false
+        // Send the final accumulated transcript.
+        val final = spokenWords.joinToString(" ").trim()
+        if (final.isNotEmpty()) event("speech-final", final)
+        spokenWords.clear()
         try { speech?.cancel() } catch (_: Throwable) {}
         event("status", "")
     }
