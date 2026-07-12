@@ -3130,6 +3130,7 @@ function composeOpen(focus) {
   const drawer = $("#chatDrawer");
   if (drawer) drawer.classList.add("composing");
   syncComposePad();
+  updateSubmitButtons();
 }
 function composeReset() {
   const i = $("#input");
@@ -3138,6 +3139,7 @@ function composeReset() {
   if (b) b.classList.add("hidden");
   const drawer = $("#chatDrawer");
   if (drawer) { drawer.classList.remove("composing"); drawer.style.removeProperty("--compose-pad"); }
+  updateSubmitButtons();
 }
 $("#composeClose").onclick = () => { stopDictation(); composeReset(); };
 $("#sendBtn").onclick = () => {
@@ -3164,10 +3166,16 @@ $("#askBtn").onclick = () => {
   composeReset();
   askEphemeral(t);
 };
+function updateSubmitButtons() {
+  const hasText = !!$("#input").value.trim();
+  $("#simpleSubmitBtn").classList.toggle("hidden", !hasText);
+  $("#smartSubmitBtn").classList.toggle("hidden", !hasText);
+}
 $("#input").addEventListener("input", (e) => {
   e.target.style.height = "auto";
   e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px";
   syncComposePad();   // grow the reserved chat space with the textarea
+  updateSubmitButtons();
 });
 const _usageChip = $("#usage");
 if (_usageChip) _usageChip.onclick = showUsageDetail;

@@ -257,6 +257,7 @@ pre.small { white-space: pre-wrap; word-wrap: break-word; background: var(--bg);
   background: var(--panel); border-top: 1px solid var(--border); }
 .c-spacer { flex: 1; min-width: 56px; }
 .c-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; flex-shrink: 0; }
+#simpleSubmitBtn.hidden, #smartSubmitBtn.hidden { display: none; }
 #composeBox { position: absolute; bottom: 62px; left: 10px; right: 10px; z-index: 8;
   background: var(--panel2); border: 1px solid var(--border); border-radius: 14px;
   padding: 10px 40px 10px 12px; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
