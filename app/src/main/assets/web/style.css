@@ -294,14 +294,14 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 #advSection.hidden { display: none; }
 
 /* Main area: editor pane fills it; an empty-state shows when nothing is open. */
-#editorEmpty { flex: 1; display: flex; flex-direction: column; min-height: 0;
-  color: var(--muted); }
+#editorEmpty { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  overflow: hidden; color: var(--muted); }
 #editorEmpty.hidden { display: none; }
 .ee-head { flex-shrink: 0; font-size: 14px; font-weight: 700; color: var(--text);
   padding: 10px 14px 6px; border-bottom: 1px solid var(--border);
   display: flex; align-items: center; gap: 6px; }
 /* Inline action log (fills the empty-state area, scrolls independently) */
-.alp-inline { flex: 1; overflow-y: auto; padding: 4px 0; }
+.alp-inline { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 4px 0; word-break: break-word; }
 #editorPane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 #editorPane.hidden { display: none; }
 
@@ -829,6 +829,7 @@ pre.filebody.diff { font-size: 12px; }
 #actionLogList {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 4px 0 12px;
 }
 
@@ -865,6 +866,7 @@ pre.filebody.diff { font-size: 12px; }
   font-size: 11.5px;
   color: var(--accent);
   margin-top: 2px;
+  word-break: break-all;
 }
 .alp-entry .alp-time {
   font-size: 10.5px;
