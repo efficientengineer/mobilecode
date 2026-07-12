@@ -34,21 +34,8 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
   border-radius: 18px; font-size: 14px; font-weight: 600; display: flex;
   align-items: center; gap: 4px; box-shadow: 0 2px 8px rgba(0,0,0,.45); }
 .fab:active { background: var(--border); }
-#githubFab { left: 10px; max-width: 45vw; }
-#playFab { right: 10px; padding: 0 14px; justify-content: center; font-size: 15px;
-  background: #16a34a; color: #fff; border-color: transparent; min-width: 44px; }
-#playFab.update-fab { background: #16a34a; }
-#playFab.running { color: transparent; pointer-events: none; }
-#playFab.running::after { content: ""; position: absolute; top: 50%; left: 50%; margin: -8px 0 0 -8px;
-  width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff;
-  border-radius: 50%; animation: fab-spin .7s linear infinite; }
-@keyframes fab-spin { to { transform: rotate(360deg); } }
-#menuFab { right: 58px; width: 40px; justify-content: center; font-size: 18px; padding: 0; }
-#actionsFab { right: 106px; width: 40px; justify-content: center; font-size: 20px; padding: 0; }
-.usagechip { position: fixed; z-index: 40; top: 29px; left: 50%; transform: translateX(-50%);
-  background: var(--panel2); border: 1px solid var(--border); border-radius: 14px;
-  padding: 4px 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.usagechip.hidden { display: none; }
+#githubFab { left: 10px; }
+#menuFab { right: 10px; width: 40px; justify-content: center; font-size: 18px; padding: 0; }
 
 .fabmenu { position: fixed; z-index: 45; background: var(--panel); border: 1px solid var(--border);
   border-radius: 12px; padding: 6px; min-width: 180px; max-width: 74vw; max-height: 60vh;
@@ -709,9 +696,6 @@ pre.filebody.diff { font-size: 12px; }
 #todos-body { display: none; padding: 0 12px 10px; max-height: 32vh; overflow-y: auto;
   border-top: 1px solid var(--border); }
 #todos.open #todos-body { display: block; }
-
-/* Usage / cache chip — see the primary .usagechip block above for position. */
-.usagechip { font-variant-numeric: tabular-nums; }
 
 /* Settings checkbox row */
 .checkrow { display: flex; align-items: center; gap: 8px; }

@@ -23,7 +23,6 @@ async function checkVersion() {
       if (kv.length === 2) obj[kv[0]] = kv[1];
     });
     const dirty = obj.dirty === "1";
-    updateAppBadge(dirty);
     // Auto-update when a newer version is available, the agent isn't running,
     // and we haven't already triggered an update this session.
     if (dirty && !running && !_autoUpdateLock) {
@@ -43,12 +42,7 @@ async function checkVersion() {
   }
 }
 
-function updateAppBadge(dirty) {
-  const btn = document.querySelector('[data-act="updateApp"]');
-  if (btn) {
-    btn.textContent = dirty ? "⬆ Update app" : "Update app ✓";
-  }
-}
+
 function call(action, arg) {
   return new Promise((resolve, reject) => {
     const id = "r" + (++_req);
@@ -240,7 +234,7 @@ async function refreshHeader() {
   const fab = $("#githubFab");
   if (fab) {
     const shortRepo = m.activeRepo ? m.activeRepo.split("/").pop() : "";
-    fab.textContent = "GitHub ▾" + (shortRepo ? " · " + shortRepo : "") + " · " + branch;
+    fab.textContent = "GitHub ▸";
   }
   // Model picker labels in the chat drawer.
   const mn = $("#modelName");
@@ -283,53 +277,11 @@ function fmtK(n) {
 
 // Show the last run's token usage with the CACHE HIT % up front — a high %
 // means the prompt cache is doing its job (repeated context billed cheaply).
-let _lastUsage = null;
-async function refreshUsage() {
-  const el = $("#usage");
-  if (!el) return;
-  try {
-    const u = JSON.parse((await call("orch", { fn: "get_usage" })).text);
-    _lastUsage = u;
-    const inp = u.input || 0, cr = u.cache_read || 0, out = u.output || 0;
-    if (!inp && !out) { el.classList.add("hidden"); return; }
-    const pct = inp ? Math.round((100 * cr) / inp) : 0;
-    el.classList.remove("hidden");
-    el.textContent = `⚡${pct}% cached · ${fmtK(inp)}↓ ${fmtK(out)}↑`;
-    el.title = `${inp} input tokens (${cr} cached, ${inp - cr} new) · ${out} output · ${u.calls || 0} model calls`;
-  } catch (e) {}
-}
-function showUsageDetail() {
-  const u = _lastUsage;
-  if (!u) return;
-  const inp = u.input || 0, cr = u.cache_read || 0, out = u.output || 0;
-  const pct = inp ? Math.round((100 * cr) / inp) : 0;
-  // Per-model breakdown (orchestrator vs implementer vs any others).
-  const bm = u.byModel || {};
-  const models = Object.keys(bm).sort((a, b) =>
-    (bm[b].input + bm[b].output) - (bm[a].input + bm[a].output));
-  let perModel = "";
-  if (models.length) {
-    perModel = `<div class="group-title">By model</div>` + models.map((m) => {
-      const v = bm[m], mcr = v.cache_read || 0, mi = v.input || 0;
-      const mp = mi ? Math.round((100 * mcr) / mi) : 0;
-      return `<div class="list-item"><span>${escapeHtml(m)}</span>
-        <b>${fmtK(mi)}↓ ${fmtK(v.output || 0)}↑ · ${v.calls || 0} calls · ${mp}% cached</b></div>`;
-    }).join("");
-  }
-  modal("Tokens this run",
-    `<div class="list-item"><span>Input total</span><b>${inp}</b></div>
-     <div class="list-item"><span>&nbsp;&nbsp;· cached (cheap)</span><b>${cr} · ${pct}%</b></div>
-     <div class="list-item"><span>&nbsp;&nbsp;· new (full price)</span><b>${inp - cr}</b></div>
-     <div class="list-item"><span>Output</span><b>${out}</b></div>
-     <div class="list-item"><span>Model calls</span><b>${u.calls || 0}</b></div>
-     ${perModel}
-     <div class="hint">A high <b>cached %</b> means repeated context is being billed at a fraction of the price — the prompt cache is working. The by-model split shows orchestrator vs implementer spend. Actual dollars show in the balance chip.</div>`);
-}
+
 
 
 function refreshStats() {
   refreshBalance();
-  refreshUsage();
   refreshAttachBar();
 }
 
@@ -2773,9 +2725,8 @@ async function askEphemeral(q) {
 
 // --- Floating controls (menu / model picker / actions catch-all) ---------
 function closeFabMenus() {
-  const mm = $("#modelMenu"), am = $("#actionsMenu"), cm = $("#chatActionsMenu"), gm = $("#githubMenu"), xm = $("#ctxMenu");
+  const mm = $("#modelMenu"), cm = $("#chatActionsMenu"), gm = $("#githubMenu"), xm = $("#ctxMenu");
   if (mm) mm.classList.add("hidden");
-  if (am) am.classList.add("hidden");
   if (cm) cm.classList.add("hidden");
   if (gm) gm.classList.add("hidden");
   if (xm) xm.classList.add("hidden");
@@ -2922,25 +2873,7 @@ async function openModelMenu(role, anchor) {
 
   render();
 }
-const ACTION_ITEMS = [
-  { label: "Clear context", act: "clearContext" },
-  { label: "Files", act: "files" },
-  { label: "Diff", act: "diff" },
-  { label: "Commit", act: "commit" },
-  { label: "Push", act: "push" },
-  { label: "Pull", act: "pull" },
-];
-function openActionsMenu() {
-  const menu = $("#actionsMenu");
-  if (!menu.classList.contains("hidden")) { menu.classList.add("hidden"); return; }
-  closeFabMenus();
-  menu.innerHTML = ACTION_ITEMS.map((a) => `<div class="fab-item" data-fabact="${a.act}">${a.label}</div>`).join("");
-  positionFabMenu(menu, $("#actionsFab"), "right");
-  menu.classList.remove("hidden");
-  menu.querySelectorAll("[data-fabact]").forEach((el) => {
-    el.onclick = () => { menu.classList.add("hidden"); (actions[el.getAttribute("data-fabact")] || (() => {}))(); };
-  });
-}
+
 // Chat-relevant actions (context + guidelines), opened from the drawer's ⋯.
 const CHAT_ACTION_ITEMS = [
   { label: "Clear context", act: "clearContext" },
@@ -3258,12 +3191,9 @@ async function runScript() {
 $("#menuFab").onclick = () => { closeFabMenus(); const s = $("#menuSearch"); if (s) s.value = ""; renderPalette(""); openSheet("#menu"); };
 const _menuSearch = $("#menuSearch");
 if (_menuSearch) _menuSearch.addEventListener("input", (e) => renderPalette(e.target.value));
-$("#actionsFab").onclick = (e) => { e.stopPropagation(); openActionsMenu(); };
+
 $("#githubFab").onclick = (e) => { e.stopPropagation(); openGithubMenu(); };
-$("#playFab").onclick = async () => {
-  closeFabMenus();
-  await actions.updateApp();
-};
+
 // Preview fab: toggle the inline preview pane.
 $("#previewFab").onclick = togglePreview;
 $("#previewClose").onclick = closePreview;
@@ -3439,8 +3369,7 @@ $("#input").addEventListener("input", (e) => {
   syncComposePad();   // grow the reserved chat space with the textarea
   updateSubmitButtons();
 });
-const _usageChip = $("#usage");
-if (_usageChip) _usageChip.onclick = showUsageDetail;
+
 const _todosHead = $("#todos-head");
 if (_todosHead) _todosHead.onclick = () => {
   const open = $("#todos").classList.toggle("open");
