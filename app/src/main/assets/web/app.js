@@ -3166,9 +3166,9 @@ function syncComposePad() {
   const drawer = $("#chatDrawer");
   if (!drawer || !drawer.classList.contains("composing")) return;
   const box = $("#composeBox");
-  // composeBox sits 62px above the drawer bottom (over the composer bar); reserve
+  // composeBox sits 88px above the drawer bottom (over the composer bar); reserve
   // that plus its height plus a small gap.
-  const pad = 62 + (box ? box.offsetHeight : 80) + 16;
+  const pad = 88 + (box ? box.offsetHeight : 80) + 16;
   drawer.style.setProperty("--compose-pad", pad + "px");
   if (chat) chat.scrollTop = chat.scrollHeight;
 }
