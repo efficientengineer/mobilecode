@@ -3245,6 +3245,7 @@ if (_implEffortSel) _implEffortSel.onchange = onImplEffortChange;
 // Boot
 (async function () {
   loadActionLog();
+  renderActionLogInline();  // populate the main-screen inline log on boot
   try { await refreshHeader(); await loadHistory(); } catch (e) {}
   // Restore the last task checklist — a run that finished while the app was
   // backgrounded left its final state on disk, and the live poller is gone.
