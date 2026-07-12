@@ -432,8 +432,9 @@
   function init() {
     editBtn = document.getElementById('editModeFab');
     if (!editBtn) {
-      console.warn('Edit mode: #editModeFab not found, retrying in 500ms');
-      setTimeout(init, 500);
+      // Edit mode toggle button removed — edit mode only accessible via keyboard (Escape toggles still works? No.)
+      // Degrade gracefully: edit mode is no longer available.
+      console.warn('Edit mode: #editModeFab not found, edit mode disabled.');
       return;
     }
 

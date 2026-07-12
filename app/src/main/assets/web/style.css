@@ -92,9 +92,12 @@ button { font: inherit; color: var(--text); border: none; cursor: pointer; }
 .tab .tab-x { color: var(--muted); font-size: 14px; padding: 0 2px; border-radius: 6px; }
 
 /* Subtle status bar below tabs: session name · repo · branch — always visible. */
-#subtitle { flex-shrink: 0; display: flex; align-items: center; gap: 6px;
-  background: var(--bg); border-bottom: 1px solid var(--border); padding: 3px 10px;
-  font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+#subtitle { flex-shrink: 0; display: grid; grid-template-columns: 1fr 1fr 1fr; grid-template-rows: auto auto;
+  gap: 2px 6px; background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 3px 10px; font-size: 12px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; }
+.sub-label { font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--muted); }
 #subRepo { color: var(--accent); }
 #subBranch { color: #4ade80; }
 .tab .tab-x:active { color: #f87171; background: var(--border); }
