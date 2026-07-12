@@ -16,6 +16,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import android.net.Uri
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
@@ -760,6 +761,7 @@ class MainActivity : AppCompatActivity() {
     // The old single-shot design fired onResults after ~1 s of silence and
     // closed the mic, which made long dictation impossible.
 
+    private val SPEECH_TAG = "SpeechDict"
     private var dictating = false
     private var speechIntent: Intent? = null
     // Running transcript accumulated across recognizer restarts.
@@ -770,6 +772,8 @@ class MainActivity : AppCompatActivity() {
     // onResults after a pause, so no spoken words are ever lost on restart.
     private var lastPartial = ""
 
+    private fun firstWord(s: String) = s.trim().substringBefore(' ')
+
     private fun commitPartial() {
         val p = lastPartial.trim()
         if (p.isNotEmpty()) {
@@ -777,6 +781,7 @@ class MainActivity : AppCompatActivity() {
             event("speech-partial", spokenWords.joinToString(" "))
         }
         lastPartial = ""
+        Log.d(SPEECH_TAG, "commit -> words=$spokenWords")
     }
 
     private fun silenceMs(): Int =
@@ -811,6 +816,7 @@ class MainActivity : AppCompatActivity() {
                     override fun onResults(results: Bundle?) {
                         val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             ?.firstOrNull()?.trim().orEmpty()
+                        Log.d(SPEECH_TAG, "onResults t='$t' lastPartial='$lastPartial'")
                         if (t.isNotEmpty()) {
                             if (lastPartial.isEmpty() && spokenWords.isNotEmpty()) {
                                 // onEndOfSpeech already committed this phrase from
@@ -827,6 +833,7 @@ class MainActivity : AppCompatActivity() {
                         if (dictating) restartRecognizer(50)
                     }
                     override fun onError(error: Int) {
+                        Log.d(SPEECH_TAG, "onError $error lastPartial='$lastPartial'")
                         if (!dictating) {
                             event("status", "")
                             event("dictation", "off")
@@ -853,6 +860,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     override fun onReadyForSpeech(params: Bundle?) { event("status", "Listening…") }
                     override fun onEndOfSpeech() {
+                        Log.d(SPEECH_TAG, "onEndOfSpeech lastPartial='$lastPartial'")
                         // A pause ends the current phrase. Commit it immediately so
                         // it accumulates — many devices keep one recognizer session
                         // alive across pauses and never fire onResults, resetting
@@ -866,6 +874,7 @@ class MainActivity : AppCompatActivity() {
                     override fun onPartialResults(partialResults: Bundle?) {
                         val t = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             ?.firstOrNull()?.trim().orEmpty()
+                        Log.d(SPEECH_TAG, "onPartial t='$t' lastPartial='$lastPartial' words=$spokenWords")
                         if (t.isNotEmpty()) {
                             // If a prior onEndOfSpeech committed this phrase but the
                             // device is actually still emitting cumulative partials
@@ -874,6 +883,20 @@ class MainActivity : AppCompatActivity() {
                             if (lastPartial.isEmpty() && spokenWords.isNotEmpty() &&
                                 t.startsWith(spokenWords.last(), ignoreCase = true)) {
                                 lastPartial = spokenWords.removeAt(spokenWords.size - 1)
+                            }
+                            // Some recognizers reset their partial buffer at a pause
+                            // WITHOUT any callback (no onEndOfSpeech/onResults/onError)
+                            // and start the next phrase fresh. Detect the reset: the
+                            // new partial is shorter than the in-progress phrase and
+                            // no longer extends it — commit the finished phrase first
+                            // so it isn't overwritten. Mid-phrase revisions keep the
+                            // same opening word (or grow), so they don't trip this.
+                            if (lastPartial.isNotEmpty() &&
+                                t.length < lastPartial.length &&
+                                !lastPartial.startsWith(t, ignoreCase = true) &&
+                                !firstWord(t).equals(firstWord(lastPartial), ignoreCase = true)) {
+                                Log.d(SPEECH_TAG, "partial reset detected — committing '$lastPartial'")
+                                commitPartial()
                             }
                             // Track the in-progress text so it can be committed
                             // when this session ends (via onEndOfSpeech / onResults).
