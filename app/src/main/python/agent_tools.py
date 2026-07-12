@@ -39,14 +39,19 @@ TOUCHED = set()
 # here was CREATED this run. Lets the structure gate flag only debt the run
 # introduced instead of re-litigating pre-existing files on unrelated edits.
 _BASELINE_LINES = {}
+# Same idea in bytes, for EVERY file (stat only): backs the asset-size gate
+# and the created-this-run test for non-source files.
+_BASELINE_BYTES = {}
 
 
 def reset_touched() -> None:
     TOUCHED.clear()
     _BASELINE_LINES.clear()
+    _BASELINE_BYTES.clear()
     try:
         import projectmap as pm
         _BASELINE_LINES.update(pm.line_counts(_workspace()))
+        _BASELINE_BYTES.update(pm.byte_sizes(_workspace()))
     except Exception:
         pass
 
@@ -638,16 +643,62 @@ def check_structure_files(paths=None) -> str:
     try:
         import projectmap as pm
         created = [p for p in touched
-                   if str(p).replace("\\", "/") not in _BASELINE_LINES]
-        return pm.check_structure(touched, created, _BASELINE_LINES)
+                   if str(p).replace("\\", "/") not in _BASELINE_BYTES]
+        return pm.check_structure(touched, created, _BASELINE_LINES,
+                                  baseline_bytes=_BASELINE_BYTES)
     except Exception:
         return ""
+
+
+def js_long_functions(paths=None, cap=120) -> str:
+    """Heuristic long-function report for JS (brace counting on the
+    comment/string-stripped source). Advisory only — a parser-less scan is
+    not reliable enough to gate a run on, so this surfaces in the
+    check_structure TOOL output but never auto-fails verification."""
+    root = _workspace()
+    if paths is None:
+        paths = sorted(TOUCHED)
+    out = []
+    for rel in paths:
+        if not str(rel).lower().endswith((".js", ".mjs")):
+            continue
+        fp = root / rel
+        if not fp.is_file():
+            continue
+        try:
+            src = _strip_js_noncode(
+                fp.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            continue
+        for m in re.finditer(r"\bfunction\b[^{;]*\{", src):
+            i = m.end() - 1
+            depth, j = 0, i
+            while j < len(src):
+                if src[j] == "{":
+                    depth += 1
+                elif src[j] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            n = src.count("\n", i, j) + 1
+            if n > cap:
+                line = src.count("\n", 0, m.start()) + 1
+                out.append(f"{rel}:{line}: a function of ~{n} lines (cap "
+                           f"{cap}) — consider splitting it")
+    return "\n".join(out)
 
 
 def t_check_structure(paths="", **_):
     lst = [p.strip() for p in str(paths).split(",") if p.strip()] or None
     out = check_structure_files(lst)
-    return out or "OK — structure is context-friendly"
+    soft = js_long_functions(lst)
+    parts = []
+    if out:
+        parts.append(out)
+    if soft:
+        parts.append("POSSIBLE ISSUES (not blocking):\n" + soft)
+    return "\n\n".join(parts) or "OK — structure is context-friendly"
 
 
 TEST_TIMEOUT = int(os.environ.get("AGENT_TEST_TIMEOUT", "30"))

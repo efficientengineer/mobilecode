@@ -144,10 +144,35 @@ _ERRORS_JS = """// errors.js — on-device error overlay. A phone has no devtool
 })();
 """
 
-# Every web template's index.html loads these three (errors first, so it
-# catches failures in every later script) and ships them via _SHARED_FILES.
+_CONFIG_JS = """// config.js — EVERY tunable number lives here, in one flat object. Change
+// how the app feels by editing these values; NEVER bury a constant in a
+// logic file — add a knob here and read it as config.<name>. This is the
+// file to tweak for "faster / bigger / more" requests.
+window.config = {
+  playerSpeed: 200,   // px per second (canvas/Phaser starters)
+  playerStep: 0.15,   // world units per frame (Babylon starter)
+};
+"""
+
+_README = """# My app
+
+Built with mobilecode. Change it by asking for changes — or tweak numbers
+yourself in `config.js` (speeds, sizes: every tunable lives there).
+
+How the files fit together:
+- `config.js` — all tunable numbers, in one place
+- `events.js` — the event bus: features talk through named events
+- `store.js`  — shared state, auto-saved to localStorage
+- `errors.js` — shows crashes on screen (phones have no devtools)
+
+Keep this file updated: what the app is, what each file does.
+"""
+
+# Every web template's index.html loads these (errors first, so it catches
+# failures in every later script) and ships them via _SHARED_FILES.
 _SHARED_FILES = {"errors.js": _ERRORS_JS, "events.js": _EVENTS_JS,
-                 "store.js": _STORE_JS}
+                 "store.js": _STORE_JS, "config.js": _CONFIG_JS,
+                 "README.md": _README}
 
 
 # --- Babylon.js + PeerJS 3D multiplayer starter ------------------------------
@@ -171,6 +196,7 @@ _BABYLON_INDEX = """<!doctype html>
   <script src="errors.js"></script>
   <script src="events.js"></script>
   <script src="store.js"></script>
+  <script src="config.js"></script>
   <script src="controls.js"></script>
   <!-- Libraries loaded from pinned CDNs — never vendored into the repo. -->
   <script src="https://cdn.jsdelivr.net/npm/babylonjs@7/babylon.js"></script>
@@ -229,7 +255,7 @@ function startGame() {
   addEventListener("keyup", (e) => (input[e.key.toLowerCase()] = false));
 
   scene.onBeforeRenderObservable.add(() => {
-    const s = 0.15;
+    const s = config.playerStep;   // tune in config.js
     if (input["w"] || input["arrowup"]) me.position.z += s;
     if (input["s"] || input["arrowdown"]) me.position.z -= s;
     if (input["a"] || input["arrowleft"]) me.position.x -= s;
@@ -346,6 +372,7 @@ _STATIC_INDEX = """<!doctype html>
   <script src="errors.js"></script>
   <script src="events.js"></script>
   <script src="store.js"></script>
+  <script src="config.js"></script>
 </head>
 <body>
   <main><h1>Hello</h1><p>Edit the files and press Run to preview.</p></main>
@@ -378,6 +405,7 @@ _PHASER_INDEX = """<!doctype html>
   <script src="errors.js"></script>
   <script src="events.js"></script>
   <script src="store.js"></script>
+  <script src="config.js"></script>
   <script src="controls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
 </head>
@@ -400,7 +428,7 @@ function create() {
   cursors = this.input.keyboard.createCursorKeys();
 }
 function update() {
-  const b = player.body, s = 220;
+  const b = player.body, s = config.playerSpeed;   // tune in config.js
   b.setVelocity(0);
   if (cursors.left.isDown) b.setVelocityX(-s);
   if (cursors.right.isDown) b.setVelocityX(s);
@@ -424,6 +452,7 @@ _CHAT_INDEX = """<!doctype html>
   <script src="errors.js"></script>
   <script src="events.js"></script>
   <script src="store.js"></script>
+  <script src="config.js"></script>
 </head>
 <body>
   <div id="messages"></div>
@@ -473,6 +502,7 @@ _WEBGAME_INDEX = """<!doctype html>
   <script src="errors.js"></script>
   <script src="events.js"></script>
   <script src="store.js"></script>
+  <script src="config.js"></script>
   <script src="controls.js"></script>
 </head>
 <body>
@@ -494,7 +524,7 @@ _WEBGAME_INDEX = """<!doctype html>
       const dt = lastTime ? (time - lastTime) / 1000 : 1/60;
       lastTime = time;
 
-      const speed = 200 * dt;
+      const speed = config.playerSpeed * dt;   // tune in config.js
       if (keys["w"] || keys["arrowup"]) py -= speed;
       if (keys["s"] || keys["arrowdown"]) py += speed;
       if (keys["a"] || keys["arrowleft"]) px -= speed;

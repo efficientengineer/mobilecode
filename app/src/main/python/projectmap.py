@@ -243,6 +243,11 @@ MAX_FILE_LINES = int(os.environ.get("AGENT_MAX_FILE_LINES", "400"))
 MAX_LOCAL_IMPORTS = int(os.environ.get("AGENT_MAX_LOCAL_IMPORTS", "3"))
 HUB_FAN_IN = 3   # imported by >= this many files → shared hub (events/store)
 MAX_INLINE_SCRIPT = int(os.environ.get("AGENT_MAX_INLINE_SCRIPT", "40"))
+MAX_FILE_KB = int(os.environ.get("AGENT_MAX_FILE_KB", "200"))
+MAX_DATA_URI_KB = int(os.environ.get("AGENT_MAX_DATA_URI_KB", "32"))
+MAX_PY_FUNC_LINES = int(os.environ.get("AGENT_MAX_FUNC_LINES", "80"))
+
+_B64_RUN = re.compile(r"base64,([A-Za-z0-9+/=]{1000,})")
 
 _CDN_HOSTS = ("cdn.jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com",
               "esm.sh", "cdn.skypack.dev", "ga.jspm.io")
@@ -265,6 +270,43 @@ def line_counts(root: Path = None) -> dict:
                 encoding="utf-8", errors="replace").count("\n") + 1
         except Exception:
             pass
+    return out
+
+
+def byte_sizes(root: Path = None) -> dict:
+    """{relpath: bytes} for EVERY workspace file (not just source) — stat only,
+    so it's cheap. Files absent from a run-start snapshot were created that
+    run; sizes tell whether a file grew across the asset cap."""
+    root = root or _workspace()
+    skip = {".git", ".agent", "node_modules", "__pycache__"}
+    out = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in skip]
+        for name in filenames:
+            p = Path(dirpath) / name
+            try:
+                out[str(p.relative_to(root)).replace("\\", "/")] = \
+                    p.stat().st_size
+            except Exception:
+                pass
+    return out
+
+
+def _long_py_functions(text: str, cap: int) -> list:
+    """[(name, lineno, length)] for defs longer than `cap` lines — exact, via
+    ast, so it's safe to gate on."""
+    import ast
+    try:
+        tree = ast.parse(text)
+    except Exception:
+        return []          # syntax errors are the syntax gate's job
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
+                getattr(node, "end_lineno", None):
+            n = node.end_lineno - node.lineno + 1
+            if n > cap:
+                out.append((node.name, node.lineno, n))
     return out
 
 
@@ -295,7 +337,7 @@ def _cycles(graph: dict, within: set) -> list:
 
 
 def check_structure(touched, created=None, baseline_lines=None,
-                    root: Path = None) -> str:
+                    root: Path = None, baseline_bytes=None) -> str:
     """Deterministic context-friendliness check over this run's files.
     Returns one problem per line, '' when clean. Flags only debt the run
     itself introduced, so an unrelated edit never demands restructuring old
@@ -314,17 +356,54 @@ def check_structure(touched, created=None, baseline_lines=None,
       - a CDN <script>/import without a pinned version on a touched file,
       - a .js/.css file created this run that nothing loads (dead weight
         that confuses future runs),
-      - a file created this run with a non-URL-safe name."""
+      - a file created this run with a non-URL-safe name,
+      - ANY touched file that crossed MAX_FILE_KB this run (that size is an
+        embedded asset or vendored bundle, never hand-written code),
+      - a base64 data: URI over MAX_DATA_URI_KB in a source file that is new
+        or grew this run,
+      - a Python function over MAX_PY_FUNC_LINES in a file created this run
+        (exact, via ast),
+      - a run that creates an app entry (index.html / app.py / main.py)
+        without a README.md."""
     root = root or _workspace()
     graph = build_graph(root)
-    touched = {str(t).replace("\\", "/") for t in (touched or [])} & set(graph)
-    if not touched:
+    touched_raw = {str(t).replace("\\", "/") for t in (touched or [])}
+    touched = touched_raw & set(graph)
+    if not touched_raw:
         return ""
     created = ({str(c).replace("\\", "/") for c in created}
-               if created is not None else set(touched))
+               if created is not None else set(touched_raw))
     baseline_lines = baseline_lines or {}
+    baseline_bytes = baseline_bytes or {}
     hubs = {f for f, d in graph.items() if len(d["importedBy"]) >= HUB_FAN_IN}
     problems = []
+    # Size gate runs over ALL touched files (a pasted .json/.b64 asset is not
+    # in the source graph but is exactly what this catches).
+    cap_b = MAX_FILE_KB * 1024
+    for f in sorted(touched_raw):
+        fp = root / f
+        if not fp.is_file():
+            continue
+        try:
+            size = fp.stat().st_size
+        except Exception:
+            continue
+        was_b = baseline_bytes.get(f)
+        if size > cap_b and (was_b is None or was_b <= cap_b):
+            problems.append(
+                f"{f}: {size // 1024}KB (cap {MAX_FILE_KB}KB) — a file this "
+                "big is an embedded asset or vendored bundle, not hand-written "
+                "code. Load it by URL / move it to a hosted asset / compress "
+                "it")
+    # A run that creates an app entry must also leave a README.md behind —
+    # the human's "what is this app" and every future run's cheap orientation.
+    if any(os.path.basename(c) in ("index.html", "app.py", "main.py")
+           for c in created & touched_raw):
+        if not any((root / n).is_file() for n in ("README.md", "readme.md")):
+            problems.append(
+                "README.md missing — create a short one: what the app is, "
+                "what each file does, and that tunable numbers live in "
+                "config.js")
     for f in sorted(touched):
         try:
             text = (root / f).read_text(encoding="utf-8", errors="replace")
@@ -387,6 +466,23 @@ def check_structure(touched, created=None, baseline_lines=None,
             problems.append(
                 f"{f}: rename it — use only lowercase letters, digits, ., -, "
                 "_ and / so the path is URL-safe on every server")
+        was_b = baseline_bytes.get(f)
+        if is_new or was_b is None or len(text) > was_b:
+            # only files that are new or grew — never re-litigates old URIs
+            for m in _B64_RUN.finditer(text):
+                kb = len(m.group(1)) * 3 // 4 // 1024
+                if kb > MAX_DATA_URI_KB:
+                    problems.append(
+                        f"{f}: ~{kb}KB base64 data: URI (cap "
+                        f"{MAX_DATA_URI_KB}KB) — save it as a real asset "
+                        "file or load it by URL; huge inline blobs slow the "
+                        "app and poison every future read of this file")
+        if is_new and lang == "py":
+            for name, ln, count in _long_py_functions(text, MAX_PY_FUNC_LINES):
+                problems.append(
+                    f"{f}:{ln}: function {name}() is {count} lines (cap "
+                    f"{MAX_PY_FUNC_LINES}) — break it into smaller "
+                    "single-purpose functions")
     for cyc in _cycles(graph, touched):
         problems.append(
             "import cycle: " + " → ".join(cyc + [cyc[0]]) + " — break it "
