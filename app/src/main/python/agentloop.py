@@ -232,6 +232,34 @@ class _DeltaBuffer:
             self.buf = ""
 
 
+# --- runtime-error probe (registered by the Kotlin layer) ---------------------
+# Before each run MainActivity registers a bridge object whose check() loads
+# the preview in a hidden WebView and returns {"url":..., "errors":[...]} as a
+# JSON string (see MainActivity.webRuntimeCheck). None when running outside
+# the app (tests, desktop), in which case the runtime gate is skipped.
+
+_RUNTIME_CHECKER = None
+
+
+def set_runtime_checker(cb) -> None:
+    global _RUNTIME_CHECKER
+    _RUNTIME_CHECKER = cb
+
+
+def _runtime_errors() -> list:
+    """Console errors from loading the preview, [] when clean/unavailable.
+    Resource-load noise (favicon etc.) is filtered — the missing-reference
+    static check already owns broken local paths."""
+    if _RUNTIME_CHECKER is None:
+        return []
+    try:
+        res = json.loads(str(_RUNTIME_CHECKER.check()))
+        return [str(e) for e in (res.get("errors") or [])
+                if "favicon" not in str(e).lower()]
+    except Exception:
+        return []
+
+
 # --- prompts -----------------------------------------------------------------
 
 _AGENT_SYSTEM = (
@@ -598,7 +626,31 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                                      "no cycles), re-run check_structure, then "
                                      "finish:\n" + tangle})
                     continue
-                # (5) Independent code review by a stronger/different model, once
+                # (5) runtime probe: load the preview in the app's hidden
+                # WebView and treat uncaught JS/console errors as a repair
+                # round — the one class of breakage static checks can't see.
+                # Only when this run touched web files, so pure-Python runs
+                # never pay the probe's settle time.
+                if any(t.lower().endswith((".html", ".htm", ".js", ".mjs",
+                                           ".css"))
+                       for t in agent_tools.TOUCHED):
+                    rt = _runtime_errors()
+                    if rt:
+                        repair_left -= 1
+                        _emit("verify_failed", which="runtime",
+                              detail=_clip("\n".join(rt), 500))
+                        messages.append({"role": "assistant",
+                                         "content": final_text,
+                                         "reasoning": r.get("reasoning", "")})
+                        messages.append({"role": "user", "content":
+                                         "Verification failed — the app throws "
+                                         "errors at RUNTIME when the preview "
+                                         "loads (real uncaught JS errors, with "
+                                         "file:line). Read the files involved, "
+                                         "fix the cause (not just the symptom), "
+                                         "then finish:\n" + "\n".join(rt[:10])})
+                        continue
+                # (6) Independent code review by a stronger/different model, once
                 # the mechanical checks pass. A BLOCK verdict on real correctness/
                 # security issues is fed back as one repair round; runs at most
                 # once so it can't loop.
