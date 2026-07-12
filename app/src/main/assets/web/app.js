@@ -1492,7 +1492,7 @@ async function showSessions() {
   if (newBtn) newBtn.onclick = () => { closeSheet("#modal"); actions.newSession(); };
 }
 
-// --- Session side panel (slides in from the left, like Claude.ai) ----------
+// --- Session side panel (slides in from the right) ----------
 // Fold-out session browser with swipe gesture, search, and quick CRUD.
 
 let _sessionPanelOpen = false;
@@ -1529,12 +1529,12 @@ function toggleSessionPanel() {
   sessionPanelIsOpen() ? closeSessionPanel() : openSessionPanel();
 }
 
-// Swipe-to-open: detect a rightward swipe from the left ~30px edge.
+// Swipe-to-open: detect a leftward swipe from the right ~30px edge.
 function initSessionSwipe() {
   document.addEventListener("touchstart", (e) => {
     if (e.touches.length !== 1) return;
     const x = e.touches[0].clientX;
-    if (x > 32 || sessionPanelIsOpen()) return;
+    if (x < window.innerWidth - 32 || sessionPanelIsOpen()) return;
     _sessionTouchStart = { x, y: e.touches[0].clientY, time: Date.now() };
   }, { passive: true });
 
@@ -1542,10 +1542,10 @@ function initSessionSwipe() {
     if (!_sessionTouchStart) return;
     const last = e.changedTouches[0];
     if (!last) { _sessionTouchStart = null; return; }
-    const dx = last.clientX - _sessionTouchStart.x;
+    const dx = _sessionTouchStart.x - last.clientX;
     const dy = Math.abs(last.clientY - _sessionTouchStart.y);
     const dt = Date.now() - _sessionTouchStart.time;
-    // Rightward swipe of at least 60px, mostly horizontal, within 400ms
+    // Leftward swipe of at least 60px, mostly horizontal, within 400ms
     if (dx > 60 && dy < dx * 0.6 && dt < 400) {
       openSessionPanel();
     }
