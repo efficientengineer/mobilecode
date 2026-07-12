@@ -364,26 +364,55 @@ async function refreshAttachBar() {
   });
 }
 
-async function refreshBalance() {
-  const el = $("#balance");
+function _balCell(id, val, cls) {
+  const el = $("#" + id);
   if (!el) return;
+  el.className = cls || "";
+  el.textContent = val;
+}
+
+async function refreshBalance() {
   try {
     const b = JSON.parse((await call("py.call", { module: "git_ops", fn: "balance_value" })).text);
-    if (b.deepseek == null) {
-      el.className = "balchip none";
-      el.textContent = "no balance";
-      return;
+    if (_balStart == null) _balStart = { deepseek: b.deepseek, anthropic: b.anthropic, openai: b.openai };
+
+    const cur = b.currency || "";
+
+    // Available row — DeepSeek
+    if (b.deepseek != null) {
+      const cls = b.deepseek < 1 ? "low" : "";
+      _balCell("bal-ds", b.deepseek.toFixed(2) + " " + cur, cls);
+    } else {
+      _balCell("bal-ds", "no key", "none");
     }
-    if (_balStart == null) _balStart = b.deepseek;
-    const used = _balStart - b.deepseek;
-    el.className = "balchip" + (b.deepseek < 1 ? " low" : "");
-    let t = `${b.deepseek.toFixed(2)} ${b.currency || ""}`.trim();
-    if (used > 0.001) t += ` (−${used.toFixed(2)})`;
-    el.textContent = t;
-  } catch (e) {
-    el.className = "balchip none";
-    el.textContent = "balance ?";
-  }
+    // Anthropic — never available via API
+    _balCell("bal-an", "?", "none");
+    // OpenAI
+    if (b.openai != null) {
+      _balCell("bal-oa", b.openai.toFixed(2) + " " + cur, "");
+    } else {
+      _balCell("bal-oa", "?", "none");
+    }
+
+    // Used row (per-session delta)
+    function usedCell(id, provider) {
+      const start = _balStart ? _balStart[provider] : null;
+      const now = b[provider];
+      if (start != null && now != null) {
+        const diff = start - now;
+        if (Math.abs(diff) < 0.0001) {
+          _balCell(id, "—", "");
+        } else {
+          _balCell(id, "−" + diff.toFixed(2), diff > 0.01 ? "low" : "");
+        }
+      } else {
+        _balCell(id, "—", "");
+      }
+    }
+    usedCell("bal-ds-used", "deepseek");
+    usedCell("bal-an-used", "anthropic");
+    usedCell("bal-oa-used", "openai");
+  } catch (e) {}
 }
 
 // --- Run state machine (live progress + interrupt) ----------------------

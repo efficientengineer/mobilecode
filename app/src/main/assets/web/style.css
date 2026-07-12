@@ -608,12 +608,21 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%239aa0aa'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 8px center; padding-right: 24px; }
 .effortselect:focus { outline: none; border-color: var(--accent); }
-/* DeepSeek balance row in the drawer. */
-#chatDrawer-balance { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
-#chatDrawer-balance .db-label { font-size: 11px; font-weight: 700; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .5px; }
-#chatDrawer-balance #balance { font-size: 13px; padding: 4px 10px; }
+/* Provider balance grid (3 providers × 3 rows including header) */
+#chatDrawer-balance { flex-shrink: 0; padding: 6px 12px; border-bottom: 1px solid var(--border); }
+.bal-grid { display: grid; grid-template-columns: 44px 1fr 1fr 1fr; gap: 2px 4px; align-items: center; }
+.bal-row { display: contents; }
+.bal-row span { text-align: center; padding: 3px 4px; border-radius: 6px; white-space: nowrap; }
+.bal-head span { font-size: 10px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .3px; }
+.bal-avail span { font-size: 13px; font-weight: 800; }
+.bal-sess span { font-size: 11px; font-weight: 600; color: var(--muted); }
+.bal-avail span:not(:first-child) { background: #0d3a24; color: #4ade80; }
+.bal-avail span.low { background: #3a1414; color: #f87171; }
+.bal-avail span.none { background: var(--panel2); color: var(--muted); }
+.bal-sess span:not(:first-child) { background: transparent; color: var(--muted); }
+.bal-row span:first-child { font-size: 9px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .2px; text-align: right; padding-right: 6px; }
 /* Leave room at the bottom-right for the ✕ toggle so it never covers Speak. */
 #chatDrawer #composer { padding-right: 76px; }
 /* The chat-actions and context menus open from inside the drawer → above it. */
