@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "content_version": 22,
+  "content_version": 23,
   "loader": "app/src/main/python/ota.py",
   "python": [
     "ota.py",
