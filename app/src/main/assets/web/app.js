@@ -1721,8 +1721,10 @@ function logAction(kind, detail, path) {
   };
   _actionLog.push(entry);
   saveActionLog();
-  // If the panel is open, re-render
+  // Re-render wherever the log is visible
   if (_actionLogPanelOpen) renderActionLogPanel();
+  // Also refresh the inline view if it's visible (no file tabs open)
+  if (openTabs.length === 0) renderActionLogInline();
 }
 
 // Hook: call this from event processing to auto-log tool events
@@ -1792,6 +1794,7 @@ function clearActionLog() {
   _actionLog = [];
   saveActionLog();
   if (_actionLogPanelOpen) renderActionLogPanel();
+  if (openTabs.length === 0) renderActionLogInline();
 }
 
 const ACTION_LOG_ICONS = {
@@ -1801,7 +1804,17 @@ const ACTION_LOG_ICONS = {
 function renderActionLogPanel() {
   const list = $("#actionLogList");
   if (!list) return;
+  _renderActionLogList(list);
+}
 
+// Render the action log into the inline area in #editorEmpty (main screen).
+function renderActionLogInline() {
+  const list = $("#actionLogInline");
+  if (!list) return;
+  _renderActionLogList(list);
+}
+
+function _renderActionLogList(list) {
   if (!_actionLog.length) {
     list.innerHTML = `<div class="alp-empty">No actions recorded yet.<br><br>Actions from agent runs will appear here.</div>`;
     return;
@@ -2211,7 +2224,7 @@ function closeTab(rel) {
 function showEditorEmpty() {
   const pane = $("#editorPane"), empty = $("#editorEmpty"), fab = $("#edFindFab"), diffFab = $("#edDiffFab");
   if (pane) { pane.classList.add("hidden"); pane.innerHTML = ""; }
-  if (empty) empty.classList.remove("hidden");
+  if (empty) { empty.classList.remove("hidden"); renderActionLogInline(); }
   if (fab) fab.classList.add("hidden");
   if (diffFab) diffFab.classList.add("hidden");
   const cp = $("#cursorPos"); if (cp) cp.textContent = "";
