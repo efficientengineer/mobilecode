@@ -10,7 +10,7 @@
 <body>
   <!-- Floating controls -->
   <button id="githubFab" class="fab fab-wide" title="GitHub">GitHub ▾</button>
-  <button id="playFab" class="fab" title="Run app">▶</button>
+  <button id="playFab" class="fab update-fab" title="Update app">⬆</button>
   <button id="menuFab" class="fab" title="Menu">☰</button>
   <button id="actionsFab" class="fab" title="Actions">⋯</button>
   <button id="usage" class="usagechip hidden" title="tokens this run — tap for detail"></button>
@@ -116,8 +116,8 @@
     <div id="chatDrawer-head">
       <span class="cd-title">Agent</span>
       <span class="cd-head-actions">
-        <button id="chatActionsBtn" class="txtbtn xs" title="Chat actions">⋯</button>
-        <button id="chatDrawerClose" class="txtbtn xs" title="Close">✕</button>
+        <button id="chatClearCtxBtn" class="txtbtn xs" title="Clear context">Clear</button>
+        <button id="chatPayloadBtn" class="txtbtn xs" title="Preview payload">Payload</button>
       </span>
     </div>
     <div id="chatDrawer-models">
@@ -168,12 +168,6 @@
     </div>
 
     <main id="chat"></main>
-
-    <div id="ctxFooter">
-      <span id="ctxTurns">—</span>
-      <span class="ctx-sep">·</span>
-      <span id="ctxTokens" title="Context tokens (compact discussion + outline + memory)">— ctx tokens</span>
-    </div>
 
     <div id="todos" class="hidden">
       <div id="todos-head">

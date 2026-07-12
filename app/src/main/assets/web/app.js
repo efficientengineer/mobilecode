@@ -307,39 +307,12 @@ function showUsageDetail() {
      ${perModel}
      <div class="hint">A high <b>cached %</b> means repeated context is being billed at a fraction of the price — the prompt cache is working. The by-model split shows orchestrator vs implementer spend. Actual dollars show in the balance chip.</div>`);
 }
-async function refreshCtxFooter() {
-  const el = $("#ctxFooter");
-  if (!el) return;
-  try {
-    const c = JSON.parse((await call("orch", { fn: "context_counts" })).text);
-    const turnsEl = $("#ctxTurns");
-    const tokensEl = $("#ctxTokens");
-    if (turnsEl) {
-      const sent = c.sentTurns || 0, total = c.turns || 0;
-      turnsEl.textContent = sent + (sent !== total ? "/" + total : "") + " turns";
-    }
-    if (tokensEl) {
-      const disc = c.discussionTokens || 0, outl = c.outlineTokens || 0, mem = c.memoryTokens || 0;
-      const total = disc + outl + mem;
-      tokensEl.textContent = "~" + fmtK(total) + " ctx tokens";
-      tokensEl.title = "discussion " + disc + " · outline " + outl + " · memory " + mem
-        + (c.caveman ? " · caveman mode" : "");
-    }
-    el.classList.remove("hidden");
-  } catch (e) {
-    const el2 = $("#ctxFooter");
-    if (el2) el2.classList.add("hidden");
-  }
-}
+
 
 function refreshStats() {
-  // The old #stats readout was removed with the top bar; the two orch bridge
-  // calls that fed it (context_counts + list_context_files) were pure waste on
-  // every action. Balance/usage/attach-bar are the live indicators now.
   refreshBalance();
   refreshUsage();
   refreshAttachBar();
-  refreshCtxFooter();
 }
 
 async function refreshAttachBar() {
@@ -2716,22 +2689,9 @@ function openActionsMenu() {
 // Chat-relevant actions (context + guidelines), opened from the drawer's ⋯.
 const CHAT_ACTION_ITEMS = [
   { label: "Clear context", act: "clearContext" },
-  { label: "Guidelines", act: "guidelines" },
-  { label: "View context", act: "viewContext" },
   { label: "Preview payload", act: "previewContext" },
-  { label: "Attach files", act: "contextFiles" },
 ];
-function openChatActionsMenu() {
-  const menu = $("#chatActionsMenu");
-  if (!menu.classList.contains("hidden")) { menu.classList.add("hidden"); return; }
-  closeFabMenus();
-  menu.innerHTML = CHAT_ACTION_ITEMS.map((a) => `<div class="fab-item" data-chatact="${a.act}">${a.label}</div>`).join("");
-  positionFabMenu(menu, $("#chatActionsBtn"), "right");
-  menu.classList.remove("hidden");
-  menu.querySelectorAll("[data-chatact]").forEach((el) => {
-    el.onclick = () => { menu.classList.add("hidden"); (actions[el.getAttribute("data-chatact")] || (() => {}))(); };
-  });
-}
+
 // Composer context button: quick-attach editor files or the selection.
 async function attachCtxFiles(rels) {
   const uniq = [...new Set(rels)].filter(Boolean);
@@ -3047,11 +3007,7 @@ $("#actionsFab").onclick = (e) => { e.stopPropagation(); openActionsMenu(); };
 $("#githubFab").onclick = (e) => { e.stopPropagation(); openGithubMenu(); };
 $("#playFab").onclick = async () => {
   closeFabMenus();
-  const fab = $("#playFab");
-  if (fab.classList.contains("running")) return;
-  fab.classList.add("running");
-  try { await call("run"); } catch (e) {}
-  fab.classList.remove("running");
+  await actions.updateApp();
 };
 // Preview fab: toggle the inline preview pane.
 $("#previewFab").onclick = togglePreview;
@@ -3072,11 +3028,11 @@ $("#modelToggle").onclick = (e) => {
 };
 $("#modelLead").onclick = (e) => { e.stopPropagation(); openModelMenu("orchestrator", e.currentTarget); };
 $("#modelImpl").onclick = (e) => { e.stopPropagation(); openModelMenu("implementer", e.currentTarget); };
-$("#chatActionsBtn").onclick = (e) => { e.stopPropagation(); openChatActionsMenu(); };
+
 $("#ctxBtn").onclick = (e) => { e.stopPropagation(); openCtxMenu(); };
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".fab") && !e.target.closest(".fabmenu") &&
-      !e.target.closest("#chatActionsBtn") && !e.target.closest("#modelLead") &&
+      !e.target.closest("#modelLead") &&
       !e.target.closest("#modelImpl") && !e.target.closest("#modelToggle") &&
       !e.target.closest("#ctxBtn")) closeFabMenus();
 });
@@ -3090,7 +3046,9 @@ if (_advToggle) _advToggle.onclick = () => {
   _advToggle.textContent = hidden ? "Advanced ▾" : "Advanced ▴";
 };
 $("#chatFab").onclick = toggleChat;
-$("#chatDrawerClose").onclick = closeChat;
+$("#chatClearCtxBtn").onclick = () => actions.clearContext();
+$("#chatPayloadBtn").onclick = () => actions.previewContext();
+
 $("#chatBackdrop").onclick = closeChat;
 // Session panel (slides in from the left)
 $("#sessionTab").onclick = toggleSessionPanel;
