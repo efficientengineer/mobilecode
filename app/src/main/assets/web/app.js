@@ -3233,6 +3233,7 @@ if (_advToggle) _advToggle.onclick = () => {
 $("#chatFab").onclick = toggleChat;
 $("#chatClearCtxBtn").onclick = () => actions.clearContext();
 $("#chatPayloadBtn").onclick = () => actions.previewContext();
+$("#chatUpdateBtn").onclick = () => actions.updateApp();
 
 $("#chatBackdrop").onclick = closeChat;
 // Session panel (slides in from the left)
