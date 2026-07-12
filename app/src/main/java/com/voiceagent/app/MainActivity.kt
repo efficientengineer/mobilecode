@@ -764,6 +764,20 @@ class MainActivity : AppCompatActivity() {
     private var speechIntent: Intent? = null
     // Running transcript accumulated across recognizer restarts.
     private var spokenWords = mutableListOf<String>()
+    // Most recent in-progress partial for the current utterance. Committed to
+    // spokenWords whenever a recognizer session ends — including the onError
+    // (NO_MATCH / SPEECH_TIMEOUT) path that many devices take instead of
+    // onResults after a pause, so no spoken words are ever lost on restart.
+    private var lastPartial = ""
+
+    private fun commitPartial() {
+        val p = lastPartial.trim()
+        if (p.isNotEmpty()) {
+            spokenWords.add(p)
+            event("speech-partial", spokenWords.joinToString(" "))
+        }
+        lastPartial = ""
+    }
 
     private fun silenceMs(): Int =
         getSharedPreferences("keys", MODE_PRIVATE)
@@ -790,6 +804,7 @@ class MainActivity : AppCompatActivity() {
         }
         dictating = true
         spokenWords.clear()
+        lastPartial = ""
         if (speech == null) {
             speech = SpeechRecognizer.createSpeechRecognizer(this).apply {
                 setRecognitionListener(object : RecognitionListener {
@@ -797,9 +812,10 @@ class MainActivity : AppCompatActivity() {
                         val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             ?.firstOrNull()?.trim().orEmpty()
                         if (t.isNotEmpty()) {
-                            spokenWords.add(t)
-                            event("speech-partial", spokenWords.joinToString(" "))
+                            // Prefer the finalized result over the last partial.
+                            lastPartial = t
                         }
+                        commitPartial()
                         // Restart quickly — the user hasn't pressed Stop and may
                         // resume speaking at any moment.
                         if (dictating) restartRecognizer(50)
@@ -816,6 +832,10 @@ class MainActivity : AppCompatActivity() {
                         when (error) {
                             SpeechRecognizer.ERROR_NO_MATCH,
                             SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+                                // The device ended this utterance without an
+                                // onResults callback — commit the last partial
+                                // so the words spoken before the pause are kept.
+                                commitPartial()
                                 if (dictating) restartRecognizer(1500)
                             }
                             else -> {
@@ -837,6 +857,9 @@ class MainActivity : AppCompatActivity() {
                         val t = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             ?.firstOrNull()?.trim().orEmpty()
                         if (t.isNotEmpty()) {
+                            // Track the in-progress text so it can be committed
+                            // when this session ends (via onResults or onError).
+                            lastPartial = t
                             // Merge with accumulated words: show full transcript so far.
                             val parts = mutableListOf<String>().apply { addAll(spokenWords); add(t) }
                             event("speech-partial", parts.joinToString(" "))
@@ -866,6 +889,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopDictation() {
         dictating = false
+        // Commit any in-progress partial that hasn't been finalized yet.
+        commitPartial()
         // Send the final accumulated transcript.
         val final = spokenWords.joinToString(" ").trim()
         if (final.isNotEmpty()) event("speech-final", final)
