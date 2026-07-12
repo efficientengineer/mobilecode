@@ -38,6 +38,7 @@ import com.chaquo.python.android.AndroidPlatform
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -372,11 +373,13 @@ class MainActivity : AppCompatActivity() {
             // folder), so we just set the mode and run. A foreground service
             // keeps the run alive if the user switches apps or the screen dims.
             py("os").get("environ")?.callAttr("__setitem__", "AGENT_MODE", arg.optString("mode", "auto"))
+            registerRuntimeChecker()
             withAgentService {
                 text(py("agent_loader").callAttr("run_task", arg.getString("task")).toString())
             }
         }
         "plan.approve" -> withContext(Dispatchers.IO) {
+            registerRuntimeChecker()
             withAgentService {
                 text(py("agent_loader").callAttr("execute_plan").toString())
             }
@@ -649,6 +652,33 @@ class MainActivity : AppCompatActivity() {
         "UI updated"
     } catch (e: Throwable) {
         "Update UI failed: ${e.message}"
+    }
+
+    // --- Runtime-error verify bridge --------------------------------------
+    // The Python verify chain (agentloop) calls check() from its background
+    // run thread when a run touched web files. We run the hidden-WebView
+    // probe and hand back its console errors as JSON, so runtime breakage
+    // becomes a repairable verify_failed round instead of shipping silently.
+    // check() must NEVER be called on the main thread (runBlocking would
+    // deadlock the probe's Main-dispatcher work); agent runs execute on
+    // Dispatchers.IO, which satisfies that.
+    inner class RuntimeChecker {
+        fun check(): String = try {
+            runBlocking { webRuntimeCheck().toString() }
+        } catch (e: Throwable) {
+            // Activity torn down mid-run, probe failure, etc. — report a skip,
+            // never break the run over the checker itself.
+            JSONObject().put("skipped", true).put("errors", JSONArray()).toString()
+        }
+    }
+
+    // Registered fresh before every run: the OTA loader may have reloaded
+    // agentloop since the last run, which would drop a previously set hook.
+    private fun registerRuntimeChecker() {
+        try {
+            py("agent_loader").callAttr(
+                "call_any", "agentloop", "set_runtime_checker", RuntimeChecker())
+        } catch (_: Throwable) {}
     }
 
     // --- Headless web runtime check --------------------------------------
