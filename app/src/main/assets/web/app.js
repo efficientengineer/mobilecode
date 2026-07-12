@@ -3257,6 +3257,9 @@ if (_implEffortSel) _implEffortSel.onchange = onImplEffortChange;
 (async function () {
   loadActionLog();
   try { await refreshHeader(); await loadHistory(); } catch (e) {}
+  // Restore the last task checklist — a run that finished while the app was
+  // backgrounded left its final state on disk, and the live poller is gone.
+  try { renderTodos(JSON.parse((await call("orch", { fn: "get_todos" })).text)); } catch (e) {}
   // If a run outlived the previous UI (backgrounded, rotated on an old build,
   // OTA reload), pick its progress back up instead of looking dead.
   try { if ((await call("run.active")).active) reattachLive(); } catch (e) {}
