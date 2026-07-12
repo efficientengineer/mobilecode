@@ -105,12 +105,16 @@ function openChat() {
   const b = $("#chatBackdrop"); if (b) b.classList.remove("hidden");
   setChatUnread(false);
   setChatFabIcon(true);
+  // Hide the session tab so it can't peek through the chat drawer.
+  const st = $("#sessionTab"); if (st) st.classList.add("hidden");
   const c = $("#chat"); if (c) setTimeout(() => { c.scrollTop = c.scrollHeight; }, 60);
 }
 function closeChat() {
   const d = $("#chatDrawer"); if (d) d.classList.remove("open");
   const b = $("#chatBackdrop"); if (b) b.classList.add("hidden");
   setChatFabIcon(false);
+  // Restore the session tab when the chat drawer closes.
+  const st = $("#sessionTab"); if (st) st.classList.remove("hidden");
 }
 function toggleChat() { chatIsOpen() ? closeChat() : openChat(); }
 
