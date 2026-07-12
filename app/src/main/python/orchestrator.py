@@ -2,10 +2,10 @@
 orchestrator.py — the on-device agent brain.
 
 Architecture:
-  - LEAD_MODEL (Claude or DeepSeek — both speak tools via llm.py) drives an
+  - LEAD_MODEL (Claude or DeepSeek Pro — both speak tools via llm.py) drives an
     agentic loop (agentloop.py): it reads the repo with tools, edits files,
     verifies, and repairs until the task is done.
-  - WORKER_MODEL is an optional cheap implementer the lead can delegate
+  - WORKER_MODEL is a cheap implementer (flash) the lead can delegate
     mechanical file edits to (the delegate_edit tool).
 
 Everything runs on-device via Chaquopy. Git is handled by dulwich (pure Python,
@@ -45,15 +45,15 @@ import agentloop
 # and is OPTIONAL: if it's blank, the orchestrator does the edits itself
 # (single-agent mode). The (cheap) implementer also writes commit messages.
 def _default_model() -> str:
-    """Default orchestrator model: DeepSeek V3 (deepseek-chat) — the cheapest
-    capable model. Requires DEEPSEEK_API_KEY. Override with LEAD_MODEL env var."""
-    return "deepseek/deepseek-chat"
+    """Default orchestrator model: DeepSeek V4 Pro — the strong planner.
+    Requires DEEPSEEK_API_KEY. Override with LEAD_MODEL env var."""
+    return "deepseek/deepseek-v4-pro"
 
 
 def _default_worker() -> str:
-    """Default implementer model: same as orchestrator unless overridden.
+    """Default implementer model: DeepSeek V4 Flash — the cheap editor.
     Override with WORKER_MODEL env var."""
-    return "deepseek/deepseek-chat"
+    return "deepseek/deepseek-v4-flash"
 
 
 LEAD_MODEL = os.environ.get("LEAD_MODEL", "") or _default_model()

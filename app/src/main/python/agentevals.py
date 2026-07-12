@@ -430,7 +430,7 @@ def judge_run(path=None, model=None) -> str:
     trace = _trace_from_events(events)
     if not trace.strip():
         return "The run has no reasoning/tool trace to judge."
-    _def_lead = "deepseek/deepseek-chat"
+    _def_lead = "deepseek/deepseek-v4-pro"
     judge = (model or os.environ.get("AGENT_JUDGE_MODEL")
              or os.environ.get("AGENT_FALLBACK_MODEL")
              or os.environ.get("LEAD_MODEL") or _def_lead)

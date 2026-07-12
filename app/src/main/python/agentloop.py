@@ -373,7 +373,7 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
     Returns {"text": str, "touched": [paths], "plan": dict|None,
              "steps": int, "usage": {...}, "interrupted": bool}
     """
-    _def_lead = "deepseek/deepseek-chat"
+    _def_lead = "deepseek/deepseek-v4-pro"
     model = os.environ.get("LEAD_MODEL", "") or _def_lead
     fallback = (os.environ.get("AGENT_FALLBACK_MODEL") or "").strip()
     active = model  # sticky: once we fail over, stay on the fallback
