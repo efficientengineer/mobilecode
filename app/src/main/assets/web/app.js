@@ -50,10 +50,11 @@ function stopDictation() {
 window.nativeEvent = (type, payload) => {
   const box = $("#input");
   if (type === "speech-partial") {
-    // Continuous dictation: partials carry the full running transcript
-    // (accumulated across recognizer restarts). Don't re-prepend _dictBase.
+    // Continuous dictation: partials carry the running transcript accumulated
+    // since the last recognizer start. _dictBase holds everything from prior
+    // dictation sessions within this compose — keep it visible at all times.
     composeOpen(false);
-    box.value = (payload || "");
+    box.value = _dictBase + (_dictBase && payload ? " " : "") + (payload || "");
     box.dispatchEvent(new Event("input"));
   } else if (type === "speech-final") {
     // Fires only on explicit Stop (or fatal error). Commit the final text.
