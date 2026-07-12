@@ -121,34 +121,41 @@
       </span>
     </div>
     <div id="chatDrawer-models">
-      <div class="modelrow">
-        <div class="modelcol">
-          <label class="model-label">Orchestrator</label>
-          <button id="modelLead" class="modelbtn"><span id="modelName">…</span> ▾</button>
+      <button id="modelToggle" class="modeltoggle" title="Model selection">
+        <span class="mt-label">Models</span>
+        <span id="modelToggleSummary">…</span>
+        <span class="mt-chev">▸</span>
+      </button>
+      <div id="modelPanel" class="modelpanel hidden">
+        <div class="modelrow">
+          <div class="modelcol">
+            <label class="model-label">Orchestrator</label>
+            <button id="modelLead" class="modelbtn"><span id="modelName">…</span> ▾</button>
+          </div>
+          <div class="modelcol effortcol">
+            <label class="model-label">Effort</label>
+            <select id="orchEffortSelect" class="effortselect">
+              <option value="off">Off</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </div>
         </div>
-        <div class="modelcol effortcol">
-          <label class="model-label">Effort</label>
-          <select id="orchEffortSelect" class="effortselect">
-            <option value="off">Off</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-          </select>
-        </div>
-      </div>
-      <div class="modelrow">
-        <div class="modelcol">
-          <label class="model-label">Implementer</label>
-          <button id="modelImpl" class="modelbtn"><span id="implName">…</span> ▾</button>
-        </div>
-        <div class="modelcol effortcol">
-          <label class="model-label">Effort</label>
-          <select id="implEffortSelect" class="effortselect">
-            <option value="off">Off</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-          </select>
+        <div class="modelrow">
+          <div class="modelcol">
+            <label class="model-label">Implementer</label>
+            <button id="modelImpl" class="modelbtn"><span id="implName">…</span> ▾</button>
+          </div>
+          <div class="modelcol effortcol">
+            <label class="model-label">Effort</label>
+            <select id="implEffortSelect" class="effortselect">
+              <option value="off">Off</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </div>
         </div>
       </div>
     </div>

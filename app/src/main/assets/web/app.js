@@ -229,6 +229,12 @@ async function refreshHeader() {
   if (mn) mn.textContent = shortModel(m.orchestrator);
   const inm = $("#implName");
   if (inm) inm.textContent = m.implementer ? shortModel(m.implementer) : "single";
+  // Model toggle summary (collapsed view).
+  const mts = $("#modelToggleSummary");
+  if (mts) {
+    const impl = m.implementer ? shortModel(m.implementer) : "single";
+    mts.textContent = shortModel(m.orchestrator) + " / " + impl;
+  }
   // Effort dropdowns — one per role.
   try { updateEffortSelect("orchEffortSelect", (await call("orch", { fn: "get_orch_effort" })).text.trim()); } catch (e) {}
   try { updateEffortSelect("implEffortSelect", (await call("orch", { fn: "get_impl_effort" })).text.trim()); } catch (e) {}
@@ -3022,6 +3028,19 @@ $("#playFab").onclick = async () => {
 $("#previewFab").onclick = togglePreview;
 $("#previewClose").onclick = closePreview;
 $("#previewRefresh").onclick = refreshPreview;
+$("#modelToggle").onclick = (e) => {
+  e.stopPropagation();
+  const panel = $("#modelPanel");
+  const toggle = e.currentTarget;
+  const open = !panel.classList.contains("hidden");
+  if (open) {
+    panel.classList.add("hidden");
+    toggle.classList.remove("open");
+  } else {
+    panel.classList.remove("hidden");
+    toggle.classList.add("open");
+  }
+};
 $("#modelLead").onclick = (e) => { e.stopPropagation(); openModelMenu("orchestrator", e.currentTarget); };
 $("#modelImpl").onclick = (e) => { e.stopPropagation(); openModelMenu("implementer", e.currentTarget); };
 $("#chatActionsBtn").onclick = (e) => { e.stopPropagation(); openChatActionsMenu(); };
@@ -3029,7 +3048,8 @@ $("#ctxBtn").onclick = (e) => { e.stopPropagation(); openCtxMenu(); };
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".fab") && !e.target.closest(".fabmenu") &&
       !e.target.closest("#chatActionsBtn") && !e.target.closest("#modelLead") &&
-      !e.target.closest("#modelImpl") && !e.target.closest("#ctxBtn")) closeFabMenus();
+      !e.target.closest("#modelImpl") && !e.target.closest("#modelToggle") &&
+      !e.target.closest("#ctxBtn")) closeFabMenus();
 });
 $("#filesBtn").onclick = openTree;
 $("#treeClose").onclick = closeTree;
