@@ -253,7 +253,19 @@ _AGENT_SYSTEM = (
     "one small, single-responsibility file per feature (e.g. player.js, "
     "enemies.js, dungeon.js, input.js) wired from a small entry file (an "
     "index.html that loads them, or a main.js). This keeps each read and edit "
-    "small and cheap. NEVER build a whole app as one giant file.\n"
+    "small and cheap. NEVER build a whole app as one giant file. This is "
+    "ENFORCED: a deterministic check_structure gate runs before you can "
+    "finish and fails the run while a touched file is oversized, a new file "
+    "imports more than 3 sibling files directly (shared hubs like events.js "
+    "and the entry file are exempt), or touched files form an import cycle.\n"
+    "- If the project has events.js / store.js / errors.js / controls.js "
+    "(templates ship them), KEEP and USE them: route cross-feature "
+    "communication through window.events, shared state through window.store "
+    "(store.save() persists it), touch input through controls.js, and leave "
+    "errors.js loaded first so crashes show on screen.\n"
+    "- NEVER hardcode an API key/token/password — a secret scan blocks the "
+    "run. Ask the user for their key at runtime (localStorage) or hold it in "
+    "a small server.\n"
     "- Keep files under ~300 lines; if one would grow past that, split it. "
     "Writing a very large file in one call also risks hitting the output limit "
     "and truncating — write a small skeleton, then grow it with str_replace. "
@@ -288,7 +300,8 @@ _AGENT_SYSTEM = (
     "files at once. Prefer these over doing everything yourself, one step at a "
     "time, when the work naturally fans out.\n"
     "- Verify as you GO, not only at the end: after writing Python run "
-    "check_python; after writing HTML/JS run check_web; run run_tests once the "
+    "check_python; after writing HTML/JS run check_web; after creating "
+    "several files run check_structure; run run_tests once the "
     "pieces a test needs exist. Fix what fails before continuing.\n"
     "- Keep the project self-contained and runnable on the device: plain "
     "Python (stdlib + Flask-style WSGI `app.py`) or static web (index.html) "
@@ -492,6 +505,32 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             # (2) run the project's tests. Either failure is fed back as a
             # repair round so "done" means "parses AND passes", not just parses.
             if write and not plan and repair_left > 0:
+                # (0) secret scan comes first — a hardcoded credential is the
+                # one thing that must NEVER survive to "done", whatever else
+                # is broken.
+                try:
+                    leaks = agent_tools.check_secret_files()
+                except Exception:
+                    leaks = ""
+                if leaks:
+                    repair_left -= 1
+                    _emit("verify_failed", which="secrets",
+                          detail=_clip(leaks, 500))
+                    messages.append({"role": "assistant", "content": final_text,
+                                     "reasoning": r.get("reasoning", "")})
+                    messages.append({"role": "user", "content":
+                                     "SECURITY verification failed — a "
+                                     "credential is hardcoded in the workspace. "
+                                     "Remove it: client-side code can never "
+                                     "hold a secret (anyone who opens the app "
+                                     "can read it). Ask the user for their key "
+                                     "at RUNTIME in the UI and keep it in "
+                                     "localStorage, or route the call through "
+                                     "a small server (app.py) that holds it. "
+                                     "Re-run check_secrets, and in your final "
+                                     "reply tell the user to REVOKE/rotate the "
+                                     "exposed key. Findings:\n" + leaks})
+                    continue
                 errs = agent_tools.check_python_files()
                 if errs:
                     repair_left -= 1
@@ -532,7 +571,30 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                                      "local files that do not exist. Create them "
                                      "or fix the paths, then finish:\n" + web_hard})
                     continue
-                # (4) Independent code review by a stronger/different model, once
+                # (4) structure gate: the context-friendly file-per-feature
+                # spine must actually hold. Oversized files, tangled imports,
+                # or cycles among files this run touched come back as a repair
+                # round, so "done" also means "structured" — the system prompt
+                # asks for it, this enforces it.
+                try:
+                    tangle = agent_tools.check_structure_files()
+                except Exception:
+                    tangle = ""
+                if tangle:
+                    repair_left -= 1
+                    _emit("verify_failed", which="structure",
+                          detail=_clip(tangle, 500))
+                    messages.append({"role": "assistant", "content": final_text,
+                                     "reasoning": r.get("reasoning", "")})
+                    messages.append({"role": "user", "content":
+                                     "Verification failed — the code is not "
+                                     "context-friendly. Restructure it (small "
+                                     "single-responsibility files, talk through "
+                                     "a shared hub instead of importing peers, "
+                                     "no cycles), re-run check_structure, then "
+                                     "finish:\n" + tangle})
+                    continue
+                # (5) Independent code review by a stronger/different model, once
                 # the mechanical checks pass. A BLOCK verdict on real correctness/
                 # security issues is fed back as one repair round; runs at most
                 # once so it can't loop.
@@ -611,10 +673,16 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             messages.append({"role": "tool", "tool_call_id": tc["id"],
                              "name": tc["name"], "content": result,
                              "_path": _arg_path(tc.get("args"))})
-            # Track exact-repeat calls (skip read-only inspection, which is fine
-            # to repeat). When one crosses the limit, queue a one-time nudge.
+            # Track exact-repeat calls (skip read-only inspection and the
+            # verification tools — the workflow deliberately re-runs check_*/
+            # run_tests with identical args after each edit, so repeats there
+            # are progress, not a spiral). When one crosses the limit, queue a
+            # one-time nudge.
             if tc["name"] not in ("read_file", "list_files", "grep",
-                                  "todo_write", "note_write"):
+                                  "todo_write", "note_write",
+                                  "check_python", "check_web",
+                                  "check_structure", "check_secrets",
+                                  "run_tests", "git_status"):
                 try:
                     sig = tc["name"] + "|" + json.dumps(tc.get("args") or {},
                                                         sort_keys=True)[:400]
@@ -643,6 +711,22 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                       f"Stopped at the {MAX_STEPS}-step safety limit. "
                       "Progress so far is in the workspace — say 'continue' to keep going.")
 
+    # Workspace-wide structure snapshot for the diagnose trend: unlike the
+    # gate (which only blocks NEW debt), this measures the whole project so
+    # diagnoses.jsonl shows whether structure is improving or rotting.
+    if write and agent_tools.TOUCHED:
+        try:
+            import projectmap as _pm
+            _lc = _pm.line_counts()
+            _g = _pm.build_graph()
+            _code = [f for f, d in _g.items() if d["lang"] in ("js", "py")]
+            _fan = (sum(len(_g[f]["imports"]) for f in _code) / len(_code)
+                    if _code else 0.0)
+            _emit("structure", files=len(_g),
+                  max_lines=max(_lc.values(), default=0),
+                  avg_fanout=round(_fan, 2))
+        except Exception:
+            pass
     u = llm.usage()
     _emit("usage", input=u["input"], output=u["output"], calls=u["calls"],
           cache=u.get("cache_read", 0))

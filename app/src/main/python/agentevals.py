@@ -71,6 +71,7 @@ def analyze_events(events: list) -> dict:
     errors = []                # [detail]
     reads = edits = 0
     usage = {}
+    structure = {}
     pruned = 0
 
     for ev in events:
@@ -95,6 +96,10 @@ def analyze_events(events: list) -> dict:
         elif k == "usage":
             usage = {"input": ev.get("input", 0), "output": ev.get("output", 0),
                      "cache": ev.get("cache", 0), "calls": ev.get("calls", 0)}
+        elif k == "structure":
+            structure = {"files": ev.get("files", 0),
+                         "max_lines": ev.get("max_lines", 0),
+                         "avg_fanout": ev.get("avg_fanout", 0)}
         elif k == "pruned":
             pruned += int(ev.get("chars") or 0)
 
@@ -106,12 +111,27 @@ def analyze_events(events: list) -> dict:
     for s in spirals:
         flag("red", "spiral",
              f"repeated `{s['name']}` {s['count']}x with no progress")
-    if len(verify_failures) >= 2:
+    # Thrash means the SAME check failed repeatedly — the fix didn't take.
+    # Distinct checks each failing once (e.g. one web round + one review
+    # round) is the repair pipeline working as designed, so only warn.
+    vf_counts = {}
+    for w in verify_failures:
+        vf_counts[w] = vf_counts.get(w, 0) + 1
+    # A secrets round is red even when repaired in one pass: the credential
+    # was written to disk and may survive in git history — it must be rotated.
+    if vf_counts.pop("secrets", 0):
+        flag("red", "secret-exposed",
+             "a hardcoded credential was caught by the secret scan — even "
+             "though it was removed, ROTATE that key (it may be in git history)")
+    thrashed = {w: c for w, c in vf_counts.items() if c >= 2}
+    if thrashed:
         flag("red", "verify-thrash",
-             f"{len(verify_failures)} verify-failure rounds ({', '.join(verify_failures)})")
+             "same check failed repeatedly: " +
+             ", ".join(f"{w}×{c}" for w, c in thrashed.items()))
     elif verify_failures:
         flag("yellow", "verify-retry",
-             f"1 verify-failure round ({verify_failures[0]})")
+             f"{len(verify_failures)} verify-failure round(s) "
+             f"({', '.join(verify_failures)}), each fixed in one pass")
     for f in fallbacks:
         flag("yellow", "provider-fallback",
              f"switched provider {f['from']} -> {f['to']} (primary failed)")
@@ -130,6 +150,19 @@ def analyze_events(events: list) -> dict:
     if usage.get("output", 0) >= 40000:
         flag("yellow", "token-heavy",
              f"{usage['output']} output tokens for this run")
+    # Workspace-wide structure health (the gate only blocks NEW debt, so this
+    # is how legacy tangle stays visible). Thresholds mirror projectmap's.
+    if structure:
+        try:
+            import projectmap as _pm
+            max_lines, max_fan = _pm.MAX_FILE_LINES, _pm.MAX_LOCAL_IMPORTS
+        except Exception:
+            max_lines, max_fan = 400, 3
+        if (structure["max_lines"] > max_lines
+                or structure["avg_fanout"] > max_fan):
+            flag("yellow", "tangled",
+                 f"workspace structure: largest file {structure['max_lines']} "
+                 f"lines, avg fan-out {structure['avg_fanout']}")
 
     reds = sum(1 for f in flags if f["level"] == "red")
     yellows = sum(1 for f in flags if f["level"] == "yellow")
@@ -143,7 +176,8 @@ def analyze_events(events: list) -> dict:
     return {"steps": steps, "tools": tools, "reads": reads, "edits": edits,
             "spirals": spirals, "verify_failures": verify_failures,
             "fallbacks": fallbacks, "errors": errors, "usage": usage,
-            "pruned": pruned, "flags": flags, "verdict": verdict}
+            "structure": structure, "pruned": pruned, "flags": flags,
+            "verdict": verdict}
 
 
 def format_report(m: dict) -> str:
@@ -157,6 +191,10 @@ def format_report(m: dict) -> str:
     if u:
         lines.append(f"tokens: {u.get('input', 0)} in / {u.get('output', 0)} out"
                      f" (cache {u.get('cache', 0)}, {u.get('calls', 0)} calls)")
+    s = m.get("structure")
+    if s:
+        lines.append(f"structure: {s['files']} files, largest "
+                     f"{s['max_lines']} lines, avg fan-out {s['avg_fanout']}")
     if m["flags"]:
         lines.append("")
         lines.append("Issues:")

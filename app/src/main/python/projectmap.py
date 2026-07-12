@@ -172,14 +172,18 @@ def build_graph(root: Path = None) -> dict:
     return graph
 
 
+# Files whose JOB is wiring: they load/import the feature files, so a high
+# fan-out there is the spine working, not tangle.
+_ENTRY_NAMES = ("index.html", "index.htm", "main.js", "main.py", "app.py",
+                "app.js", "wsgi.py", "game.js", "bootstrap.js")
+
+
 def entry_points(graph: dict) -> list:
     """Files nothing imports but which pull others in (or a known entry name) —
     the roots to start reading a feature from."""
     ep = []
     for f, d in graph.items():
-        name = os.path.basename(f).lower()
-        rooty = name in ("index.html", "index.htm", "main.js", "main.py",
-                         "app.py", "app.js", "wsgi.py", "game.js")
+        rooty = os.path.basename(f).lower() in _ENTRY_NAMES
         if not d["importedBy"] and (d["imports"] or rooty):
             ep.append(f)
     return sorted(ep)
@@ -227,6 +231,167 @@ def load_markdown(root: Path = None) -> str:
         return graph_markdown(json.loads(fp.read_text(encoding="utf-8")))
     except Exception:
         return ""
+
+
+# --- structure gate (context-friendliness) -----------------------------------
+# Deterministic checks that the "file per feature" spine actually holds: small
+# files, few direct imports between them, no cycles. Backs the agent's
+# check_structure tool and the post-run verify gate, so a run cannot finish
+# with tangled code — the prompt asks for this structure; this enforces it.
+
+MAX_FILE_LINES = int(os.environ.get("AGENT_MAX_FILE_LINES", "400"))
+MAX_LOCAL_IMPORTS = int(os.environ.get("AGENT_MAX_LOCAL_IMPORTS", "3"))
+HUB_FAN_IN = 3   # imported by >= this many files → shared hub (events/store)
+MAX_INLINE_SCRIPT = int(os.environ.get("AGENT_MAX_INLINE_SCRIPT", "40"))
+
+_CDN_HOSTS = ("cdn.jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com",
+              "esm.sh", "cdn.skypack.dev", "ga.jspm.io")
+_VERSIONED = re.compile(r"@\d|/[vr]?\d")     # pkg@1, /1.2.3/, /v5/, /r128/
+_INLINE_SCRIPT = re.compile(r"<script\b(?![^>]*\bsrc\s*=)[^>]*>(.*?)</script>",
+                            re.I | re.S)
+_SAFE_NAME = re.compile(r"^[a-z0-9._/-]+$")
+# Loaded via string APIs the graph can't see — never treat as orphans.
+_NEVER_ORPHAN = ("sw.js", "service-worker.js")
+
+
+def line_counts(root: Path = None) -> dict:
+    """{relpath: line count} for every source file — a cheap run-start snapshot
+    so the gate can tell debt created this run from pre-existing debt."""
+    root = root or _workspace()
+    out = {}
+    for rel in _src_files(root):
+        try:
+            out[rel] = (root / rel).read_text(
+                encoding="utf-8", errors="replace").count("\n") + 1
+        except Exception:
+            pass
+    return out
+
+
+def _cycles(graph: dict, within: set) -> list:
+    """Import cycles whose every node is in `within`, deduped by member set."""
+    out, done, seen = [], set(), set()
+
+    def dfs(node, stack):
+        if node in stack:
+            cyc = stack[stack.index(node):]
+            key = frozenset(cyc)
+            if key not in seen:
+                seen.add(key)
+                out.append(cyc)
+            return
+        if node in done:
+            return
+        stack.append(node)
+        for nxt in graph.get(node, {}).get("imports", []):
+            if nxt in within:
+                dfs(nxt, stack)
+        stack.pop()
+        done.add(node)
+
+    for f in sorted(within):
+        dfs(f, [])
+    return out
+
+
+def check_structure(touched, created=None, baseline_lines=None,
+                    root: Path = None) -> str:
+    """Deterministic context-friendliness check over this run's files.
+    Returns one problem per line, '' when clean. Flags only debt the run
+    itself introduced, so an unrelated edit never demands restructuring old
+    code:
+      - a touched file that crossed MAX_FILE_LINES this run (files already
+        over the cap at run start are skipped),
+      - a file CREATED this run importing more than MAX_LOCAL_IMPORTS other
+        workspace files directly — shared hubs (imported by >= HUB_FAN_IN
+        files, e.g. events.js / store.js), wiring/entry files, and HTML
+        (whose job is loading scripts) are exempt,
+      - an import cycle made entirely of touched files,
+      - a touched full-document HTML file missing the mobile shell basics
+        (charset, width=device-width viewport, title),
+      - an inline <script> over MAX_INLINE_SCRIPT lines in HTML created this
+        run (that code belongs in its own .js file),
+      - a CDN <script>/import without a pinned version on a touched file,
+      - a .js/.css file created this run that nothing loads (dead weight
+        that confuses future runs),
+      - a file created this run with a non-URL-safe name."""
+    root = root or _workspace()
+    graph = build_graph(root)
+    touched = {str(t).replace("\\", "/") for t in (touched or [])} & set(graph)
+    if not touched:
+        return ""
+    created = ({str(c).replace("\\", "/") for c in created}
+               if created is not None else set(touched))
+    baseline_lines = baseline_lines or {}
+    hubs = {f for f, d in graph.items() if len(d["importedBy"]) >= HUB_FAN_IN}
+    problems = []
+    for f in sorted(touched):
+        try:
+            text = (root / f).read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        n = text.count("\n") + 1
+        lang, low, base = graph[f]["lang"], text.lower(), os.path.basename(f).lower()
+        was = baseline_lines.get(f)
+        is_new = f in created
+        if n > MAX_FILE_LINES and (was is None or was <= MAX_FILE_LINES):
+            problems.append(
+                f"{f}: {n} lines (cap {MAX_FILE_LINES}) — split it into "
+                "single-responsibility files wired from the entry file")
+        if is_new and lang != "html" and base not in _ENTRY_NAMES:
+            peers = [i for i in graph[f]["imports"] if i not in hubs]
+            if len(peers) > MAX_LOCAL_IMPORTS:
+                problems.append(
+                    f"{f}: imports {len(peers)} workspace files directly "
+                    f"({', '.join(peers)}; cap {MAX_LOCAL_IMPORTS}) — talk to "
+                    "other features through a shared hub (an event bus / "
+                    "store) instead of importing peers")
+        if lang == "html" and "<html" in low:
+            missing = []
+            if "<meta charset" not in low:
+                missing.append('<meta charset="utf-8">')
+            if not ("<meta name=\"viewport\"" in low.replace("'", '"')
+                    and "width=device-width" in low):
+                missing.append('<meta name="viewport" content='
+                               '"width=device-width, initial-scale=1">')
+            if "<title" not in low:
+                missing.append("<title>")
+            if missing:
+                problems.append(f"{f}: missing mobile shell basics — add "
+                                + " and ".join(missing))
+        if is_new and lang == "html":
+            for m in _INLINE_SCRIPT.finditer(text):
+                inl = m.group(1).count("\n")
+                if inl > MAX_INLINE_SCRIPT:
+                    problems.append(
+                        f"{f}: inline <script> of {inl} lines (cap "
+                        f"{MAX_INLINE_SCRIPT}) — move it into its own .js "
+                        "file loaded via <script src>")
+        if lang in ("html", "js"):
+            _loc, ext = _refs(f, text, lang)
+            for url in ext:
+                if (_is_external(url)
+                        and any(h in url for h in _CDN_HOSTS)
+                        and not _VERSIONED.search(url.split("//", 1)[-1])):
+                    problems.append(
+                        f"{f}: unpinned CDN reference {url} — pin a version "
+                        "(e.g. …/npm/babylonjs@7/…) so an upstream release "
+                        "can't silently break the app")
+        if (is_new and lang in ("js", "css") and not graph[f]["importedBy"]
+                and base not in _ENTRY_NAMES and base not in _NEVER_ORPHAN
+                and "worker" not in base):
+            problems.append(
+                f"{f}: created but nothing loads it — add a <script>/<link>/"
+                "import for it, or delete it")
+        if is_new and not _SAFE_NAME.match(f):
+            problems.append(
+                f"{f}: rename it — use only lowercase letters, digits, ., -, "
+                "_ and / so the path is URL-safe on every server")
+    for cyc in _cycles(graph, touched):
+        problems.append(
+            "import cycle: " + " → ".join(cyc + [cyc[0]]) + " — break it "
+            "(move the shared piece into its own module or use events)")
+    return "\n".join(problems)
 
 
 def deps_of(target: str, root: Path = None, depth: int = 3) -> str:

@@ -35,10 +35,20 @@ if _ovr and os.path.isdir(_ovr) and _ovr not in sys.path:
 
 # Relative paths of files created/modified during the current run.
 TOUCHED = set()
+# Per-file line counts snapshotted at run start; a touched file missing from
+# here was CREATED this run. Lets the structure gate flag only debt the run
+# introduced instead of re-litigating pre-existing files on unrelated edits.
+_BASELINE_LINES = {}
 
 
 def reset_touched() -> None:
     TOUCHED.clear()
+    _BASELINE_LINES.clear()
+    try:
+        import projectmap as pm
+        _BASELINE_LINES.update(pm.line_counts(_workspace()))
+    except Exception:
+        pass
 
 
 def _workspace() -> Path:
@@ -541,6 +551,103 @@ def t_check_web(paths="", **_):
     if soft:
         out.append("POSSIBLE ISSUES (confirm in the preview):\n" + soft)
     return "\n\n".join(out) or "OK — no obvious web issues"
+
+
+# --- secret scan --------------------------------------------------------------
+# Vibecoders paste real API keys into client-side code, where anyone who opens
+# the app can read them. Known key formats are regex-detectable with near-zero
+# false positives; a hit is a RED verify failure — the run cannot finish with a
+# live-looking credential in the workspace.
+
+_KEY_PATTERNS = [
+    ("OpenAI/Anthropic-style key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}")),
+    ("Stripe secret key", re.compile(r"\b[sr]k_live_[A-Za-z0-9]{16,}")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}")),
+    ("GitHub token", re.compile(
+        r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}|\bgithub_pat_[A-Za-z0-9_]{22,}")),
+    ("AWS access key id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}")),
+    ("private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+]
+_GENERIC_SECRET = re.compile(
+    r"""(?i)\b(api[_-]?key|apikey|api[_-]?secret|secret[_-]?key|"""
+    r"""access[_-]?token|auth[_-]?token|password|passwd)\b\s*[:=]\s*"""
+    r"""["']([^"']{12,})["']""")
+# Placeholders are the RIGHT pattern — never flag them.
+_PLACEHOLDER = re.compile(
+    r"(?i)your|xxx+|example|placeholder|changeme|change-me|insert|paste|"
+    r"dummy|sample|test|demo|todo|_here|\.\.\.|<")
+
+
+def _redact(s: str) -> str:
+    return (s[:6] + "…" + s[-2:]) if len(s) > 10 else "…"
+
+
+def _looks_secret(val: str) -> bool:
+    # Real keys mix character classes; placeholders and plain words don't.
+    if " " in val or _PLACEHOLDER.search(val):
+        return False
+    classes = sum((any(c.islower() for c in val),
+                   any(c.isupper() for c in val),
+                   any(c.isdigit() for c in val)))
+    return classes >= 2
+
+
+def check_secret_files(paths=None) -> str:
+    """Scan this run's touched files (or `paths`) for hardcoded credentials.
+    Returns one 'file:line: kind (redacted)' per hit, '' when clean."""
+    root = _workspace()
+    if paths is None:
+        paths = sorted(TOUCHED)
+    hits = []
+    for rel in paths:
+        fp = root / rel
+        if not fp.is_file():
+            continue
+        try:
+            text = fp.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            for label, rx in _KEY_PATTERNS:
+                m = rx.search(line)
+                if m and not _PLACEHOLDER.search(m.group(0)):
+                    hits.append(f"{rel}:{i}: {label} ({_redact(m.group(0))})")
+                    break
+            else:
+                m = _GENERIC_SECRET.search(line)
+                if m and _looks_secret(m.group(2)):
+                    hits.append(f"{rel}:{i}: hardcoded {m.group(1)} "
+                                f"({_redact(m.group(2))})")
+    return "\n".join(hits)
+
+
+def t_check_secrets(paths="", **_):
+    lst = [p.strip() for p in str(paths).split(",") if p.strip()] or None
+    out = check_secret_files(lst)
+    return out or "OK — no hardcoded credentials found"
+
+
+def check_structure_files(paths=None) -> str:
+    """Context-friendliness check on this run's touched files (or `paths`):
+    file size, import fan-out, cycles — see projectmap.check_structure.
+    Deterministic, '' when clean, so safe to auto-fail a run on."""
+    touched = paths if paths is not None else sorted(TOUCHED)
+    if not touched:
+        return ""
+    try:
+        import projectmap as pm
+        created = [p for p in touched
+                   if str(p).replace("\\", "/") not in _BASELINE_LINES]
+        return pm.check_structure(touched, created, _BASELINE_LINES)
+    except Exception:
+        return ""
+
+
+def t_check_structure(paths="", **_):
+    lst = [p.strip() for p in str(paths).split(",") if p.strip()] or None
+    out = check_structure_files(lst)
+    return out or "OK — structure is context-friendly"
 
 
 TEST_TIMEOUT = int(os.environ.get("AGENT_TEST_TIMEOUT", "30"))
@@ -1116,6 +1223,27 @@ READ_TOOLS = [
          "paths": {"type": "string", "description": "comma-separated .html/.js paths (optional)"},
      }, []),
      "fn": t_check_web},
+    {"name": "check_structure",
+     "description": "Verify touched files keep a context-friendly structure: "
+                    "files within the line cap, at most 3 direct imports of "
+                    "sibling workspace files (shared hubs like events.js and "
+                    "entry/wiring files don't count), and no import cycles. "
+                    "Empty paths = every file you touched this run. The run "
+                    "cannot finish until this passes, so run it after "
+                    "creating several files.",
+     "input_schema": _schema({
+         "paths": {"type": "string", "description": "comma-separated paths (optional)"},
+     }, []),
+     "fn": t_check_structure},
+    {"name": "check_secrets",
+     "description": "Scan touched files for hardcoded credentials (API keys, "
+                    "tokens, passwords, private keys). Any hit blocks the run "
+                    "from finishing — client-side code can never hold a "
+                    "secret. Empty paths = every file you touched this run.",
+     "input_schema": _schema({
+         "paths": {"type": "string", "description": "comma-separated paths (optional)"},
+     }, []),
+     "fn": t_check_secrets},
     {"name": "web_fetch",
      "description": "Fetch a URL (http/https) and return its readable text "
                     "(HTML is reduced to text). Use for docs, API references, "

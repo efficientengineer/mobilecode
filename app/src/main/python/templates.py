@@ -24,6 +24,132 @@ def _workspace() -> Path:
     return p
 
 
+# --- shared scaffold files (every web template ships these) ------------------
+# The structure verify gate steers cross-feature communication through a shared
+# hub; shipping the hub makes that pattern the path of least resistance. The
+# error overlay exists because a phone has no devtools console — a crash must
+# surface on screen, not as a silent dead app.
+
+_EVENTS_JS = """// events.js — the app's shared EVENT BUS. Features talk through named events
+// ('score-changed', 'player-hit') instead of importing each other, so the
+// dependency graph stays shallow. Loaded before the feature scripts.
+(function () {
+  const map = {};
+  window.events = {
+    on(name, fn) { (map[name] = map[name] || new Set()).add(fn); },
+    off(name, fn) { if (map[name]) map[name].delete(fn); },
+    emit(name, data) { (map[name] || []).forEach((fn) => fn(data)); },
+  };
+})();
+"""
+
+_STORE_JS = """// store.js — the single source of truth for shared state. Features read
+// window.store and emit events to announce changes; they never reach into
+// each other to mutate state directly. Persistence is built in: call
+// store.save() after a meaningful change (score, settings, progress) and the
+// state auto-loads on startup, so it survives a reload for free.
+window.store = {};
+try {
+  Object.assign(window.store,
+    JSON.parse(localStorage.getItem("app-store") || "{}"));
+} catch (e) {}
+window.store.save = function () {
+  try {  // JSON.stringify drops functions, so save() never persists itself
+    localStorage.setItem("app-store", JSON.stringify(window.store));
+  } catch (e) {}
+};
+"""
+
+_CONTROLS_JS = """// controls.js — mobile controls that already feel right; USE this instead of
+// writing new touch handling. Left half of the screen: a FLOATING joystick —
+// it appears where the thumb lands, follows within a max radius, resets on
+// release, and emits events.emit("move", {x, y}) with x/y in -1..1 (also
+// readable per-frame as controls.state). Anywhere else: a tap emits
+// events.emit("action", {x, y}) with a short haptic pulse. Multi-touch safe
+// (tracked by pointerId), so moving and firing at the same time both work.
+(function () {
+  const state = { x: 0, y: 0 };
+  const R = 60;                                  // max thumb travel, px
+  let joyId = null, ox = 0, oy = 0;
+  const css = (extra) => "position:fixed;border-radius:50%;" +
+    "transform:translate(-50%,-50%);display:none;pointer-events:none;" + extra;
+  const ring = document.createElement("div");
+  ring.style.cssText = css("width:120px;height:120px;z-index:9998;" +
+    "border:2px solid rgba(255,255,255,.35);");
+  const knob = document.createElement("div");
+  knob.style.cssText = css("width:48px;height:48px;z-index:9999;" +
+    "background:rgba(255,255,255,.5);");
+  addEventListener("DOMContentLoaded",
+    () => document.body.append(ring, knob));
+  const setKnob = (x, y) => {
+    knob.style.left = x + "px"; knob.style.top = y + "px";
+  };
+  addEventListener("pointerdown", (e) => {
+    if (e.target.closest("button,input,a,select,textarea,#err-overlay")) return;
+    if (e.clientX < innerWidth / 2 && joyId === null) {
+      joyId = e.pointerId; ox = e.clientX; oy = e.clientY;
+      ring.style.left = ox + "px"; ring.style.top = oy + "px";
+      ring.style.display = knob.style.display = "block";
+      setKnob(ox, oy);
+    } else {
+      if (navigator.vibrate) navigator.vibrate(10);
+      if (window.events) events.emit("action", { x: e.clientX, y: e.clientY });
+    }
+  });
+  addEventListener("pointermove", (e) => {
+    if (e.pointerId !== joyId) return;
+    let dx = e.clientX - ox, dy = e.clientY - oy;
+    const d = Math.hypot(dx, dy);
+    if (d > R) { dx *= R / d; dy *= R / d; }
+    setKnob(ox + dx, oy + dy);
+    state.x = dx / R; state.y = dy / R;
+    if (window.events) events.emit("move", state);
+  });
+  const end = (e) => {
+    if (e.pointerId !== joyId) return;
+    joyId = null; state.x = state.y = 0;
+    ring.style.display = knob.style.display = "none";
+    if (window.events) events.emit("move", state);
+  };
+  addEventListener("pointerup", end);
+  addEventListener("pointercancel", end);
+  window.controls = {
+    state,
+    vibrate: (ms) => navigator.vibrate && navigator.vibrate(ms || 10),
+  };
+})();
+"""
+
+_ERRORS_JS = """// errors.js — on-device error overlay. A phone has no devtools console, so
+// uncaught errors show as a red banner (tap to dismiss) instead of a silent
+// dead screen. Load this FIRST so it catches errors in every later script.
+(function () {
+  function show(msg) {
+    let el = document.getElementById("err-overlay");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "err-overlay";
+      el.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:99999;" +
+        "background:#b00020;color:#fff;font:12px/1.4 monospace;padding:8px 12px;" +
+        "max-height:40%;overflow:auto;white-space:pre-wrap;";
+      el.onclick = () => el.remove();
+      (document.body || document.documentElement).appendChild(el);
+    }
+    el.textContent += (el.textContent ? "\\n" : "") + msg;
+  }
+  addEventListener("error", (e) => show((e.message || e.type) +
+    (e.filename ? "  @ " + e.filename.split("/").pop() + ":" + e.lineno : "")));
+  addEventListener("unhandledrejection", (e) =>
+    show("unhandled rejection: " + (e.reason && (e.reason.message || e.reason))));
+})();
+"""
+
+# Every web template's index.html loads these three (errors first, so it
+# catches failures in every later script) and ships them via _SHARED_FILES.
+_SHARED_FILES = {"errors.js": _ERRORS_JS, "events.js": _EVENTS_JS,
+                 "store.js": _STORE_JS}
+
+
 # --- Babylon.js + PeerJS 3D multiplayer starter ------------------------------
 
 _BABYLON_INDEX = """<!doctype html>
@@ -42,6 +168,10 @@ _BABYLON_INDEX = """<!doctype html>
     #status { margin-top: 4px; opacity: .8; }
     .code { font-weight: 700; color: #6cf; }
   </style>
+  <script src="errors.js"></script>
+  <script src="events.js"></script>
+  <script src="store.js"></script>
+  <script src="controls.js"></script>
   <!-- Libraries loaded from pinned CDNs — never vendored into the repo. -->
   <script src="https://cdn.jsdelivr.net/npm/babylonjs@7/babylon.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
@@ -104,6 +234,10 @@ function startGame() {
     if (input["s"] || input["arrowdown"]) me.position.z -= s;
     if (input["a"] || input["arrowleft"]) me.position.x -= s;
     if (input["d"] || input["arrowright"]) me.position.x += s;
+    if (window.controls) {           // floating joystick (controls.js)
+      me.position.x += controls.state.x * s;
+      me.position.z -= controls.state.y * s;
+    }
   });
 
   engine.runRenderLoop(() => scene.render());
@@ -182,6 +316,14 @@ Files (one small file per feature):
 - game.js   — Babylon scene, local player (WASD/arrows), remote players; exposes `Game`
 - net.js    — PeerJS: Host creates a room (its peer id is the room code); Join
               connects to a code. Player state syncs on a 60ms tick.
+- events.js — shared event bus (window.events.on/off/emit): new features talk
+              through named events, they do NOT import each other
+- store.js  — window.store, the single source of truth for shared state;
+              store.save() persists it to localStorage (auto-loads on start)
+- errors.js — on-screen error overlay (phones have no devtools); keep it loaded first
+- controls.js — floating joystick (left half) + tap actions, multi-touch safe.
+              Use it (events 'move'/'action' or controls.state); don't write
+              new touch handling
 
 Conventions:
 - Keep each feature in its own small file; reference libraries by CDN, never paste
@@ -201,6 +343,9 @@ _STATIC_INDEX = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>My App</title>
   <link rel="stylesheet" href="style.css" />
+  <script src="errors.js"></script>
+  <script src="events.js"></script>
+  <script src="store.js"></script>
 </head>
 <body>
   <main><h1>Hello</h1><p>Edit the files and press Run to preview.</p></main>
@@ -229,7 +374,11 @@ _PHASER_INDEX = """<!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
   <title>2D Game</title>
-  <style>html,body{margin:0;height:100%;background:#111;overflow:hidden}</style>
+  <style>html,body{margin:0;height:100%;background:#111;overflow:hidden;touch-action:none}</style>
+  <script src="errors.js"></script>
+  <script src="events.js"></script>
+  <script src="store.js"></script>
+  <script src="controls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
 </head>
 <body>
@@ -257,6 +406,9 @@ function update() {
   if (cursors.right.isDown) b.setVelocityX(s);
   if (cursors.up.isDown) b.setVelocityY(-s);
   if (cursors.down.isDown) b.setVelocityY(s);
+  if (window.controls && (controls.state.x || controls.state.y)) {
+    b.setVelocity(controls.state.x * s, controls.state.y * s);
+  }
 }
 new Phaser.Game(config);
 """
@@ -269,6 +421,9 @@ _CHAT_INDEX = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
   <title>Chat</title>
   <link rel="stylesheet" href="style.css" />
+  <script src="errors.js"></script>
+  <script src="events.js"></script>
+  <script src="store.js"></script>
 </head>
 <body>
   <div id="messages"></div>
@@ -315,10 +470,14 @@ _WEBGAME_INDEX = """<!doctype html>
     canvas{display:block;width:100%;height:100%}
     #hud{position:fixed;top:10px;left:10px;color:#eef;font:600 14px system-ui,sans-serif;pointer-events:none;text-shadow:0 1px 3px #000;}
   </style>
+  <script src="errors.js"></script>
+  <script src="events.js"></script>
+  <script src="store.js"></script>
+  <script src="controls.js"></script>
 </head>
 <body>
   <canvas id="c"></canvas>
-  <div id="hud">use WASD/arrows</div>
+  <div id="hud">left thumb: joystick — or WASD/arrows</div>
   <script>
     // A minimal canvas game loop with input and delta time.
     const canvas = document.getElementById("c"), ctx = canvas.getContext("2d");
@@ -340,6 +499,10 @@ _WEBGAME_INDEX = """<!doctype html>
       if (keys["s"] || keys["arrowdown"]) py += speed;
       if (keys["a"] || keys["arrowleft"]) px -= speed;
       if (keys["d"] || keys["arrowright"]) px += speed;
+      if (window.controls) {  // floating joystick (controls.js)
+        px += controls.state.x * speed;
+        py += controls.state.y * speed;
+      }
 
       ctx.fillStyle = "#0f1117";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -365,31 +528,37 @@ TEMPLATES = [
             "game.js": _BABYLON_GAME,
             "net.js": _BABYLON_NET,
             "guidelines.md": _BABYLON_GUIDELINES,
+            "controls.js": _CONTROLS_JS,
+            **_SHARED_FILES,
         },
     },
     {
         "id": "web-game",
         "name": "Canvas game (vanilla JS)",
-        "description": "Minimal canvas game with arrow-key movement, delta-time loop, and resize.",
-        "files": {"index.html": _WEBGAME_INDEX},
+        "description": "Minimal canvas game with joystick/arrow-key movement, delta-time loop, and resize.",
+        "files": {"index.html": _WEBGAME_INDEX, "controls.js": _CONTROLS_JS,
+                  **_SHARED_FILES},
     },
     {
         "id": "phaser-2d",
         "name": "2D game (Phaser)",
         "description": "A minimal Phaser 3 scene with a movable player. CDN-loaded.",
-        "files": {"index.html": _PHASER_INDEX, "game.js": _PHASER_GAME},
+        "files": {"index.html": _PHASER_INDEX, "game.js": _PHASER_GAME,
+                  "controls.js": _CONTROLS_JS, **_SHARED_FILES},
     },
     {
         "id": "chat-ui",
         "name": "Chat UI (HTML/CSS)",
         "description": "A chat interface like the VoiceAgent UI. Bubble layout, text input, messages.",
-        "files": {"index.html": _CHAT_INDEX, "style.css": _CHAT_CSS, "app.js": _CHAT_JS},
+        "files": {"index.html": _CHAT_INDEX, "style.css": _CHAT_CSS,
+                  "app.js": _CHAT_JS, **_SHARED_FILES},
     },
     {
         "id": "static-web",
         "name": "Static web app",
         "description": "Plain index.html + style.css + app.js. Previews on-device.",
-        "files": {"index.html": _STATIC_INDEX, "style.css": _STATIC_CSS, "app.js": _STATIC_JS},
+        "files": {"index.html": _STATIC_INDEX, "style.css": _STATIC_CSS,
+                  "app.js": _STATIC_JS, **_SHARED_FILES},
     },
     {
         "id": "python-wsgi",

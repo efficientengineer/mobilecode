@@ -161,6 +161,43 @@ PRACTICES = [
               "portrait", "rotat"],
      "text": "Verify on a real mid-range phone in both orientations with a notch "
              "— the desktop preview misrepresents size, touch, and speed."},
+    # --- security (any mobile web project) ---
+    {"scope": "web", "core": True,
+     "tags": ["api", "key", "secret", "token", "password", "auth", "login",
+              "account", "backend", "fetch", "server", "openai", "anthropic",
+              "llm", "ai", "chatgpt", "claude", "request", "credential",
+              "stripe", "payment", "firebase", "database"],
+     "text": "NEVER hardcode an API key, token, or password in the code or "
+             "commit one — anyone who opens a client-side app can read it, and "
+             "a secret scan blocks the run if you try. If the app needs the "
+             "USER's key, add a settings field that asks for it at runtime and "
+             "keep it in localStorage; otherwise route the call through a tiny "
+             "server (app.py) that holds the key. Use an obvious placeholder "
+             "like YOUR_API_KEY anywhere a key slot must appear."},
+    # --- controls scaffold & dialogs (mobile feel) ---
+    {"scope": "game", "core": True,
+     "tags": ["joystick", "control", "input", "touch", "mov", "walk", "steer",
+              "player", "tap", "fire", "shoot", "button", "drag", "thumb"],
+     "text": "If controls.js exists (game templates ship it), USE it instead "
+             "of writing new touch handling: listen for events.on('move', "
+             "{x,y} in -1..1) and events.on('action', {x,y}), or read "
+             "controls.state each frame; controls.vibrate(ms) for haptics. It "
+             "already does the floating joystick, multi-touch, and reset — "
+             "extend it rather than duplicating it."},
+    {"scope": "web", "core": False,
+     "tags": ["alert", "dialog", "confirm", "popup", "modal", "message",
+              "notify", "toast", "warn", "error", "prompt"],
+     "text": "Never use blocking alert()/confirm()/prompt() — they freeze the "
+             "page and look broken on mobile. Use a small in-page overlay or "
+             "toast, and an <input> in the UI when you need text from the "
+             "user."},
+    {"scope": "game", "core": False,
+     "tags": ["landscape", "portrait", "orient", "rotat", "screen", "wide",
+              "tall", "fullscreen"],
+     "text": "Pick ONE orientation and design for it; on the other, show a "
+             "'rotate your phone' overlay instead of a broken layout "
+             "(screen.orientation.lock only works in fullscreen, so don't "
+             "rely on it)."},
     # --- architecture & decoupling (event-driven, ScriptableObject-style) ---
     {"scope": "web", "core": True,
      "tags": ["event", "architect", "decoupl", "coupling", "structur", "modular",
