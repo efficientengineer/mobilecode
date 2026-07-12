@@ -29,7 +29,7 @@ _LENSES = ["minimalist and elegant", "chaotic and playful", "narrative-driven",
 
 
 def _free_default() -> str:
-    return "deepseek/deepseek-chat"
+    return "deepseek/deepseek-v4-pro"
 
 
 def _lead():
