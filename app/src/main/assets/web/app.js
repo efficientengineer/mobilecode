@@ -53,9 +53,15 @@ window.nativeEvent = (type, payload) => {
     // Continuous dictation: partials carry the running transcript accumulated
     // since the last recognizer start. _dictBase holds everything from prior
     // dictation sessions within this compose — keep it visible at all times.
+    // Never let the displayed text shrink: onResults fires after a pause with
+    // only the committed words (shorter than the last partial that included
+    // in-progress speech), which made dictation appear to vanish.
     composeOpen(false);
-    box.value = _dictBase + (_dictBase && payload ? " " : "") + (payload || "");
-    box.dispatchEvent(new Event("input"));
+    const candidate = _dictBase + (_dictBase && payload ? " " : "") + (payload || "");
+    if (candidate.length >= (box.value || "").length) {
+      box.value = candidate;
+      box.dispatchEvent(new Event("input"));
+    }
   } else if (type === "speech-final") {
     // Fires only on explicit Stop (or fatal error). Commit the final text.
     if (payload && payload.trim()) {
