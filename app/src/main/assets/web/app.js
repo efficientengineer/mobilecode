@@ -57,7 +57,12 @@ window.nativeEvent = (type, payload) => {
     // only the committed words (shorter than the last partial that included
     // in-progress speech), which made dictation appear to vanish.
     composeOpen(false);
-    const candidate = _dictBase + (_dictBase && payload ? " " : "") + (payload || "");
+    var raw = (payload || "").trim();
+    // Dedup: if payload already starts with _dictBase, don't double it.
+    if (_dictBase && raw.indexOf(_dictBase) === 0) {
+      raw = raw.slice(_dictBase.length).trim();
+    }
+    const candidate = _dictBase + (_dictBase && raw ? " " : "") + raw;
     if (candidate.length >= (box.value || "").length) {
       box.value = candidate;
       box.dispatchEvent(new Event("input"));
