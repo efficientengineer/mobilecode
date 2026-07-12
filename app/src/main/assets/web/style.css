@@ -307,11 +307,14 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 #advSection.hidden { display: none; }
 
 /* Main area: editor pane fills it; an empty-state shows when nothing is open. */
-#editorEmpty { flex: 1; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; text-align: center; color: var(--muted); padding: 24px; gap: 8px; }
+#editorEmpty { flex: 1; display: flex; flex-direction: column; min-height: 0;
+  color: var(--muted); }
 #editorEmpty.hidden { display: none; }
-.ee-title { font-size: 18px; font-weight: 700; color: var(--text); }
-.ee-sub { font-size: 13px; line-height: 1.6; }
+.ee-head { flex-shrink: 0; font-size: 14px; font-weight: 700; color: var(--text);
+  padding: 10px 14px 6px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 6px; }
+/* Inline action log (fills the empty-state area, scrolls independently) */
+.alp-inline { flex: 1; overflow-y: auto; padding: 4px 0; }
 #editorPane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 #editorPane.hidden { display: none; }
 
