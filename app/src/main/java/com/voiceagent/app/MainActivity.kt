@@ -841,9 +841,9 @@ class MainActivity : AppCompatActivity() {
         private const val NOTIFY_CHANNEL = "agent_replies"
         private const val NOTIFY_ID = 42
 
-        // Trailing silence (ms) before the recognizer may end. ~7s so natural
-        // pauses don't cut you off (also backed by auto-restart).
-        private const val SPEECH_SILENCE_MS = 7000
+        // Trailing silence (ms) before the recognizer may end. 12s so natural
+        // pauses (thinking mid-sentence) don't cut you off.
+        private const val SPEECH_SILENCE_MS = 12000
 
         // Number of agent runs in flight; survives Activity recreation.
         @Volatile private var activeRuns = 0

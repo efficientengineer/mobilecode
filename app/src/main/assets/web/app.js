@@ -1366,7 +1366,7 @@ const actions = {
        <label>Default implementer model (blank = single agent)</label><input id="wm" type="text" value="${s.workerModel||""}" />
        <label>Fallback model (used if the primary provider fails)</label><input id="fm" type="text" list="ml" value="${s.fallbackModel||""}" placeholder="e.g. deepseek/deepseek-chat" />
        <datalist id="ml"></datalist>
-       <label>Voice: silence before it stops (ms)</label><input id="ssm" type="text" inputmode="numeric" value="${s.speechSilenceMs||"7000"}" />
+       <label>Voice: silence before it stops (ms)</label><input id="ssm" type="text" inputmode="numeric" value="${s.speechSilenceMs||"12000"}" />
        <label>Agent branch (for OTA updates)</label><input id="br" type="text" value="${s.branch||""}" />
        <div class="group-title">Preferences</div>
        <div class="grid">
