@@ -35,10 +35,20 @@ if _ovr and os.path.isdir(_ovr) and _ovr not in sys.path:
 
 # Relative paths of files created/modified during the current run.
 TOUCHED = set()
+# Per-file line counts snapshotted at run start; a touched file missing from
+# here was CREATED this run. Lets the structure gate flag only debt the run
+# introduced instead of re-litigating pre-existing files on unrelated edits.
+_BASELINE_LINES = {}
 
 
 def reset_touched() -> None:
     TOUCHED.clear()
+    _BASELINE_LINES.clear()
+    try:
+        import projectmap as pm
+        _BASELINE_LINES.update(pm.line_counts(_workspace()))
+    except Exception:
+        pass
 
 
 def _workspace() -> Path:
@@ -541,6 +551,28 @@ def t_check_web(paths="", **_):
     if soft:
         out.append("POSSIBLE ISSUES (confirm in the preview):\n" + soft)
     return "\n\n".join(out) or "OK — no obvious web issues"
+
+
+def check_structure_files(paths=None) -> str:
+    """Context-friendliness check on this run's touched files (or `paths`):
+    file size, import fan-out, cycles — see projectmap.check_structure.
+    Deterministic, '' when clean, so safe to auto-fail a run on."""
+    touched = paths if paths is not None else sorted(TOUCHED)
+    if not touched:
+        return ""
+    try:
+        import projectmap as pm
+        created = [p for p in touched
+                   if str(p).replace("\\", "/") not in _BASELINE_LINES]
+        return pm.check_structure(touched, created, _BASELINE_LINES)
+    except Exception:
+        return ""
+
+
+def t_check_structure(paths="", **_):
+    lst = [p.strip() for p in str(paths).split(",") if p.strip()] or None
+    out = check_structure_files(lst)
+    return out or "OK — structure is context-friendly"
 
 
 TEST_TIMEOUT = int(os.environ.get("AGENT_TEST_TIMEOUT", "30"))
@@ -1116,6 +1148,18 @@ READ_TOOLS = [
          "paths": {"type": "string", "description": "comma-separated .html/.js paths (optional)"},
      }, []),
      "fn": t_check_web},
+    {"name": "check_structure",
+     "description": "Verify touched files keep a context-friendly structure: "
+                    "files within the line cap, at most 3 direct imports of "
+                    "sibling workspace files (shared hubs like events.js and "
+                    "entry/wiring files don't count), and no import cycles. "
+                    "Empty paths = every file you touched this run. The run "
+                    "cannot finish until this passes, so run it after "
+                    "creating several files.",
+     "input_schema": _schema({
+         "paths": {"type": "string", "description": "comma-separated paths (optional)"},
+     }, []),
+     "fn": t_check_structure},
     {"name": "web_fetch",
      "description": "Fetch a URL (http/https) and return its readable text "
                     "(HTML is reduced to text). Use for docs, API references, "

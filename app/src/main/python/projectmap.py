@@ -172,14 +172,18 @@ def build_graph(root: Path = None) -> dict:
     return graph
 
 
+# Files whose JOB is wiring: they load/import the feature files, so a high
+# fan-out there is the spine working, not tangle.
+_ENTRY_NAMES = ("index.html", "index.htm", "main.js", "main.py", "app.py",
+                "app.js", "wsgi.py", "game.js", "bootstrap.js")
+
+
 def entry_points(graph: dict) -> list:
     """Files nothing imports but which pull others in (or a known entry name) —
     the roots to start reading a feature from."""
     ep = []
     for f, d in graph.items():
-        name = os.path.basename(f).lower()
-        rooty = name in ("index.html", "index.htm", "main.js", "main.py",
-                         "app.py", "app.js", "wsgi.py", "game.js")
+        rooty = os.path.basename(f).lower() in _ENTRY_NAMES
         if not d["importedBy"] and (d["imports"] or rooty):
             ep.append(f)
     return sorted(ep)
@@ -227,6 +231,107 @@ def load_markdown(root: Path = None) -> str:
         return graph_markdown(json.loads(fp.read_text(encoding="utf-8")))
     except Exception:
         return ""
+
+
+# --- structure gate (context-friendliness) -----------------------------------
+# Deterministic checks that the "file per feature" spine actually holds: small
+# files, few direct imports between them, no cycles. Backs the agent's
+# check_structure tool and the post-run verify gate, so a run cannot finish
+# with tangled code — the prompt asks for this structure; this enforces it.
+
+MAX_FILE_LINES = int(os.environ.get("AGENT_MAX_FILE_LINES", "400"))
+MAX_LOCAL_IMPORTS = int(os.environ.get("AGENT_MAX_LOCAL_IMPORTS", "3"))
+HUB_FAN_IN = 3   # imported by >= this many files → shared hub (events/store)
+
+
+def line_counts(root: Path = None) -> dict:
+    """{relpath: line count} for every source file — a cheap run-start snapshot
+    so the gate can tell debt created this run from pre-existing debt."""
+    root = root or _workspace()
+    out = {}
+    for rel in _src_files(root):
+        try:
+            out[rel] = (root / rel).read_text(
+                encoding="utf-8", errors="replace").count("\n") + 1
+        except Exception:
+            pass
+    return out
+
+
+def _cycles(graph: dict, within: set) -> list:
+    """Import cycles whose every node is in `within`, deduped by member set."""
+    out, done, seen = [], set(), set()
+
+    def dfs(node, stack):
+        if node in stack:
+            cyc = stack[stack.index(node):]
+            key = frozenset(cyc)
+            if key not in seen:
+                seen.add(key)
+                out.append(cyc)
+            return
+        if node in done:
+            return
+        stack.append(node)
+        for nxt in graph.get(node, {}).get("imports", []):
+            if nxt in within:
+                dfs(nxt, stack)
+        stack.pop()
+        done.add(node)
+
+    for f in sorted(within):
+        dfs(f, [])
+    return out
+
+
+def check_structure(touched, created=None, baseline_lines=None,
+                    root: Path = None) -> str:
+    """Deterministic context-friendliness check over this run's files.
+    Returns one problem per line, '' when clean. Flags only debt the run
+    itself introduced, so an unrelated edit never demands restructuring old
+    code:
+      - a touched file that crossed MAX_FILE_LINES this run (files already
+        over the cap at run start are skipped),
+      - a file CREATED this run importing more than MAX_LOCAL_IMPORTS other
+        workspace files directly — shared hubs (imported by >= HUB_FAN_IN
+        files, e.g. events.js / store.js), wiring/entry files, and HTML
+        (whose job is loading scripts) are exempt,
+      - an import cycle made entirely of touched files."""
+    root = root or _workspace()
+    graph = build_graph(root)
+    touched = {str(t).replace("\\", "/") for t in (touched or [])} & set(graph)
+    if not touched:
+        return ""
+    created = ({str(c).replace("\\", "/") for c in created}
+               if created is not None else set(touched))
+    baseline_lines = baseline_lines or {}
+    hubs = {f for f, d in graph.items() if len(d["importedBy"]) >= HUB_FAN_IN}
+    problems = []
+    for f in sorted(touched):
+        try:
+            n = (root / f).read_text(
+                encoding="utf-8", errors="replace").count("\n") + 1
+        except Exception:
+            continue
+        was = baseline_lines.get(f)
+        if n > MAX_FILE_LINES and (was is None or was <= MAX_FILE_LINES):
+            problems.append(
+                f"{f}: {n} lines (cap {MAX_FILE_LINES}) — split it into "
+                "single-responsibility files wired from the entry file")
+        if (f in created and graph[f]["lang"] != "html"
+                and os.path.basename(f).lower() not in _ENTRY_NAMES):
+            peers = [i for i in graph[f]["imports"] if i not in hubs]
+            if len(peers) > MAX_LOCAL_IMPORTS:
+                problems.append(
+                    f"{f}: imports {len(peers)} workspace files directly "
+                    f"({', '.join(peers)}; cap {MAX_LOCAL_IMPORTS}) — talk to "
+                    "other features through a shared hub (an event bus / "
+                    "store) instead of importing peers")
+    for cyc in _cycles(graph, touched):
+        problems.append(
+            "import cycle: " + " → ".join(cyc + [cyc[0]]) + " — break it "
+            "(move the shared piece into its own module or use events)")
+    return "\n".join(problems)
 
 
 def deps_of(target: str, root: Path = None, depth: int = 3) -> str:

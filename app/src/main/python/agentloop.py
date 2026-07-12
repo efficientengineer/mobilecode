@@ -253,7 +253,11 @@ _AGENT_SYSTEM = (
     "one small, single-responsibility file per feature (e.g. player.js, "
     "enemies.js, dungeon.js, input.js) wired from a small entry file (an "
     "index.html that loads them, or a main.js). This keeps each read and edit "
-    "small and cheap. NEVER build a whole app as one giant file.\n"
+    "small and cheap. NEVER build a whole app as one giant file. This is "
+    "ENFORCED: a deterministic check_structure gate runs before you can "
+    "finish and fails the run while a touched file is oversized, a new file "
+    "imports more than 3 sibling files directly (shared hubs like events.js "
+    "and the entry file are exempt), or touched files form an import cycle.\n"
     "- Keep files under ~300 lines; if one would grow past that, split it. "
     "Writing a very large file in one call also risks hitting the output limit "
     "and truncating — write a small skeleton, then grow it with str_replace. "
@@ -288,7 +292,8 @@ _AGENT_SYSTEM = (
     "files at once. Prefer these over doing everything yourself, one step at a "
     "time, when the work naturally fans out.\n"
     "- Verify as you GO, not only at the end: after writing Python run "
-    "check_python; after writing HTML/JS run check_web; run run_tests once the "
+    "check_python; after writing HTML/JS run check_web; after creating "
+    "several files run check_structure; run run_tests once the "
     "pieces a test needs exist. Fix what fails before continuing.\n"
     "- Keep the project self-contained and runnable on the device: plain "
     "Python (stdlib + Flask-style WSGI `app.py`) or static web (index.html) "
@@ -532,7 +537,30 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                                      "local files that do not exist. Create them "
                                      "or fix the paths, then finish:\n" + web_hard})
                     continue
-                # (4) Independent code review by a stronger/different model, once
+                # (4) structure gate: the context-friendly file-per-feature
+                # spine must actually hold. Oversized files, tangled imports,
+                # or cycles among files this run touched come back as a repair
+                # round, so "done" also means "structured" — the system prompt
+                # asks for it, this enforces it.
+                try:
+                    tangle = agent_tools.check_structure_files()
+                except Exception:
+                    tangle = ""
+                if tangle:
+                    repair_left -= 1
+                    _emit("verify_failed", which="structure",
+                          detail=_clip(tangle, 500))
+                    messages.append({"role": "assistant", "content": final_text,
+                                     "reasoning": r.get("reasoning", "")})
+                    messages.append({"role": "user", "content":
+                                     "Verification failed — the code is not "
+                                     "context-friendly. Restructure it (small "
+                                     "single-responsibility files, talk through "
+                                     "a shared hub instead of importing peers, "
+                                     "no cycles), re-run check_structure, then "
+                                     "finish:\n" + tangle})
+                    continue
+                # (5) Independent code review by a stronger/different model, once
                 # the mechanical checks pass. A BLOCK verdict on real correctness/
                 # security issues is fed back as one repair round; runs at most
                 # once so it can't loop.
@@ -618,7 +646,8 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             # one-time nudge.
             if tc["name"] not in ("read_file", "list_files", "grep",
                                   "todo_write", "note_write",
-                                  "check_python", "check_web", "run_tests",
+                                  "check_python", "check_web",
+                                  "check_structure", "run_tests",
                                   "git_status"):
                 try:
                     sig = tc["name"] + "|" + json.dumps(tc.get("args") or {},
