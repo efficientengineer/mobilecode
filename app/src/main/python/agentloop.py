@@ -258,10 +258,14 @@ _AGENT_SYSTEM = (
     "finish and fails the run while a touched file is oversized, a new file "
     "imports more than 3 sibling files directly (shared hubs like events.js "
     "and the entry file are exempt), or touched files form an import cycle.\n"
-    "- If the project has events.js / store.js / errors.js (templates ship "
-    "them), KEEP and USE them: route cross-feature communication through "
-    "window.events, shared state through window.store, and leave errors.js "
-    "loaded first so crashes show on screen.\n"
+    "- If the project has events.js / store.js / errors.js / controls.js "
+    "(templates ship them), KEEP and USE them: route cross-feature "
+    "communication through window.events, shared state through window.store "
+    "(store.save() persists it), touch input through controls.js, and leave "
+    "errors.js loaded first so crashes show on screen.\n"
+    "- NEVER hardcode an API key/token/password — a secret scan blocks the "
+    "run. Ask the user for their key at runtime (localStorage) or hold it in "
+    "a small server.\n"
     "- Keep files under ~300 lines; if one would grow past that, split it. "
     "Writing a very large file in one call also risks hitting the output limit "
     "and truncating — write a small skeleton, then grow it with str_replace. "
@@ -501,6 +505,32 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             # (2) run the project's tests. Either failure is fed back as a
             # repair round so "done" means "parses AND passes", not just parses.
             if write and not plan and repair_left > 0:
+                # (0) secret scan comes first — a hardcoded credential is the
+                # one thing that must NEVER survive to "done", whatever else
+                # is broken.
+                try:
+                    leaks = agent_tools.check_secret_files()
+                except Exception:
+                    leaks = ""
+                if leaks:
+                    repair_left -= 1
+                    _emit("verify_failed", which="secrets",
+                          detail=_clip(leaks, 500))
+                    messages.append({"role": "assistant", "content": final_text,
+                                     "reasoning": r.get("reasoning", "")})
+                    messages.append({"role": "user", "content":
+                                     "SECURITY verification failed — a "
+                                     "credential is hardcoded in the workspace. "
+                                     "Remove it: client-side code can never "
+                                     "hold a secret (anyone who opens the app "
+                                     "can read it). Ask the user for their key "
+                                     "at RUNTIME in the UI and keep it in "
+                                     "localStorage, or route the call through "
+                                     "a small server (app.py) that holds it. "
+                                     "Re-run check_secrets, and in your final "
+                                     "reply tell the user to REVOKE/rotate the "
+                                     "exposed key. Findings:\n" + leaks})
+                    continue
                 errs = agent_tools.check_python_files()
                 if errs:
                     repair_left -= 1
@@ -651,8 +681,8 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             if tc["name"] not in ("read_file", "list_files", "grep",
                                   "todo_write", "note_write",
                                   "check_python", "check_web",
-                                  "check_structure", "run_tests",
-                                  "git_status"):
+                                  "check_structure", "check_secrets",
+                                  "run_tests", "git_status"):
                 try:
                     sig = tc["name"] + "|" + json.dumps(tc.get("args") or {},
                                                         sort_keys=True)[:400]

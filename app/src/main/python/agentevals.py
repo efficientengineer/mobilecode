@@ -117,6 +117,12 @@ def analyze_events(events: list) -> dict:
     vf_counts = {}
     for w in verify_failures:
         vf_counts[w] = vf_counts.get(w, 0) + 1
+    # A secrets round is red even when repaired in one pass: the credential
+    # was written to disk and may survive in git history — it must be rotated.
+    if vf_counts.pop("secrets", 0):
+        flag("red", "secret-exposed",
+             "a hardcoded credential was caught by the secret scan — even "
+             "though it was removed, ROTATE that key (it may be in git history)")
     thrashed = {w: c for w, c in vf_counts.items() if c >= 2}
     if thrashed:
         flag("red", "verify-thrash",
