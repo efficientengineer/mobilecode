@@ -311,7 +311,7 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 /* Session panel toggle tab (right edge, vertical "Sessions" text) */
 #sessionTab {
   position: fixed;
-  z-index: 50;
+  z-index: 65;
   right: 0;
   top: 50%;
   transform: translateY(-50%);
@@ -344,9 +344,13 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   color: var(--text);
 }
 #sessionTab.panel-open {
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-50%) translateX(100%);
+  /* Tab overlays the open panel — stays visible so it can toggle it closed */
+  opacity: 1;
+  pointer-events: auto;
+  background: var(--panel);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: -4px 0 16px rgba(0,0,0,.55);
 }
 #sessionTab .unread-dot {
   position: absolute;
