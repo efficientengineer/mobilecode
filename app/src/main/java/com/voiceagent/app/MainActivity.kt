@@ -800,8 +800,9 @@ class MainActivity : AppCompatActivity() {
                             spokenWords.add(t)
                             event("speech-partial", spokenWords.joinToString(" "))
                         }
-                        // Restart immediately — the user hasn't pressed Stop.
-                        if (dictating) restartRecognizer()
+                        // Restart quickly — the user hasn't pressed Stop and may
+                        // resume speaking at any moment.
+                        if (dictating) restartRecognizer(50)
                     }
                     override fun onError(error: Int) {
                         if (!dictating) {
@@ -810,11 +811,12 @@ class MainActivity : AppCompatActivity() {
                             return
                         }
                         // Transient errors (e.g. no match, network timeout) —
-                        // restart rather than killing the session.
+                        // restart rather than killing the session. Use a longer
+                        // delay so silence doesn't trigger rapid beeping.
                         when (error) {
                             SpeechRecognizer.ERROR_NO_MATCH,
                             SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
-                                if (dictating) restartRecognizer()
+                                if (dictating) restartRecognizer(1500)
                             }
                             else -> {
                                 dictating = false
@@ -850,15 +852,16 @@ class MainActivity : AppCompatActivity() {
         try { speech?.startListening(speechIntent) } catch (_: Throwable) {}
     }
 
-    private fun restartRecognizer() {
-        // The recognizer already stopped (we're in onResults / onError); just
-        // wait a beat then restart. Longer delay (2 s) so system "listening"
-        // beeps don't fire in rapid succession when silence is brief.
+    private fun restartRecognizer(delayMs: Long = 50) {
+        // The recognizer already stopped (we're in onResults / onError).
+        // Quick restart (50 ms) after a successful recognition so speech
+        // right after a pause isn't lost. Errors (no-match, timeout) use a
+        // longer delay to avoid rapid beeping during extended silence.
         android.os.Handler(mainLooper).postDelayed({
             if (dictating) {
                 try { speech?.startListening(speechIntent) } catch (_: Throwable) {}
             }
-        }, 2000)
+        }, delayMs)
     }
 
     private fun stopDictation() {
