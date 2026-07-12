@@ -775,9 +775,12 @@ class MainActivity : AppCompatActivity() {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             val ms = silenceMs()
+            // COMPLETE = definitely done; POSSIBLY = maybe done (must be < COMPLETE).
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, ms)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, ms)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, ms / 2)
+            // Force the recognizer to keep listening for at least this long before
+            // it may return results — prevents one-word cutoffs.
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, ms)
         }
 
     private fun startListening() {
@@ -842,18 +845,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
         speechIntent = buildSpeechIntent()
-        try { speech?.cancel() } catch (_: Throwable) {}
+        // Fresh start — don't cancel a previous session here (restartRecognizer
+        // handles that path without a double-cancel that triggers extra beeps).
         try { speech?.startListening(speechIntent) } catch (_: Throwable) {}
     }
 
     private fun restartRecognizer() {
-        try { speech?.cancel() } catch (_: Throwable) {}
-        // Small delay to let the recognizer fully release before restarting.
+        // The recognizer already stopped (we're in onResults / onError); just
+        // wait a beat then restart. Longer delay (2 s) so system "listening"
+        // beeps don't fire in rapid succession when silence is brief.
         android.os.Handler(mainLooper).postDelayed({
             if (dictating) {
                 try { speech?.startListening(speechIntent) } catch (_: Throwable) {}
             }
-        }, 200)
+        }, 2000)
     }
 
     private fun stopDictation() {
