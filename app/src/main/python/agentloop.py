@@ -258,6 +258,10 @@ _AGENT_SYSTEM = (
     "finish and fails the run while a touched file is oversized, a new file "
     "imports more than 3 sibling files directly (shared hubs like events.js "
     "and the entry file are exempt), or touched files form an import cycle.\n"
+    "- If the project has events.js / store.js / errors.js (templates ship "
+    "them), KEEP and USE them: route cross-feature communication through "
+    "window.events, shared state through window.store, and leave errors.js "
+    "loaded first so crashes show on screen.\n"
     "- Keep files under ~300 lines; if one would grow past that, split it. "
     "Writing a very large file in one call also risks hitting the output limit "
     "and truncating — write a small skeleton, then grow it with str_replace. "
@@ -677,6 +681,22 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                       f"Stopped at the {MAX_STEPS}-step safety limit. "
                       "Progress so far is in the workspace — say 'continue' to keep going.")
 
+    # Workspace-wide structure snapshot for the diagnose trend: unlike the
+    # gate (which only blocks NEW debt), this measures the whole project so
+    # diagnoses.jsonl shows whether structure is improving or rotting.
+    if write and agent_tools.TOUCHED:
+        try:
+            import projectmap as _pm
+            _lc = _pm.line_counts()
+            _g = _pm.build_graph()
+            _code = [f for f, d in _g.items() if d["lang"] in ("js", "py")]
+            _fan = (sum(len(_g[f]["imports"]) for f in _code) / len(_code)
+                    if _code else 0.0)
+            _emit("structure", files=len(_g),
+                  max_lines=max(_lc.values(), default=0),
+                  avg_fanout=round(_fan, 2))
+        except Exception:
+            pass
     u = llm.usage()
     _emit("usage", input=u["input"], output=u["output"], calls=u["calls"],
           cache=u.get("cache_read", 0))
