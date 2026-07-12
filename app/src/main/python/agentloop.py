@@ -611,10 +611,15 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
             messages.append({"role": "tool", "tool_call_id": tc["id"],
                              "name": tc["name"], "content": result,
                              "_path": _arg_path(tc.get("args"))})
-            # Track exact-repeat calls (skip read-only inspection, which is fine
-            # to repeat). When one crosses the limit, queue a one-time nudge.
+            # Track exact-repeat calls (skip read-only inspection and the
+            # verification tools — the workflow deliberately re-runs check_*/
+            # run_tests with identical args after each edit, so repeats there
+            # are progress, not a spiral). When one crosses the limit, queue a
+            # one-time nudge.
             if tc["name"] not in ("read_file", "list_files", "grep",
-                                  "todo_write", "note_write"):
+                                  "todo_write", "note_write",
+                                  "check_python", "check_web", "run_tests",
+                                  "git_status"):
                 try:
                     sig = tc["name"] + "|" + json.dumps(tc.get("args") or {},
                                                         sort_keys=True)[:400]

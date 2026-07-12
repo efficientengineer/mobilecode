@@ -106,12 +106,21 @@ def analyze_events(events: list) -> dict:
     for s in spirals:
         flag("red", "spiral",
              f"repeated `{s['name']}` {s['count']}x with no progress")
-    if len(verify_failures) >= 2:
+    # Thrash means the SAME check failed repeatedly — the fix didn't take.
+    # Distinct checks each failing once (e.g. one web round + one review
+    # round) is the repair pipeline working as designed, so only warn.
+    vf_counts = {}
+    for w in verify_failures:
+        vf_counts[w] = vf_counts.get(w, 0) + 1
+    thrashed = {w: c for w, c in vf_counts.items() if c >= 2}
+    if thrashed:
         flag("red", "verify-thrash",
-             f"{len(verify_failures)} verify-failure rounds ({', '.join(verify_failures)})")
+             "same check failed repeatedly: " +
+             ", ".join(f"{w}×{c}" for w, c in thrashed.items()))
     elif verify_failures:
         flag("yellow", "verify-retry",
-             f"1 verify-failure round ({verify_failures[0]})")
+             f"{len(verify_failures)} verify-failure round(s) "
+             f"({', '.join(verify_failures)}), each fixed in one pass")
     for f in fallbacks:
         flag("yellow", "provider-fallback",
              f"switched provider {f['from']} -> {f['to']} (primary failed)")
