@@ -9,16 +9,12 @@
 </head>
 <body>
   <!-- Floating controls -->
-  <button id="githubFab" class="fab fab-wide" title="GitHub">GitHub ▾</button>
-  <button id="playFab" class="fab update-fab" title="Update app">⬆</button>
+  <button id="githubFab" class="fab" title="GitHub">GitHub ▸</button>
   <button id="menuFab" class="fab" title="Menu">☰</button>
-  <button id="actionsFab" class="fab" title="Actions">⋯</button>
-  <button id="usage" class="usagechip hidden" title="tokens this run — tap for detail"></button>
   <button id="editModeFab" class="fab edit-mode-toggle" title="Edit layout">✎</button>
 
   <!-- Floating dropdown panels -->
   <div id="modelMenu" class="fabmenu hidden"></div>
-  <div id="actionsMenu" class="fabmenu hidden"></div>
   <div id="chatActionsMenu" class="fabmenu hidden"></div>
   <div id="githubMenu" class="fabmenu hidden"></div>
 
@@ -28,7 +24,11 @@
       <div id="tabs"></div>
       <span id="cursorPos" class="cursor-pos"></span>
     </div>
-    <div id="subtitle"><span id="subSession">…</span> &nbsp; <span id="subRepo">no repo</span> &nbsp; 🌿 <span id="subBranch">?</span></div>
+    <div id="subtitle">
+      <div class="sub-item"><span class="sub-label">Session</span><span id="subSession">…</span></div>
+      <div class="sub-item"><span class="sub-label">Repo</span><span id="subRepo">no repo</span></div>
+      <div class="sub-item"><span class="sub-label">Branch</span><span id="subBranch">?</span></div>
+    </div>
 
     <div id="mainCol">
       <div id="editorEmpty">
@@ -159,14 +159,6 @@
         </div>
       </div>
     </div>
-    <div id="chatDrawer-balance">
-      <div class="bal-grid">
-        <div class="bal-row bal-head"><span></span><span>DeepSeek</span><span>Anthropic</span><span>OpenAI</span></div>
-        <div class="bal-row bal-avail"><span>Balance</span><span id="bal-ds">—</span><span id="bal-an">?</span><span id="bal-oa">—</span></div>
-        <div class="bal-row bal-sess"><span>Used</span><span id="bal-ds-used">—</span><span id="bal-an-used">—</span><span id="bal-oa-used">—</span></div>
-      </div>
-    </div>
-
     <main id="chat"></main>
 
     <div id="todos" class="hidden">
