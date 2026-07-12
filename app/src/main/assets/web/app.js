@@ -50,11 +50,13 @@ function stopDictation() {
 window.nativeEvent = (type, payload) => {
   const box = $("#input");
   if (type === "speech-partial") {
-    composeOpen(false);   // dictation streams into the shared floating box
-    box.value = _dictBase + (_dictBase ? " " : "") + (payload || "");
+    // Continuous dictation: partials carry the full running transcript
+    // (accumulated across recognizer restarts). Don't re-prepend _dictBase.
+    composeOpen(false);
+    box.value = (payload || "");
     box.dispatchEvent(new Event("input"));
   } else if (type === "speech-final") {
-    // Commit the utterance into the box; do NOT submit — Send sends it.
+    // Fires only on explicit Stop (or fatal error). Commit the final text.
     if (payload && payload.trim()) {
       composeOpen(false);
       box.value = _dictBase + (_dictBase ? " " : "") + payload.trim();
@@ -63,7 +65,7 @@ window.nativeEvent = (type, payload) => {
     }
     if (!_dictating) setStatus("");
   } else if (type === "dictation" && payload === "off") {
-    // The recognizer stopped on its own (e.g. an error) — reset the toggle.
+    // The recognizer stopped due to a fatal error — reset the toggle.
     _dictating = false;
     const b = $("#micBtn"); if (b) b.textContent = "Speak";
     setStatus("");
