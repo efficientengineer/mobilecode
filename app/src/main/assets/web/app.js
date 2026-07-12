@@ -51,22 +51,27 @@ window.nativeEvent = (type, payload) => {
   const box = $("#input");
   if (type === "speech-partial") {
     // Android sends the FULL accumulated transcript (spokenWords joined) on
-    // every partial — both onPartialResults and onResults. Just display it
-    // directly, never letting the box shrink (partials can flicker shorter
-    // when the recognizer restarts mid-utterance).
+    // every partial — both onPartialResults and onResults. _dictBase holds
+    // whatever was already in the box when dictation started (text the user
+    // typed, or committed from a previous dictation session), so it must be
+    // preserved in front of the new speech — otherwise resuming after a pause
+    // replaces earlier text instead of amending it. Never let the box shrink
+    // (partials can flicker shorter when the recognizer restarts mid-utterance).
     composeOpen(false);
     const text = (payload || "").trim();
-    if (text.length >= (box.value || "").length) {
-      box.value = text;
+    const candidate = _dictBase + (_dictBase && text ? " " : "") + text;
+    if (candidate.length >= (box.value || "").length) {
+      box.value = candidate;
       box.dispatchEvent(new Event("input"));
     }
   } else if (type === "speech-final") {
     // Fires only on explicit Stop. The payload is the full accumulated
-    // transcript; replace the box and reset _dictBase so the next dictation
-    // session starts from the last committed text.
+    // transcript for this session; append it to _dictBase and re-anchor
+    // _dictBase so the next dictation session amends this committed text.
     if (payload && payload.trim()) {
       composeOpen(false);
-      box.value = payload.trim();
+      const text = payload.trim();
+      box.value = _dictBase + (_dictBase ? " " : "") + text;
       _dictBase = box.value;
       box.dispatchEvent(new Event("input"));
     }
