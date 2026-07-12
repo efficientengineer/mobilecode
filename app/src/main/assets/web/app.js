@@ -1735,11 +1735,19 @@ function logToolEvent(e) {
     case "tool_start": {
       let entry = null;
       if (e.name === "read_file" && e.detail) {
-        entry = logAction("read", "Read", e.detail);
+        const meta = {};
+        if (e.start_line || e.end_line) {
+          meta.start_line = e.start_line || 0;
+          meta.end_line = e.end_line || 0;
+        }
+        entry = logAction("read", "Read", e.detail, Object.keys(meta).length ? meta : null);
       } else if (e.name === "write_file" && e.detail) {
-        entry = logAction("write", "Wrote", e.detail);
+        const meta = {};
+        if (e.content_preview) meta.content_preview = e.content_preview;
+        if (e.content_len) meta.content_len = e.content_len;
+        entry = logAction("write", "Wrote", e.detail, Object.keys(meta).length ? meta : null);
       } else if (e.name === "str_replace" && e.detail) {
-        entry = logAction("write", "Edited", e.detail, { old: (e.old || "").slice(0, 200), new: (e.new || "").slice(0, 200) });
+        entry = logAction("write", "Edited", e.detail, { old: (e.old || "").slice(0, 600), new: (e.new || "").slice(0, 600) });
       } else if (e.name === "delete_file" && e.detail) {
         entry = logAction("delete", "Deleted", e.detail);
       } else if (e.name === "delegate_edit" && e.detail) {
@@ -1755,12 +1763,14 @@ function logToolEvent(e) {
     }
     case "tool_done": {
       // Attach the result to the most recent matching action log entry
-      if (e.name && e.result) {
+      if (e.name) {
         for (let i = _actionLog.length - 1; i >= 0; i--) {
           if (_actionLog[i]._tool === e.name && !_actionLog[i]._result) {
             _actionLog[i]._result = e.result;
             if (!_actionLog[i].meta) _actionLog[i].meta = {};
             _actionLog[i].meta.result = e.result;
+            // Capture result_len for read_file (byte count)
+            if (e.result_len) _actionLog[i].meta.result_len = e.result_len;
             saveActionLog();
             // Re-render to show the updated entry
             if (_actionLogPanelOpen) renderActionLogPanel();
@@ -1850,9 +1860,20 @@ function _renderActionLogList(list) {
     const timeStr = new Date(e.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const pathHtml = e.path ? `<div class="alp-path">${escapeHtml(e.path)}</div>` : "";
     // Show a small result snippet if available (e.g. "wrote 15 lines")
-    const resultHint = e._result ? `<div class="alp-result-hint">${escapeHtml(e._result.slice(0, 80))}</div>` : "";
+    let resultHint = "";
+    if (e._result) {
+      resultHint = `<div class="alp-result-hint">${escapeHtml(e._result.slice(0, 80))}</div>`;
+    }
+    // For reads that have byte count, show it
+    if (e.kind === "read" && e.meta && e.meta.result_len) {
+      resultHint = `<div class="alp-result-hint">${fmtBytes(e.meta.result_len)} read</div>`;
+    }
+    // For writes with content_len, show it
+    if (e.kind === "write" && e.meta && e.meta.content_len) {
+      resultHint = `<div class="alp-result-hint">${fmtBytes(e.meta.content_len)} written</div>`;
+    }
     // Indicate the entry has more detail
-    const hasDetail = !!(e.path || e._result || (e.meta && (e.meta.old || e.meta.new || e.meta.instruction)));
+    const hasDetail = !!(e.path || e._result || (e.meta && (e.meta.old || e.meta.new || e.meta.instruction || e.meta.content_len || e.meta.result_len)));
     const detailIndicator = hasDetail ? `<span class="alp-expand">▸</span>` : "";
     // Use data-index to reference the original (non-reversed) entry
     const origIdx = _actionLog.length - 1 - i;
@@ -1888,14 +1909,49 @@ function showActionLogDetail(idx) {
       <code class="alp-detail-path">${escapeHtml(e.path)}</code>`;
   }
 
-  // Diff-like view for str_replace (old → new snippets)
-  if (e.meta && e.meta.old) {
+  // Read info: byte count + line range
+  if (e.kind === "read") {
+    const parts = [];
+    if (e.meta && e.meta.result_len) {
+      parts.push(`<b>${fmtBytes(e.meta.result_len)}</b> read`);
+    }
+    if (e.meta && (e.meta.start_line || e.meta.end_line)) {
+      if (e.meta.start_line && e.meta.end_line) {
+        parts.push(`lines ${e.meta.start_line}–${e.meta.end_line}`);
+      } else if (e.meta.start_line) {
+        parts.push(`from line ${e.meta.start_line}`);
+      }
+    }
+    if (parts.length) {
+      extraHtml += `<div class="group-title">Stats</div>
+        <div class="alp-detail-text">${parts.join(" · ")}</div>`;
+    }
+  }
+
+  // Write info: byte count + content preview
+  if (e.kind === "write" && e.meta && (e.meta.content_len || e.meta.content_preview)) {
+    if (e.meta.content_len) {
+      extraHtml += `<div class="group-title">Size</div>
+        <div class="alp-detail-text"><b>${fmtBytes(e.meta.content_len)}</b> written</div>`;
+    }
+    if (e.meta.content_preview) {
+      extraHtml += `<div class="group-title">Content preview</div>
+        <pre class="alp-diff alp-diff-new">${escapeHtml(e.meta.content_preview)}</pre>`;
+    }
+  }
+
+  // Unified diff for str_replace (old → new)
+  if (e.meta && e.meta.old && e.meta.new) {
+    const diffHtml = generateUnifiedDiff(e.meta.old, e.meta.new);
+    extraHtml += `<div class="group-title">Diff</div>
+      <pre class="alp-diff-unified">${diffHtml}</pre>`;
+  } else if (e.meta && e.meta.old) {
     extraHtml += `<div class="group-title">Old snippet</div>
       <pre class="alp-diff alp-diff-old">${escapeHtml(e.meta.old)}</pre>`;
-  }
-  if (e.meta && e.meta.new) {
-    extraHtml += `<div class="group-title">New snippet</div>
-      <pre class="alp-diff alp-diff-new">${escapeHtml(e.meta.new)}</pre>`;
+    if (e.meta.new) {
+      extraHtml += `<div class="group-title">New snippet</div>
+        <pre class="alp-diff alp-diff-new">${escapeHtml(e.meta.new)}</pre>`;
+    }
   }
 
   // Delegate instruction
@@ -1932,6 +1988,79 @@ function showActionLogDetail(idx) {
     </div>
     ${extraHtml}
     <div class="hint" style="margin-top:12px">Tap outside to dismiss</div>`);
+}
+
+// Generate a simple unified diff from old and new text snippets.
+function generateUnifiedDiff(old, newer) {
+  if (!old && !newer) return "";
+  const oldLines = (old || "").split("\n");
+  const newLines = (newer || "").split("\n");
+  // Simple line-by-line diff using LCS
+  const lcs = _lcsMatrix(oldLines, newLines);
+  const result = [];
+  let oi = 0, ni = 0;
+  const changes = _backtrackLCS(lcs, oldLines, newLines, oldLines.length, newLines.length);
+  for (const ch of changes) {
+    if (ch.type === "same") {
+      if (result.length && result[result.length - 1].type === "same") {
+        result[result.length - 1].lines.push(ch.line);
+      } else {
+        result.push({ type: "same", lines: [ch.line] });
+      }
+    } else if (ch.type === "del") {
+      result.push({ type: "del", lines: [ch.line] });
+    } else if (ch.type === "add") {
+      result.push({ type: "add", lines: [ch.line] });
+    }
+  }
+  // Collapse runs of "same" lines longer than 3 into a context marker
+  const collapsed = [];
+  for (const block of result) {
+    if (block.type === "same" && block.lines.length > 6) {
+      collapsed.push({ type: "same", lines: block.lines.slice(0, 3) });
+      collapsed.push({ type: "skip", lines: [`… ${block.lines.length - 6} unchanged lines …`] });
+      collapsed.push({ type: "same", lines: block.lines.slice(-3) });
+    } else {
+      collapsed.push(block);
+    }
+  }
+  return collapsed.map((b) => {
+    const cls = b.type === "del" ? "diff-del" : b.type === "add" ? "diff-add" : b.type === "skip" ? "diff-skip" : "diff-same";
+    return b.lines.map((l) => `<span class="${cls}">${b.type === "del" ? "−" : b.type === "add" ? "+" : b.type === "skip" ? "" : " "}${escapeHtml(l)}</span>`).join("\n");
+  }).join("\n");
+}
+
+function _lcsMatrix(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  return dp;
+}
+
+function _backtrackLCS(dp, a, b, i, j) {
+  const result = [];
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+      result.unshift({ type: "same", line: a[i - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.unshift({ type: "add", line: b[j - 1] });
+      j--;
+    } else {
+      result.unshift({ type: "del", line: a[i - 1] });
+      i--;
+    }
+  }
+  return result;
+}
+
+function fmtBytes(n) {
+  n = n || 0;
+  return n >= 1000 ? (n / 1000).toFixed(1) + " KB" : n + " B";
 }
 
 // Choose (or create) the GitHub repo for a new session.
