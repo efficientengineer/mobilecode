@@ -344,15 +344,13 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   color: var(--text);
 }
 #sessionTab.panel-open {
-  /* Tab overlays the open panel — slides left to sit on its inner-left edge */
-  right: min(380px, 88vw);
+  /* Tab stays pinned at the right edge for one-handed access; panel slides under it */
   opacity: 1;
   pointer-events: auto;
   background: var(--panel);
   border-color: var(--accent);
   color: var(--accent);
   box-shadow: -4px 0 16px rgba(0,0,0,.55);
-  border-radius: 0 10px 10px 0;
   border-left: 1px solid var(--accent);
   border-right: 1px solid var(--accent);
 }
