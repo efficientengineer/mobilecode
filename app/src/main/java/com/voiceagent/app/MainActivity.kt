@@ -885,7 +885,7 @@ class MainActivity : AppCompatActivity() {
 
         // Trailing silence (ms) before the recognizer may end. 12s so natural
         // pauses (thinking mid-sentence) don't cut you off.
-        private const val SPEECH_SILENCE_MS = 12000
+        private const val SPEECH_SILENCE_MS = 60000
 
         // Number of agent runs in flight; survives Activity recreation.
         @Volatile private var activeRuns = 0
