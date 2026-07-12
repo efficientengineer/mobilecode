@@ -7,8 +7,13 @@ let _req = 0;
 const _pending = {};
 
 // --- Version check (OTA update availability) -----------------------------
-// Calls ota.version_info and updates the "Update app" button badge.
+// Calls ota.version_info, updates the badge, and AUTO-UPDATES when a newer
+// version is detected and the agent is idle (no run in progress). The app
+// keeps itself current without the user tapping a button.
+let _autoUpdateLock = false;
+let _versionCheckCount = 0;
 async function checkVersion() {
+  _versionCheckCount++;
   try {
     const r = await call("py.call", {module:"ota", fn:"version_info", args:[]});
     const parts = (r.text || "").split(/\s+/);
@@ -19,6 +24,19 @@ async function checkVersion() {
     });
     const dirty = obj.dirty === "1";
     updateAppBadge(dirty);
+    // Auto-update when a newer version is available, the agent isn't running,
+    // and we haven't already triggered an update this session.
+    if (dirty && !running && !_autoUpdateLock) {
+      _autoUpdateLock = true;
+      // First check after load: brief delay so the UI settles. Later periodic
+      // checks: apply immediately (the user has been using the app).
+      const delay = _versionCheckCount <= 1 ? 3000 : 500;
+      bubble("⬆ New update available — auto-applying…", "sys");
+      setTimeout(() => {
+        if (!running) actions.updateApp();
+        else _autoUpdateLock = false; // agent started; retry next poll
+      }, delay);
+    }
     return dirty;
   } catch (e) {
     return null;
