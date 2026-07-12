@@ -44,8 +44,28 @@ import agentloop
 # LEAD_MODEL is the orchestrator/planner. WORKER_MODEL is the implementer/editor
 # and is OPTIONAL: if it's blank, the orchestrator does the edits itself
 # (single-agent mode). The (cheap) implementer also writes commit messages.
-LEAD_MODEL = os.environ.get("LEAD_MODEL", "deepseek/deepseek-v4-pro")
-WORKER_MODEL = os.environ.get("WORKER_MODEL", "deepseek/deepseek-v4-flash")
+def _default_model() -> str:
+    """If no API keys are set, default to the free/cheapest DeepSeek model.
+    Otherwise the paid defaults would just fail with auth errors."""
+    has_key = bool(
+        os.environ.get("ANTHROPIC_API_KEY", "").strip() or
+        os.environ.get("DEEPSEEK_API_KEY", "").strip() or
+        os.environ.get("OPENAI_API_KEY", "").strip()
+    )
+    return "deepseek/deepseek-v4-pro" if has_key else "deepseek/deepseek-chat"
+
+
+def _default_worker() -> str:
+    has_key = bool(
+        os.environ.get("ANTHROPIC_API_KEY", "").strip() or
+        os.environ.get("DEEPSEEK_API_KEY", "").strip() or
+        os.environ.get("OPENAI_API_KEY", "").strip()
+    )
+    return "deepseek/deepseek-v4-flash" if has_key else "deepseek/deepseek-chat"
+
+
+LEAD_MODEL = os.environ.get("LEAD_MODEL", "") or _default_model()
+WORKER_MODEL = os.environ.get("WORKER_MODEL", "") or _default_worker()
 
 
 def _impl_model() -> str:

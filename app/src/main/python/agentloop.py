@@ -373,7 +373,12 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
     Returns {"text": str, "touched": [paths], "plan": dict|None,
              "steps": int, "usage": {...}, "interrupted": bool}
     """
-    model = os.environ.get("LEAD_MODEL", "deepseek/deepseek-v4-pro")
+    _def_lead = "deepseek/deepseek-v4-pro" if (
+        os.environ.get("ANTHROPIC_API_KEY", "").strip() or
+        os.environ.get("DEEPSEEK_API_KEY", "").strip() or
+        os.environ.get("OPENAI_API_KEY", "").strip()
+    ) else "deepseek/deepseek-chat"
+    model = os.environ.get("LEAD_MODEL", "") or _def_lead
     fallback = (os.environ.get("AGENT_FALLBACK_MODEL") or "").strip()
     active = model  # sticky: once we fail over, stay on the fallback
     agent_tools.reset_touched()
