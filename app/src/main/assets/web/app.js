@@ -1712,12 +1712,13 @@ function saveActionLog() {
   } catch (e) {}
 }
 
-function logAction(kind, detail, path) {
+function logAction(kind, detail, path, meta) {
   const entry = {
     kind: kind,        // "read", "write", "delete", "tool", "git"
     detail: detail,    // short description
     path: path || "",  // file path (optional)
     time: Date.now(),
+    meta: meta || null, // extra data: { result, old, new, ... }
   };
   _actionLog.push(entry);
   saveActionLog();
@@ -1725,31 +1726,51 @@ function logAction(kind, detail, path) {
   if (_actionLogPanelOpen) renderActionLogPanel();
   // Also refresh the inline view if it's visible (no file tabs open)
   if (openTabs.length === 0) renderActionLogInline();
+  return entry;
 }
 
 // Hook: call this from event processing to auto-log tool events
 function logToolEvent(e) {
   switch (e.kind) {
-    case "tool_start":
+    case "tool_start": {
+      let entry = null;
       if (e.name === "read_file" && e.detail) {
-        logAction("read", "Read", e.detail);
+        entry = logAction("read", "Read", e.detail);
       } else if (e.name === "write_file" && e.detail) {
-        logAction("write", "Wrote", e.detail);
+        entry = logAction("write", "Wrote", e.detail);
       } else if (e.name === "str_replace" && e.detail) {
-        logAction("write", "Edited", e.detail);
+        entry = logAction("write", "Edited", e.detail, { old: (e.old || "").slice(0, 200), new: (e.new || "").slice(0, 200) });
       } else if (e.name === "delete_file" && e.detail) {
-        logAction("delete", "Deleted", e.detail);
+        entry = logAction("delete", "Deleted", e.detail);
       } else if (e.name === "delegate_edit" && e.detail) {
-        logAction("write", "Delegated edit", e.detail);
+        entry = logAction("write", "Delegated edit", e.detail, { instruction: (e.instruction || "").slice(0, 300) });
       } else if (e.name && (e.name.startsWith("git_") || e.name === "git_ship" || e.name === "git_start")) {
-        logAction("git", e.name.replace(/^git_/, ""), e.detail || "");
+        entry = logAction("git", e.name.replace(/^git_/, ""), e.detail || "");
       } else if (e.name) {
-        logAction("tool", e.name, e.detail || "");
+        entry = logAction("tool", e.name, e.detail || "");
+      }
+      // Tag the entry with the tool name so tool_done can find it
+      if (entry) entry._tool = e.name;
+      break;
+    }
+    case "tool_done": {
+      // Attach the result to the most recent matching action log entry
+      if (e.name && e.result) {
+        for (let i = _actionLog.length - 1; i >= 0; i--) {
+          if (_actionLog[i]._tool === e.name && !_actionLog[i]._result) {
+            _actionLog[i]._result = e.result;
+            if (!_actionLog[i].meta) _actionLog[i].meta = {};
+            _actionLog[i].meta.result = e.result;
+            saveActionLog();
+            // Re-render to show the updated entry
+            if (_actionLogPanelOpen) renderActionLogPanel();
+            if (openTabs.length === 0) renderActionLogInline();
+            break;
+          }
+        }
       }
       break;
-    case "tool_done":
-      // Optionally log results, but tool_start already captures the action
-      break;
+    }
     case "commit_start":
       logAction("git", "Commit", e.detail || "");
       break;
@@ -1823,20 +1844,94 @@ function _renderActionLogList(list) {
   // Show newest first
   const entries = [..._actionLog].reverse();
 
-  list.innerHTML = entries.map((e) => {
+  list.innerHTML = entries.map((e, i) => {
     const icon = ACTION_LOG_ICONS[e.kind] || "⚙️";
     const cls = "alp-entry alp-" + e.kind;
     const timeStr = new Date(e.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const pathHtml = e.path ? `<div class="alp-path">${escapeHtml(e.path)}</div>` : "";
-    return `<div class="${cls}">
+    // Show a small result snippet if available (e.g. "wrote 15 lines")
+    const resultHint = e._result ? `<div class="alp-result-hint">${escapeHtml(e._result.slice(0, 80))}</div>` : "";
+    // Indicate the entry has more detail
+    const hasDetail = !!(e.path || e._result || (e.meta && (e.meta.old || e.meta.new || e.meta.instruction)));
+    const detailIndicator = hasDetail ? `<span class="alp-expand">▸</span>` : "";
+    // Use data-index to reference the original (non-reversed) entry
+    const origIdx = _actionLog.length - 1 - i;
+    return `<div class="${cls}" data-alp-idx="${origIdx}" onclick="showActionLogDetail(${origIdx})">
       <span class="alp-icon">${icon}</span>
       <span class="alp-body">
         <span class="alp-detail">${escapeHtml(e.detail)}</span>
         ${pathHtml}
+        ${resultHint}
       </span>
       <span class="alp-time">${timeStr}</span>
+      ${detailIndicator}
     </div>`;
   }).join("");
+}
+
+// Show a detail modal when a user clicks an action log entry.
+function showActionLogDetail(idx) {
+  const e = _actionLog[idx];
+  if (!e) return;
+
+  const icon = ACTION_LOG_ICONS[e.kind] || "⚙️";
+  const timeStr = new Date(e.time).toLocaleString([], {
+    hour: "2-digit", minute: "2-digit", second: "2-digit", month: "short", day: "numeric"
+  });
+  const kindLabel = { read: "File read", write: "File changed", delete: "File deleted", tool: "Tool call", git: "Git operation" }[e.kind] || e.kind;
+
+  let extraHtml = "";
+
+  // Path section
+  if (e.path) {
+    extraHtml += `<div class="group-title">Path</div>
+      <code class="alp-detail-path">${escapeHtml(e.path)}</code>`;
+  }
+
+  // Diff-like view for str_replace (old → new snippets)
+  if (e.meta && e.meta.old) {
+    extraHtml += `<div class="group-title">Old snippet</div>
+      <pre class="alp-diff alp-diff-old">${escapeHtml(e.meta.old)}</pre>`;
+  }
+  if (e.meta && e.meta.new) {
+    extraHtml += `<div class="group-title">New snippet</div>
+      <pre class="alp-diff alp-diff-new">${escapeHtml(e.meta.new)}</pre>`;
+  }
+
+  // Delegate instruction
+  if (e.meta && e.meta.instruction) {
+    extraHtml += `<div class="group-title">Instruction</div>
+      <div class="alp-detail-text">${escapeHtml(e.meta.instruction)}</div>`;
+  }
+
+  // Tool result
+  if (e._result) {
+    extraHtml += `<div class="group-title">Result</div>
+      <div class="alp-detail-text">${escapeHtml(e._result)}</div>`;
+  }
+
+  // Tool name
+  if (e._tool) {
+    extraHtml += `<div class="group-title">Tool</div>
+      <div class="alp-detail-text"><code>${escapeHtml(e._tool)}</code></div>`;
+  }
+
+  // Raw detail if nothing else
+  if (!extraHtml && e.detail) {
+    extraHtml += `<div class="alp-detail-text">${escapeHtml(e.detail)}</div>`;
+  }
+
+  const kindColors = { read: "var(--accent)", write: "#4ade80", delete: "#f87171", tool: "#fbbf24", git: "#a78bfa" };
+  const badgeColor = kindColors[e.kind] || "var(--muted)";
+
+  modal("Action detail",
+    `<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <span style="font-size:20px">${icon}</span>
+      <span style="background:${badgeColor};color:#000;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600">${kindLabel}</span>
+      <span style="color:var(--muted);font-size:12px;margin-left:auto">${timeStr}</span>
+    </div>
+    ${extraHtml}
+    <div class="hint" style="margin-top:12px">Tap outside to dismiss</div>`);
 }
 
 // Choose (or create) the GitHub repo for a new session.

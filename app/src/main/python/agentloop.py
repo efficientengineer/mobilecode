@@ -580,7 +580,17 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                       files=[e["path"] for e in plan_out["edits"]])
             else:
                 detail = tc["args"].get("path") or tc["args"].get("pattern") or ""
-                _emit("tool_start", name=tc["name"], detail=_clip(detail, 120))
+                extra = {}
+                # For str_replace, include old/new snippets so the UI can show a mini-diff
+                if tc["name"] == "str_replace":
+                    old = tc["args"].get("old", "")
+                    new = tc["args"].get("new", "")
+                    if old: extra["old"] = _clip(old, 200)
+                    if new: extra["new"] = _clip(new, 200)
+                elif tc["name"] == "delegate_edit":
+                    inst = tc["args"].get("instruction", "")
+                    if inst: extra["instruction"] = _clip(inst, 300)
+                _emit("tool_start", name=tc["name"], detail=_clip(detail, 120), **extra)
                 result = agent_tools.execute(tools, tc["name"], tc["args"])
                 _emit("tool_done", name=tc["name"], detail=_clip(detail, 120),
                       result=_clip(result.splitlines()[0] if result else "", 160))
