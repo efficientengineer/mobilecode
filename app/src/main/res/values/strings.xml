@@ -10,8 +10,8 @@
     <string name="deepseek_key_label">DeepSeek API key (V4 lead + worker)</string>
     <string name="lead_model_label">Lead model (planner)</string>
     <string name="worker_model_label">Worker model (editor)</string>
-    <string name="lead_model_default">deepseek/deepseek-v4-pro</string>
-    <string name="worker_model_default">deepseek/deepseek-v4-flash</string>
+    <string name="lead_model_default">deepseek/deepseek-chat</string>
+    <string name="worker_model_default">deepseek/deepseek-chat</string>
     <string name="github_token_label">GitHub token (to push / create repos)</string>
     <string name="agent_branch_label">Agent branch</string>
     <string name="agent_branch_default">main</string>
