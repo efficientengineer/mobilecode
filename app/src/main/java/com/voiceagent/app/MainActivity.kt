@@ -812,10 +812,16 @@ class MainActivity : AppCompatActivity() {
                         val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             ?.firstOrNull()?.trim().orEmpty()
                         if (t.isNotEmpty()) {
-                            // Prefer the finalized result over the last partial.
-                            lastPartial = t
+                            if (lastPartial.isEmpty() && spokenWords.isNotEmpty()) {
+                                // onEndOfSpeech already committed this phrase from
+                                // its partial — replace it with the finalized text.
+                                spokenWords[spokenWords.size - 1] = t
+                                event("speech-partial", spokenWords.joinToString(" "))
+                            } else {
+                                lastPartial = t
+                                commitPartial()
+                            }
                         }
-                        commitPartial()
                         // Restart quickly — the user hasn't pressed Stop and may
                         // resume speaking at any moment.
                         if (dictating) restartRecognizer(50)
@@ -847,8 +853,12 @@ class MainActivity : AppCompatActivity() {
                     }
                     override fun onReadyForSpeech(params: Bundle?) { event("status", "Listening…") }
                     override fun onEndOfSpeech() {
-                        // Silence detected — the recognizer will fire onResults
-                        // shortly. Don't stop; onResults will auto-restart.
+                        // A pause ends the current phrase. Commit it immediately so
+                        // it accumulates — many devices keep one recognizer session
+                        // alive across pauses and never fire onResults, resetting
+                        // their partial buffer for the next phrase. Without this
+                        // commit each phrase would overwrite the previous one.
+                        commitPartial()
                     }
                     override fun onBeginningOfSpeech() {}
                     override fun onRmsChanged(rmsdB: Float) {}
@@ -857,8 +867,16 @@ class MainActivity : AppCompatActivity() {
                         val t = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                             ?.firstOrNull()?.trim().orEmpty()
                         if (t.isNotEmpty()) {
+                            // If a prior onEndOfSpeech committed this phrase but the
+                            // device is actually still emitting cumulative partials
+                            // for the SAME phrase (t extends the committed text),
+                            // undo that commit so we don't duplicate it.
+                            if (lastPartial.isEmpty() && spokenWords.isNotEmpty() &&
+                                t.startsWith(spokenWords.last(), ignoreCase = true)) {
+                                lastPartial = spokenWords.removeAt(spokenWords.size - 1)
+                            }
                             // Track the in-progress text so it can be committed
-                            // when this session ends (via onResults or onError).
+                            // when this session ends (via onEndOfSpeech / onResults).
                             lastPartial = t
                             // Merge with accumulated words: show full transcript so far.
                             val parts = mutableListOf<String>().apply { addAll(spokenWords); add(t) }
