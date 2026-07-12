@@ -7,39 +7,13 @@ let _req = 0;
 const _pending = {};
 
 // --- Version check (OTA update availability) -----------------------------
-// Calls ota.version_info, updates the badge, and AUTO-UPDATES when a newer
-// version is detected and the agent is idle (no run in progress). The app
-// keeps itself current without the user tapping a button.
-let _autoUpdateLock = false;
-let _versionCheckCount = 0;
+// AUTO-UPDATE DISABLED: the manual Update button is the only way to trigger
+// an OTA update. The periodic version poll is also off. To re-enable,
+// uncomment the setInterval line near the bottom of this file and restore
+// this function body.
 async function checkVersion() {
-  _versionCheckCount++;
-  try {
-    const r = await call("py.call", {module:"ota", fn:"version_info", args:[]});
-    const parts = (r.text || "").split(/\s+/);
-    const obj = {};
-    parts.forEach(p => {
-      const kv = p.split("=");
-      if (kv.length === 2) obj[kv[0]] = kv[1];
-    });
-    const dirty = obj.dirty === "1";
-    // Auto-update when a newer version is available, the agent isn't running,
-    // and we haven't already triggered an update this session.
-    if (dirty && !running && !_autoUpdateLock) {
-      _autoUpdateLock = true;
-      // First check after load: brief delay so the UI settles. Later periodic
-      // checks: apply immediately (the user has been using the app).
-      const delay = _versionCheckCount <= 1 ? 3000 : 500;
-      bubble("⬆ New update available — auto-applying…", "sys");
-      setTimeout(() => {
-        if (!running) actions.updateApp();
-        else _autoUpdateLock = false; // agent started; retry next poll
-      }, delay);
-    }
-    return dirty;
-  } catch (e) {
-    return null;
-  }
+  // No-op: auto-update disabled. The manual Update button still works.
+  return null;
 }
 
 
@@ -3422,6 +3396,7 @@ if (_implEffortSel) _implEffortSel.onchange = onImplEffortChange;
 })();
 
 // --- OTA version polling -------------------------------------------------
-// Check on load + every 5 min whether a newer OTA version is available.
-checkVersion();
-setInterval(checkVersion, 5 * 60 * 1000);
+// AUTO-UPDATE DISABLED: no periodic check. The manual Update button works.
+// To re-enable: checkVersion(); setInterval(checkVersion, 5 * 60 * 1000);
+// checkVersion();
+// setInterval(checkVersion, 5 * 60 * 1000);
