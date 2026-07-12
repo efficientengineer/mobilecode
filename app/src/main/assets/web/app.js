@@ -50,28 +50,23 @@ function stopDictation() {
 window.nativeEvent = (type, payload) => {
   const box = $("#input");
   if (type === "speech-partial") {
-    // Continuous dictation: partials carry the running transcript accumulated
-    // since the last recognizer start. _dictBase holds everything from prior
-    // dictation sessions within this compose — keep it visible at all times.
-    // Never let the displayed text shrink: onResults fires after a pause with
-    // only the committed words (shorter than the last partial that included
-    // in-progress speech), which made dictation appear to vanish.
+    // Android sends the FULL accumulated transcript (spokenWords joined) on
+    // every partial — both onPartialResults and onResults. Just display it
+    // directly, never letting the box shrink (partials can flicker shorter
+    // when the recognizer restarts mid-utterance).
     composeOpen(false);
-    var raw = (payload || "").trim();
-    // Dedup: if payload already starts with _dictBase, don't double it.
-    if (_dictBase && raw.indexOf(_dictBase) === 0) {
-      raw = raw.slice(_dictBase.length).trim();
-    }
-    const candidate = _dictBase + (_dictBase && raw ? " " : "") + raw;
-    if (candidate.length >= (box.value || "").length) {
-      box.value = candidate;
+    const text = (payload || "").trim();
+    if (text.length >= (box.value || "").length) {
+      box.value = text;
       box.dispatchEvent(new Event("input"));
     }
   } else if (type === "speech-final") {
-    // Fires only on explicit Stop (or fatal error). Commit the final text.
+    // Fires only on explicit Stop. The payload is the full accumulated
+    // transcript; replace the box and reset _dictBase so the next dictation
+    // session starts from the last committed text.
     if (payload && payload.trim()) {
       composeOpen(false);
-      box.value = _dictBase + (_dictBase ? " " : "") + payload.trim();
+      box.value = payload.trim();
       _dictBase = box.value;
       box.dispatchEvent(new Event("input"));
     }
