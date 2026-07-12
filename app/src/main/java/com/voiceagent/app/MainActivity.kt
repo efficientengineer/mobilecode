@@ -16,7 +16,10 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.net.Uri
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
@@ -40,9 +43,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
@@ -682,10 +687,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     // --- Headless web runtime check --------------------------------------
-    // Loads the running preview in a hidden 1x1 WebView and collects JS console
-    // errors (uncaught exceptions surface here too) over a short settle window,
-    // so the reviewer catches runtime breakage that static checks can't. Returns
-    // {url, errors:[...]} — or {skipped:true} fast when there's no web entry.
+    // Loads the running preview in an OFFSCREEN full-size WebView (real phone
+    // viewport, pushed off the right edge so it never intercepts touches) and
+    // over a settle window: collects JS console errors (uncaught exceptions
+    // surface here too), injects a smoke test that measures FPS via rAF and
+    // synthetically taps buttons / fires joystick events (handler crashes
+    // land in the console collector), and finally captures a screenshot to
+    // <workspace>/.agent/preview.png for the visual review round. Returns
+    // {url, errors:[...], fps, screenshot} — or {skipped:true} fast when
+    // there's no web entry.
     private suspend fun webRuntimeCheck(): JSONObject {
         val ws = sessions.activeDir()
         val hasWeb = withContext(Dispatchers.IO) {
@@ -702,9 +712,13 @@ class MainActivity : AppCompatActivity() {
             val errors = ArrayList<String>()
             val done = CompletableDeferred<Unit>()
             val root = window.decorView as ViewGroup
+            val dm = resources.displayMetrics
+            val w = dm.widthPixels.coerceIn(320, 1440)
+            val h = dm.heightPixels.coerceIn(480, 2960)
             val probe = WebView(this@MainActivity)
             probe.settings.javaScriptEnabled = true
             probe.settings.domStorageEnabled = true
+            probe.translationX = w.toFloat()   // offscreen, but VISIBLE so rAF runs
             probe.webChromeClient = object : WebChromeClient() {
                 override fun onConsoleMessage(cm: ConsoleMessage): Boolean {
                     if (cm.messageLevel() == ConsoleMessage.MessageLevel.ERROR && errors.size < 25) {
@@ -717,21 +731,44 @@ class MainActivity : AppCompatActivity() {
             }
             probe.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, u: String?) {
-                    // Settle briefly for async/module/rAF errors, then finish.
-                    probe.postDelayed({ if (!done.isCompleted) done.complete(Unit) }, 2500L)
+                    view?.evaluateJavascript(PROBE_JS, null)
+                    // Settle long enough for async/module errors, the FPS
+                    // sample (1.5s), and the tap test (fires at 0.8s).
+                    probe.postDelayed({ if (!done.isCompleted) done.complete(Unit) }, 3500L)
                 }
             }
-            root.addView(probe, ViewGroup.LayoutParams(1, 1))
+            root.addView(probe, ViewGroup.LayoutParams(w, h))
             probe.loadUrl(url)
             // Hard ceiling in case the page never finishes loading.
-            probe.postDelayed({ if (!done.isCompleted) done.complete(Unit) }, 7000L)
+            probe.postDelayed({ if (!done.isCompleted) done.complete(Unit) }, 8000L)
             done.await()
+            val fpsDeferred = CompletableDeferred<Int>()
+            probe.evaluateJavascript("window.__fps||0") { v ->
+                fpsDeferred.complete(v?.trim()?.toIntOrNull() ?: 0)
+            }
+            val fps = withTimeoutOrNull(1000L) { fpsDeferred.await() } ?: 0
+            // Screenshot for the visual review round. Best-effort: a capture
+            // failure must never fail the check itself.
+            var shot = ""
+            try {
+                probe.measure(
+                    View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY))
+                probe.layout(0, 0, w, h)
+                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                probe.draw(Canvas(bmp))
+                val f = File(File(ws, ".agent").apply { mkdirs() }, "preview.png")
+                FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 85, it) }
+                bmp.recycle()
+                shot = f.absolutePath
+            } catch (_: Throwable) {}
             try { root.removeView(probe); probe.destroy() } catch (_: Throwable) {}
             // Free the port when the check is done — don't leave 8765 bound
             // between steps (localrun.start still recovers if it's held, but a
             // tidy stop keeps the next Run on the preferred port).
             withContext(Dispatchers.IO) { try { py("localrun").callAttr("stop") } catch (_: Throwable) {} }
             JSONObject().put("url", url).put("errors", JSONArray(errors.toList()))
+                .put("fps", fps).put("screenshot", shot)
         }
     }
 
@@ -973,6 +1010,40 @@ class MainActivity : AppCompatActivity() {
         private const val REPO = "efficientengineer/mobilecode"
         private const val NOTIFY_CHANNEL = "agent_replies"
         private const val NOTIFY_ID = 42
+
+        // Injected into the runtime probe after page load: samples FPS over
+        // 1.5s of requestAnimationFrame, then (at 0.8s) synthetically taps up
+        // to 12 buttons and fires joystick move/action events through the
+        // event bus. Handler crashes become uncaught console errors, which
+        // the probe's collector already picks up.
+        private val PROBE_JS = """
+            (function () {
+              if (window.__probe) return; window.__probe = 1;
+              window.__fps = 0;
+              var frames = 0, t0 = performance.now();
+              function tick(t) {
+                frames++;
+                if (t - t0 < 1500) requestAnimationFrame(tick);
+                else window.__fps = Math.round(frames * 1000 / (t - t0));
+              }
+              requestAnimationFrame(tick);
+              setTimeout(function () {
+                try {
+                  var els = document.querySelectorAll('button, [onclick]');
+                  for (var i = 0; i < els.length && i < 12; i++) {
+                    try { els[i].click(); } catch (e) {
+                      console.error('tap-test <' + (els[i].id || els[i].textContent || i) + '>: ' + e.message);
+                    }
+                  }
+                  if (window.events && events.emit) {
+                    events.emit('move', { x: 0.5, y: 0.5 });
+                    events.emit('move', { x: 0, y: 0 });
+                    events.emit('action', { x: 10, y: 10 });
+                  }
+                } catch (e) {}
+              }, 800);
+            })();
+        """.trimIndent()
 
         // Trailing silence (ms) before the recognizer may end. 12s so natural
         // pauses (thinking mid-sentence) don't cut you off.

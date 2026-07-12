@@ -234,7 +234,14 @@ def _anthropic_messages(messages):
     while i < len(messages):
         m = messages[i]
         if m["role"] == "user":
-            out.append({"role": "user", "content": m["content"]})
+            if m.get("image_b64"):
+                out.append({"role": "user", "content": [
+                    {"type": "image", "source": {
+                        "type": "base64", "media_type": "image/png",
+                        "data": m["image_b64"]}},
+                    {"type": "text", "text": m["content"] or " "}]})
+            else:
+                out.append({"role": "user", "content": m["content"]})
             i += 1
         elif m["role"] == "assistant":
             blocks = []
@@ -441,7 +448,13 @@ def _openai_messages(system, cached_context, messages, strip_reasoning=False):
     out = [{"role": "system", "content": sys_text}]
     for m in messages:
         if m["role"] == "user":
-            out.append({"role": "user", "content": m["content"]})
+            if m.get("image_b64"):
+                out.append({"role": "user", "content": [
+                    {"type": "image_url", "image_url": {
+                        "url": "data:image/png;base64," + m["image_b64"]}},
+                    {"type": "text", "text": m["content"] or " "}]})
+            else:
+                out.append({"role": "user", "content": m["content"]})
         elif m["role"] == "assistant":
             tcs = m.get("tool_calls") or []
             content = m.get("content") or None
@@ -645,13 +658,29 @@ def chat(model, system, messages, tools=None, max_tokens=8000,
         raise
 
 
-def chat_text(model, system, user, max_tokens=4000, on_delta=None):
+def _vision_capable(model: str) -> bool:
+    """Whether this provider/model can accept an inline image. Anthropic and
+    OpenAI chat models can; DeepSeek (and unknown OpenAI-compatible servers)
+    cannot, so images are silently dropped for them."""
+    provider = model.partition("/")[0] if "/" in model else "openai"
+    return provider in ("anthropic", "openai")
+
+
+def chat_text(model, system, user, max_tokens=4000, on_delta=None,
+              image_b64=""):
     """Simple single-turn text call (no tools). Returns (text, reasoning).
 
     Auto-continues once if the reply was cut off at max_tokens. Falls over to
     AGENT_FALLBACK_MODEL if the primary provider fails after retries.
+    image_b64: optional PNG to attach (dropped for non-vision providers).
     """
-    messages = [{"role": "user", "content": user}]
+    def _msgs(for_model):
+        m = {"role": "user", "content": user}
+        if image_b64 and _vision_capable(for_model):
+            m["image_b64"] = image_b64
+        return [m]
+
+    messages = _msgs(model)
     used = model  # track the model that actually served the response
     try:
         r = chat(model, system, messages, max_tokens=max_tokens, on_delta=on_delta)
@@ -659,6 +688,7 @@ def chat_text(model, system, user, max_tokens=4000, on_delta=None):
         fb = (os.environ.get("AGENT_FALLBACK_MODEL") or "").strip()
         if not fb or fb == model:
             raise
+        messages = _msgs(fb)
         r = chat(fb, system, messages, max_tokens=max_tokens, on_delta=on_delta)
         used = fb
     text, reasoning = r["text"], r["reasoning"]

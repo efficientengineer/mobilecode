@@ -71,6 +71,12 @@ _CONTROLS_JS = """// controls.js — mobile controls that already feel right; US
   const state = { x: 0, y: 0 };
   const R = 60;                                  // max thumb travel, px
   let joyId = null, ox = 0, oy = 0;
+  // WebViews often no-op navigator.vibrate; the preview app exposes a
+  // NativeApp.vibrate(ms) bridge that makes pulses real on-device.
+  const buzz = (ms) => {
+    try { if (navigator.vibrate && navigator.vibrate(ms)) return; } catch (e) {}
+    try { if (window.NativeApp) NativeApp.vibrate(ms); } catch (e) {}
+  };
   const css = (extra) => "position:fixed;border-radius:50%;" +
     "transform:translate(-50%,-50%);display:none;pointer-events:none;" + extra;
   const ring = document.createElement("div");
@@ -92,7 +98,7 @@ _CONTROLS_JS = """// controls.js — mobile controls that already feel right; US
       ring.style.display = knob.style.display = "block";
       setKnob(ox, oy);
     } else {
-      if (navigator.vibrate) navigator.vibrate(10);
+      buzz(10);
       if (window.events) events.emit("action", { x: e.clientX, y: e.clientY });
     }
   });
@@ -113,10 +119,7 @@ _CONTROLS_JS = """// controls.js — mobile controls that already feel right; US
   };
   addEventListener("pointerup", end);
   addEventListener("pointercancel", end);
-  window.controls = {
-    state,
-    vibrate: (ms) => navigator.vibrate && navigator.vibrate(ms || 10),
-  };
+  window.controls = { state, vibrate: (ms) => buzz(ms || 10) };
 })();
 """
 

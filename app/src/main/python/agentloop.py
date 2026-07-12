@@ -246,18 +246,21 @@ def set_runtime_checker(cb) -> None:
     _RUNTIME_CHECKER = cb
 
 
-def _runtime_errors() -> list:
-    """Console errors from loading the preview, [] when clean/unavailable.
+def _runtime_probe() -> dict:
+    """{'errors': [...], 'fps': int} from loading the preview (plus the
+    injected tap/joystick smoke test); empty when clean or unavailable.
     Resource-load noise (favicon etc.) is filtered — the missing-reference
-    static check already owns broken local paths."""
+    static check already owns broken local paths. The probe also writes
+    .agent/preview.png, which the review round attaches for visual judgment."""
     if _RUNTIME_CHECKER is None:
-        return []
+        return {"errors": [], "fps": 0}
     try:
         res = json.loads(str(_RUNTIME_CHECKER.check()))
-        return [str(e) for e in (res.get("errors") or [])
+        errs = [str(e) for e in (res.get("errors") or [])
                 if "favicon" not in str(e).lower()]
+        return {"errors": errs, "fps": int(res.get("fps") or 0)}
     except Exception:
-        return []
+        return {"errors": [], "fps": 0}
 
 
 # --- prompts -----------------------------------------------------------------
@@ -634,7 +637,12 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                 if any(t.lower().endswith((".html", ".htm", ".js", ".mjs",
                                            ".css"))
                        for t in agent_tools.TOUCHED):
-                    rt = _runtime_errors()
+                    pr = _runtime_probe()
+                    if pr["fps"]:
+                        # Advisory, not a gate: surfaces in the diagnose
+                        # scorecard as a low-fps flag when the page is janky.
+                        _emit("probe", fps=pr["fps"])
+                    rt = pr["errors"]
                     if rt:
                         repair_left -= 1
                         _emit("verify_failed", which="runtime",

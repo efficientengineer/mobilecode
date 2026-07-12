@@ -1,10 +1,14 @@
 package com.voiceagent.app
 
 import android.annotation.SuppressLint
+import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -71,6 +75,10 @@ class RunActivity : AppCompatActivity() {
         // server and wipe any existing cache so edits show up immediately.
         web.settings.cacheMode = WebSettings.LOAD_NO_CACHE
         web.clearCache(true)
+        // Haptics for previewed apps: Android WebViews typically no-op
+        // navigator.vibrate, so the scaffolded controls.js falls back to
+        // NativeApp.vibrate(ms) — this bridge makes those pulses real.
+        web.addJavascriptInterface(HapticsBridge(), "NativeApp")
         web.webViewClient = WebViewClient()
         // Support the HTML Fullscreen API from inside the page (a game's own
         // fullscreen button). Without onShowCustomView, requestFullscreen() does
@@ -140,6 +148,22 @@ class RunActivity : AppCompatActivity() {
         }
         if (fullscreened) { applyImmersive(false); return }
         super.onBackPressed()
+    }
+
+    inner class HapticsBridge {
+        @JavascriptInterface
+        fun vibrate(ms: Int) {
+            try {
+                val v = getSystemService(VIBRATOR_SERVICE) as Vibrator
+                val dur = ms.coerceIn(1, 200).toLong()   // pulses, not buzzes
+                if (Build.VERSION.SDK_INT >= 26) {
+                    v.vibrate(VibrationEffect.createOneShot(
+                        dur, VibrationEffect.DEFAULT_AMPLITUDE))
+                } else {
+                    @Suppress("DEPRECATION") v.vibrate(dur)
+                }
+            } catch (_: Throwable) {}
+        }
     }
 
     private fun setWorkspaceEnv() {

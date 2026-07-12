@@ -54,6 +54,12 @@ def reset_touched() -> None:
         _BASELINE_BYTES.update(pm.byte_sizes(_workspace()))
     except Exception:
         pass
+    # Drop the previous run's preview screenshot so the visual review can
+    # never judge this run against a stale capture.
+    try:
+        (_workspace() / ".agent" / "preview.png").unlink()
+    except Exception:
+        pass
 
 
 def _workspace() -> Path:
@@ -1078,6 +1084,10 @@ _REVIEW_SYSTEM = (
     "problems: correctness bugs, missed edge cases, broken/again-failing behavior, "
     "security issues, or a change that doesn't actually accomplish the task. "
     "Ignore style, naming, and nitpicks. Be concise.\n"
+    "A SCREENSHOT of the running app (captured on the phone after this change) "
+    "may be attached. Judge it like a user would: a blank/black screen, missing "
+    "or overlapping UI, unreadable text, or a view that plainly doesn't match "
+    "the task are REAL problems; styling taste is not.\n"
     "For each real issue: `file:line — problem` and its severity "
     "(blocker/major/minor).\n"
     "FIRST LINE of your reply MUST be exactly `VERDICT: BLOCK` if there is at "
@@ -1086,15 +1096,34 @@ _REVIEW_SYSTEM = (
 )
 
 
+def preview_screenshot_b64() -> str:
+    """This run's preview screenshot (written by the runtime probe) as base64,
+    '' when absent. reset_touched deletes the old one at run start, so a
+    non-empty result is always from the CURRENT run."""
+    fp = _workspace() / ".agent" / "preview.png"
+    try:
+        if fp.is_file() and 0 < fp.stat().st_size <= 4 * 1024 * 1024:
+            import base64
+            return base64.b64encode(fp.read_bytes()).decode()
+    except Exception:
+        pass
+    return ""
+
+
 def review_changes(model: str, task: str):
-    """Have `model` review this run's diff. Returns (block: bool, report: str).
+    """Have `model` review this run's diff (plus the preview screenshot when
+    the runtime probe captured one). Returns (block: bool, report: str).
     (False, "") when there's nothing to review."""
     diff = build_review_diff()
     if not diff.strip():
         return False, ""
     user = (f"TASK:\n{task[:2000]}\n\nDIFF:\n{diff[:24000]}")
+    shot = preview_screenshot_b64()
+    if shot:
+        user += "\n\n(A screenshot of the app running after this change is attached.)"
     try:
-        text, _reason = llm.chat_text(model, _REVIEW_SYSTEM, user, max_tokens=1500)
+        text, _reason = llm.chat_text(model, _REVIEW_SYSTEM, user,
+                                      max_tokens=1500, image_b64=shot)
     except Exception:
         return False, ""   # never let review failure block a run
     block = text.lstrip().upper().startswith("VERDICT: BLOCK")

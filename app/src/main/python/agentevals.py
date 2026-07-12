@@ -72,6 +72,7 @@ def analyze_events(events: list) -> dict:
     reads = edits = 0
     usage = {}
     structure = {}
+    fps = 0
     pruned = 0
 
     for ev in events:
@@ -100,6 +101,8 @@ def analyze_events(events: list) -> dict:
             structure = {"files": ev.get("files", 0),
                          "max_lines": ev.get("max_lines", 0),
                          "avg_fanout": ev.get("avg_fanout", 0)}
+        elif k == "probe":
+            fps = int(ev.get("fps") or 0)
         elif k == "pruned":
             pruned += int(ev.get("chars") or 0)
 
@@ -163,6 +166,12 @@ def analyze_events(events: list) -> dict:
             flag("yellow", "tangled",
                  f"workspace structure: largest file {structure['max_lines']} "
                  f"lines, avg fan-out {structure['avg_fanout']}")
+    # Measured by the runtime probe's rAF sample; a phone page under ~30fps
+    # feels broken even when it is technically working.
+    if 0 < fps < 30:
+        flag("yellow", "low-fps",
+             f"preview ran at ~{fps} fps — do less work per frame "
+             "(pause offscreen work, cap effects, reuse objects)")
 
     reds = sum(1 for f in flags if f["level"] == "red")
     yellows = sum(1 for f in flags if f["level"] == "yellow")
@@ -176,8 +185,8 @@ def analyze_events(events: list) -> dict:
     return {"steps": steps, "tools": tools, "reads": reads, "edits": edits,
             "spirals": spirals, "verify_failures": verify_failures,
             "fallbacks": fallbacks, "errors": errors, "usage": usage,
-            "structure": structure, "pruned": pruned, "flags": flags,
-            "verdict": verdict}
+            "structure": structure, "fps": fps, "pruned": pruned,
+            "flags": flags, "verdict": verdict}
 
 
 def format_report(m: dict) -> str:
