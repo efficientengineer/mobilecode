@@ -572,8 +572,24 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
 /* Model selectors live in the chat drawer (orchestrator + implementer).
    Two rows: orchestrator on top, implementer below; each row has the model
    button + its own effort dropdown. */
-#chatDrawer-models { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px;
+#chatDrawer-models { flex-shrink: 0; display: flex; flex-direction: column;
   padding: 0 12px 8px; border-bottom: 1px solid var(--border); }
+/* Model toggle button — shows current model summary; tap to reveal the panel. */
+.modeltoggle { display: flex; align-items: center; gap: 6px; width: 100%;
+  background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 12px; padding: 8px 12px; font-size: 13px; font-weight: 600; }
+.modeltoggle:active { background: var(--border); }
+.modeltoggle .mt-label { font-size: 11px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px; margin-right: 4px; }
+.modeltoggle .mt-chev { font-size: 10px; color: var(--muted); margin-left: auto;
+  transition: transform .18s ease; }
+.modeltoggle.open .mt-chev { transform: rotate(90deg); }
+#modelToggleSummary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px; color: var(--muted); }
+/* Collapsible model panel — slides open below the toggle. */
+.modelpanel { display: flex; flex-direction: column; gap: 6px; padding-top: 8px;
+  overflow: hidden; transition: max-height .22s ease, opacity .18s ease; }
+.modelpanel.hidden { display: none; }
 .modelrow { display: flex; gap: 10px; }
 .modelcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .model-label { display: block; margin: 0; font-size: 11px; font-weight: 700; color: var(--muted);
