@@ -585,15 +585,28 @@ def run(task: str, context: str = "", write: bool = True, plan: bool = False,
                 if tc["name"] == "str_replace":
                     old = tc["args"].get("old", "")
                     new = tc["args"].get("new", "")
-                    if old: extra["old"] = _clip(old, 200)
-                    if new: extra["new"] = _clip(new, 200)
+                    if old: extra["old"] = _clip(old, 600)
+                    if new: extra["new"] = _clip(new, 600)
                 elif tc["name"] == "delegate_edit":
                     inst = tc["args"].get("instruction", "")
                     if inst: extra["instruction"] = _clip(inst, 300)
+                elif tc["name"] == "write_file":
+                    content = tc["args"].get("content", "")
+                    if content:
+                        extra["content_len"] = len(content)
+                        extra["content_preview"] = _clip(content, 400)
+                elif tc["name"] == "read_file":
+                    extra["start_line"] = tc["args"].get("start_line", 0) or 0
+                    extra["end_line"] = tc["args"].get("end_line", 0) or 0
                 _emit("tool_start", name=tc["name"], detail=_clip(detail, 120), **extra)
                 result = agent_tools.execute(tools, tc["name"], tc["args"])
+                td_extra = {}
+                # For read_file, include the byte count so the UI can show it
+                if tc["name"] == "read_file" and result:
+                    td_extra["result_len"] = len(result)
                 _emit("tool_done", name=tc["name"], detail=_clip(detail, 120),
-                      result=_clip(result.splitlines()[0] if result else "", 160))
+                      result=_clip(result.splitlines()[0] if result else "", 160),
+                      **td_extra)
             messages.append({"role": "tool", "tool_call_id": tc["id"],
                              "name": tc["name"], "content": result,
                              "_path": _arg_path(tc.get("args"))})
