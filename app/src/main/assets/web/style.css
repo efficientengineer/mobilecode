@@ -332,7 +332,6 @@ pre.filebody { white-space: pre-wrap; word-wrap: break-word; background: var(--b
   cursor: pointer;
   padding: 10px 4px;
   box-shadow: -2px 0 8px rgba(0,0,0,.35);
-  transition: all .2s ease;
   touch-action: manipulation;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
